@@ -1,0 +1,45 @@
+# Build output
+/build/
+/build-*/
+/out/
+/dist/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+*.ninja
+.ninja_*
+
+# Qt Creator and IDE-local files
+*.user
+*.user.*
+.qtcreator/
+.vscode/
+.idea/
+
+# Runtime data
+*.log
+logs/
+backups/
+*.sql
+*.dump
+*.db
+*.sqlite*
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.p12
+*.jks
+key.properties
+google-services.json
+
+# Platform noise
+.DS_Store
+Thumbs.db
+*~
+*.swp
