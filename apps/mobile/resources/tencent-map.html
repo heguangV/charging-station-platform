@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <title>NCS 北京充电站</title>
+  <style>
+    html, body, #map { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body { font-family: system-ui, sans-serif; background: #eef2f7; }
+    #message {
+      display: none; position: absolute; z-index: 10; left: 16px; right: 16px; top: 16px;
+      padding: 12px; border-radius: 8px; color: #991b1b; background: #fee2e2;
+      box-shadow: 0 4px 14px rgba(15, 23, 42, .16);
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="message" role="alert"></div>
+  <script>
+    function showError(message) {
+      const element = document.getElementById("message");
+      element.textContent = message;
+      element.style.display = "block";
+    }
+    window.addEventListener("error", function () {
+      showError("腾讯地图加载失败，请检查网络、Key 权限和来源限制。");
+    });
+  </script>
+  <script src="https://map.qq.com/api/gljs?v=1&key=__TENCENT_MAP_JS_KEY__"
+          onerror="showError('无法连接腾讯地图服务，请稍后重试。')"></script>
+  <script>
+    try {
+      const stations = [
+        { id: "station-1", name: "中关村充电站", lat: 39.9837, lng: 116.3152 },
+        { id: "station-2", name: "朝阳公园充电站", lat: 39.9337, lng: 116.4783 },
+        { id: "station-3", name: "北京南站充电站", lat: 39.8652, lng: 116.3789 },
+        { id: "station-4", name: "奥林匹克公园充电站", lat: 40.0005, lng: 116.3906 },
+        { id: "station-5", name: "城市副中心充电站", lat: 39.9098, lng: 116.6807 }
+      ];
+
+      const map = new TMap.Map(document.getElementById("map"), {
+        center: new TMap.LatLng(39.9042, 116.4074),
+        zoom: 10
+      });
+
+      new TMap.MultiMarker({
+        id: "station-markers",
+        map: map,
+        styles: {
+          station: new TMap.MarkerStyle({
+            width: 25,
+            height: 35,
+            anchor: { x: 12, y: 35 },
+            src: "https://mapapi.qq.com/web/lbs/javascriptGL/demo/img/markerDefault.png"
+          })
+        },
+        geometries: stations.map(function (station) {
+          return {
+            id: station.id,
+            styleId: "station",
+            position: new TMap.LatLng(station.lat, station.lng),
+            properties: { title: station.name }
+          };
+        })
+      });
+    } catch (error) {
+      showError("地图初始化失败：" + error.message);
+    }
+  </script>
+</body>
+</html>
