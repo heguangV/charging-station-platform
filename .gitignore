@@ -30,6 +30,7 @@ backups/
 .env
 .env.*
 .env.example
+.codex/skills/
 secrets/
 *.pem
 *.key
@@ -38,6 +39,13 @@ secrets/
 key.properties
 google-services.json
 *.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.bmp
+*.svg
+*.ico
 
 # Platform noise
 .DS_Store

@@ -1,4 +1,0 @@
-interface:
-  display_name: "充电桩管理系统开发"
-  short_description: "开发 C++/Qt 充电桩双端、后端与数据库"
-  default_prompt: "使用 $charging-station-management 规划或实现充电桩管理系统功能。"
