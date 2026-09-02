@@ -21,7 +21,6 @@ compile_commands.json
 *.log
 logs/
 backups/
-*.sql
 *.dump
 *.db
 *.sqlite*
@@ -29,7 +28,7 @@ backups/
 # Secrets and local configuration
 .env
 .env.*
-.env.example
+!.env.example
 .codex/skills/
 secrets/
 *.pem
@@ -38,14 +37,10 @@ secrets/
 *.jks
 key.properties
 google-services.json
-*.png
-*.jpg
-*.jpeg
-*.gif
-*.webp
-*.bmp
-*.svg
-*.ico
+
+# Generated captures and exported artifacts (source-controlled UI assets are allowed)
+screenshots/
+artifacts/
 
 # Platform noise
 .DS_Store

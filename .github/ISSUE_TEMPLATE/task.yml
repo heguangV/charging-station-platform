@@ -1,0 +1,23 @@
+name: 工程任务
+description: 跟踪不改变业务行为的工程、测试、文档或运维工作
+title: "[Task] "
+labels: [task]
+body:
+  - type: input
+    id: source
+    attributes:
+      label: 来源
+      description: 填写需求编号、PR、风险编号或文档章节。
+    validations:
+      required: true
+  - type: textarea
+    id: scope_and_done
+    attributes:
+      label: 工作范围与完成条件
+      description: 简要列出要做什么、不做什么、交付物和验证方式。
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: 风险与依赖
