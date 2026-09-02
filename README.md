@@ -1,6 +1,6 @@
 # NCS 电动汽车充电桩应用管理平台
 
-NCS 是一个基于 C++17、Qt Widgets 和 SQLite 的充电桩管理教学项目，包含车主用户端、PC 服务器管理端、数据大屏和机器学习预测。系统使用模拟充电桩、虚拟余额和模拟支付，不连接真实电力设备或真实资金渠道。
+NCS 是一个基于 C++17、Qt 6.2 Widgets、Crow 和 SQLite 的充电桩管理教学项目，包含车主用户端、PC 管理端、HTTPS REST/WebSocket 业务服务端、数据大屏和机器学习预测。系统使用模拟充电桩、虚拟余额和模拟支付，不连接真实电力设备或真实资金渠道。
 
 ## 文档
 
@@ -20,7 +20,7 @@ NCS 是一个基于 C++17、Qt Widgets 和 SQLite 的充电桩管理教学项目
 └── README.md                       仓库入口
 ```
 
-业务模块将按研发指南逐步拆分为用户端、管理端、公共领域/服务层、SQLite 基础设施、大屏、机器学习和测试目录。
+业务模块将按研发指南逐步拆分为用户端、管理端、Crow 服务端、公共领域/服务层、SQLite 基础设施、大屏、机器学习和测试目录。SQLite 只由服务端访问，客户端通过 `/api/v1` HTTPS REST 和鉴权 WebSocket 通信。
 
 ## 本地文件
 
@@ -33,16 +33,17 @@ NCS 是一个基于 C++17、Qt Widgets 和 SQLite 的充电桩管理教学项目
 | 操作系统 | Ubuntu 22.04+；兼容 Windows 10/11 源码构建 |
 | 编译器 | GCC 11+ 或 MSVC 2019/2022 |
 | C++ | C++17 |
-| Qt | 最低 6.5.3，当前验证 6.8.3 |
+| Qt | 6.2 |
 | Qt Creator | 6.2+（可选） |
-| 构建工具 | CMake 3.16+、Ninja |
-| Qt 模块 | Widgets、Network、Sql；后续使用 Charts，地图实验使用 Quick 与 WebView |
+| 构建工具 | CMake 3.24+、Ninja |
+| Qt 模块 | Widgets、Network、Sql、Charts；地图视环境使用 WebEngine 或系统浏览器降级 |
+| 服务与通信 | Crow；HTTPS REST `/api/v1`；WebSocket 实时事件 |
 | 数据与扩展 | SQLite 3；大屏使用 Vue 3/ECharts；ML 使用 Python 3.10+/scikit-learn |
 
 ## 构建
 
 ```bash
-/path/to/Qt/6.8.3/gcc_64/bin/qt-cmake -S . -B build -G Ninja
+/path/to/Qt/6.2.0/gcc_64/bin/qt-cmake -S . -B build -G Ninja
 cmake --build build --target codex-qt-demo
 ./build/codex-qt-demo
 ```
@@ -56,8 +57,8 @@ QT_QPA_PLATFORM=offscreen ./build/codex-qt-demo --smoke-test
 ## 开发规范
 
 - 实现必须关联 SRS 中的 `UC-*`、`BR-*` 或 `NFR-*`，不得降低既有功能和验收标准。
-- C++ 源码使用 UTF-8、C++17 并保持 Qt 6.5.3 兼容；单个手写源文件不超过 400 行。
-- UI 不包含 SQL、权限、计费或钱包规则；数据库查询参数化，跨表写操作使用事务和幂等键。
+- C++ 源码使用 UTF-8、C++17 并保持 Qt 6.2 兼容；单个手写源文件不超过 400 行。
+- UI 不包含 SQL、权限、计费或钱包规则；SQLite 只由 Crow 服务端访问，查询参数化，跨表写操作使用事务和持久化幂等键。
 - 路径使用 `QDir`、`QFileInfo` 或 `QStandardPaths`，不得硬编码盘符和平台分隔符。
 - 数据库和耗时任务不得阻塞事件循环，后台线程不得直接操作 UI。
 - 错误必须有明确提示；密码、验证码、令牌、完整手机号和真实密钥不得写入日志。
