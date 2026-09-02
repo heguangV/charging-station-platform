@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install toolchain
         run: |
@@ -44,7 +44,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Initialize MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
       - name: Install Qt 6.2
         uses: jurplel/install-qt-action@v4
@@ -53,6 +58,11 @@ jobs:
           arch: win64_msvc2019_64
           cache: true
 
-      - name: Configure, build and test with MSVC
-        shell: cmd
-        run: call scripts\ci-windows-msvc.cmd
+      - name: Configure
+        run: cmake --preset dev -DCMAKE_CXX_COMPILER=cl.exe
+
+      - name: Build
+        run: cmake --build --preset dev --parallel 2
+
+      - name: Test
+        run: ctest --preset dev
