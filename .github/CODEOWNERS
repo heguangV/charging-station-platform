@@ -1,0 +1,7 @@
+# 默认所有变更由仓库负责人审核；模块负责人确定后应替换为团队账号。
+* @heguangV
+
+/docs/ @heguangV
+/.github/ @heguangV
+/infrastructure/ @heguangV
+/server/ @heguangV
