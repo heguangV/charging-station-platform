@@ -12,17 +12,19 @@ NCS 是一个基于 C++17、Qt Widgets 和 SQLite 的充电桩管理教学项目
 
 ```text
 .
-├── .codex/skills/                  项目专用 Codex Skill
 ├── apps/mobile/                    远期 Android/QML 地图实验
 ├── docs/                           SRS、研发指南和专项说明
 ├── src/                            当前 Qt Widgets 原型
-├── .env.example                    本地配置模板
 ├── CMakeLists.txt                  CMake 工程入口
 ├── LICENSE                         GPL-3.0 许可证
 └── README.md                       仓库入口
 ```
 
 业务模块将按研发指南逐步拆分为用户端、管理端、公共领域/服务层、SQLite 基础设施、大屏、机器学习和测试目录。
+
+## 本地文件
+
+项目专用 Codex Skill、`.env`/`.env.*` 环境配置以及图片文件仅保存在本地，均已通过 `.gitignore` 排除，不会提交到 GitHub。新环境需要自行创建 `.env` 并填写所需配置，真实密钥不得写入源码或提交记录。
 
 ## 环境要求
 
@@ -59,7 +61,7 @@ QT_QPA_PLATFORM=offscreen ./build/codex-qt-demo --smoke-test
 - 路径使用 `QDir`、`QFileInfo` 或 `QStandardPaths`，不得硬编码盘符和平台分隔符。
 - 数据库和耗时任务不得阻塞事件循环，后台线程不得直接操作 UI。
 - 错误必须有明确提示；密码、验证码、令牌、完整手机号和真实密钥不得写入日志。
-- `.env`、数据库、日志、备份、构建产物和个人 IDE 配置不得提交；真实 Key 只保存在本地 `.env`。
+- Codex Skill、`.env`/`.env.*`、图片、数据库、日志、备份、构建产物和个人 IDE 配置不得提交；真实 Key 只保存在本地 `.env`。
 - 功能提交应同时包含必要测试和文档；提交前运行构建、相关测试、烟雾测试及 `git diff --check`。
 - 分支建议使用 `feature/`、`fix/`、`docs/` 前缀；Pull Request 应关联需求编号并说明验证方法。
 
