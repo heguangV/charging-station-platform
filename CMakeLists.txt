@@ -12,6 +12,14 @@ option(NCS_BUILD_ANDROID_EXPERIMENT "Build the future QML/Android experiment" OF
 option(NCS_BUILD_LEGACY_DEMO "Build the original Qt learning demo" OFF)
 option(NCS_ENABLE_STRICT_WARNINGS "Treat project warnings as errors" ON)
 
+if(WIN32 AND NOT MSVC)
+    message(FATAL_ERROR
+        "NCS Windows builds require MSVC 2019/2022 and a matching Qt MSVC kit. "
+        "Initialize the Visual Studio developer environment before configuring; "
+        "the current compiler is '${CMAKE_CXX_COMPILER_ID}'."
+    )
+endif()
+
 find_package(Qt6 ${PROJECT_MINIMUM_QT_VERSION} REQUIRED COMPONENTS
     Core
     Widgets

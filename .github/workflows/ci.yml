@@ -53,11 +53,6 @@ jobs:
           arch: win64_msvc2019_64
           cache: true
 
-      - name: Configure
-        run: cmake --preset dev
-
-      - name: Build
-        run: cmake --build --preset dev --parallel 2
-
-      - name: Test
-        run: ctest --preset dev
+      - name: Configure, build and test with MSVC
+        shell: cmd
+        run: call scripts\ci-windows-msvc.cmd
