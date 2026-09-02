@@ -46,11 +46,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Initialize MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
       - name: Install Qt 6.2
         uses: jurplel/install-qt-action@v4
         with:
@@ -59,10 +54,14 @@ jobs:
           cache: true
 
       - name: Configure
-        run: cmake --preset dev -DCMAKE_CXX_COMPILER=cl.exe
+        run: >-
+          cmake -S . -B build/windows
+          -G "Visual Studio 17 2022" -A x64
+          -DBUILD_TESTING=ON
+          -DNCS_ENABLE_STRICT_WARNINGS=ON
 
       - name: Build
-        run: cmake --build --preset dev --parallel 2
+        run: cmake --build build/windows --config Debug --parallel 2
 
       - name: Test
-        run: ctest --preset dev
+        run: ctest --test-dir build/windows -C Debug --output-on-failure
