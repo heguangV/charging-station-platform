@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞私密报告
+    url: https://github.com/heguangV/charging-station-platform/security/advisories/new
+    about: 不要用公开 Issue 报告漏洞、凭据或个人信息。

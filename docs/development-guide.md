@@ -53,8 +53,10 @@ core/
 └── application/           用例、服务接口和权限边界
 infrastructure/
 ├── sqlite/                schema、迁移、仓储、事务和备份
+├── config/                环境配置加载与校验
+├── logging/               应用日志、请求 ID 和脱敏
 ├── map/                   地图服务和本地距离计算
-└── files/                 头像、日志和快照
+└── files/                 头像和大屏快照
 ml/                        训练、预测和评估
 tests/                     单元、集成、契约、并发、UI 和端到端测试
 docs/                      需求、设计和接入文档
