@@ -23,19 +23,47 @@ StationListWidget::StationListWidget(const QVector<StationSummary>& stations, QW
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(8);
-    auto* controls = new QHBoxLayout;
+    auto* searchBar = new QFrame;
+    searchBar->setObjectName(QStringLiteral("stationSearchBar"));
+    searchBar->setStyleSheet(QStringLiteral(
+        "QFrame#stationSearchBar{background:#FFFFFF;border:1px solid #D9E9E5;border-radius:16px;}"));
+    auto* controls = new QHBoxLayout(searchBar);
+    controls->setContentsMargins(6, 6, 6, 6);
+    controls->setSpacing(6);
     locationBox_ = new QComboBox;
     locationBox_->addItems({QStringLiteral("附近"), QStringLiteral("中关村"),
                             QStringLiteral("望京"), QStringLiteral("国贸")});
+    locationBox_->setFixedWidth(80);
+    locationBox_->setStyleSheet(QStringLiteral(
+        "QComboBox{background:#E7F5F1;color:#0F766E;border:0;border-radius:10px;"
+        "padding:7px 22px 7px 10px;font-size:13px;font-weight:600;}"
+        "QComboBox::drop-down{border:0;width:22px;}"
+        "QComboBox QAbstractItemView{background:#FFFFFF;border:1px solid #D9E9E5;"
+        "selection-background-color:#E7F5F1;selection-color:#0F766E;}"));
+    auto* searchSymbol = new QLabel(QStringLiteral("⌕"));
+    searchSymbol->setStyleSheet(QStringLiteral("color:#76918B;background:transparent;font-size:23px;"));
+    searchSymbol->setFixedWidth(20);
+    searchSymbol->setAlignment(Qt::AlignCenter);
     searchEdit_ = new QLineEdit;
-    searchEdit_->setPlaceholderText(QStringLiteral("搜索站名或地址"));
-    refreshButton_ = new QPushButton(QStringLiteral("刷新"));
-    refreshButton_->setObjectName(QStringLiteral("primaryButton"));
-    refreshButton_->setMinimumHeight(38);
+    searchEdit_->setPlaceholderText(QStringLiteral("搜索站点或地址"));
+    searchEdit_->setClearButtonEnabled(true);
+    searchEdit_->setStyleSheet(QStringLiteral(
+        "QLineEdit{background:transparent;border:0;padding:8px 0;color:#25324A;font-size:14px;}"
+        "QLineEdit:focus{border:0;}"));
+    refreshButton_ = new QPushButton(QStringLiteral("↻"));
+    refreshButton_->setToolTip(QStringLiteral("刷新站点"));
+    refreshButton_->setFixedSize(38, 38);
+    refreshButton_->setStyleSheet(QStringLiteral(
+        "QPushButton{background:#0F766E;color:#FFFFFF;border:0;border-radius:11px;"
+        "font-size:21px;font-weight:400;padding-bottom:2px;}"
+        "QPushButton:hover{background:#0B625B;}"
+        "QPushButton:pressed{background:#07534D;}"
+        "QPushButton:disabled{background:#A9C9C2;color:#EFFAF7;}"));
     controls->addWidget(locationBox_);
+    controls->addWidget(searchSymbol);
     controls->addWidget(searchEdit_, 1);
     controls->addWidget(refreshButton_);
-    layout->addLayout(controls);
+    layout->addWidget(searchBar);
     summary_ = new QLabel;
     summary_->setStyleSheet(QStringLiteral("color:#667085;font-size:12px;"));
     layout->addWidget(summary_);
