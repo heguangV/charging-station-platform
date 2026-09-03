@@ -25,6 +25,9 @@ int main(int argc, char* argv[])
     parser.setApplicationDescription(QStringLiteral("NCS Qt Widgets 用户端"));
     parser.addHelpOption();
     parser.addOption({QStringLiteral("smoke-test"), QStringLiteral("启动后自动退出")});
+    parser.addOption({QStringLiteral("mock-scenario"),
+                      QStringLiteral("选择 Mock 场景：happy-path、low-balance、no-available-charger、active-charging"),
+                      QStringLiteral("name"), QStringLiteral("happy-path")});
     parser.addOption({QStringLiteral("api-request-code"),
                       QStringLiteral("向配置的 REST 服务请求一次验证码后退出"),
                       QStringLiteral("phone")});
@@ -67,6 +70,14 @@ int main(int argc, char* argv[])
     }
 
     ncs::user::MockUserClientService service;
+    QString scenarioMessage;
+    if (!service.configureScenario(parser.value(QStringLiteral("mock-scenario")), &scenarioMessage))
+    {
+        qCritical().noquote() << scenarioMessage;
+        ncs::infrastructure::ApplicationLogger::shutdown();
+        return 4;
+    }
+    qInfo().noquote() << scenarioMessage;
     ncs::user::UserMainWindow window(service);
     window.show();
     if (parser.isSet(QStringLiteral("smoke-test")))

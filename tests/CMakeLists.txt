@@ -25,6 +25,18 @@ ncs_set_project_warnings(ncs_user_net_tests)
 add_test(NAME ncs_user_net_tests COMMAND ncs_user_net_tests)
 set_tests_properties(ncs_user_net_tests PROPERTIES LABELS "unit;user;network")
 
+qt_add_executable(ncs_user_mock_tests
+    user_mock_tests.cpp
+    ../apps/user/user_demo_service.cpp
+    ../apps/user/user_demo_service.h
+)
+
+target_include_directories(ncs_user_mock_tests PRIVATE ${CMAKE_SOURCE_DIR}/apps/user)
+target_link_libraries(ncs_user_mock_tests PRIVATE Qt6::Core Qt6::Widgets)
+ncs_set_project_warnings(ncs_user_mock_tests)
+add_test(NAME ncs_user_mock_tests COMMAND ncs_user_mock_tests)
+set_tests_properties(ncs_user_mock_tests PROPERTIES LABELS "unit;user;mock")
+
 add_test(NAME ncs_server_smoke COMMAND ncs_server --smoke-test)
 set_tests_properties(ncs_server_smoke PROPERTIES LABELS "smoke;foundation")
 add_test(NAME ncs_user_smoke COMMAND ncs_user --smoke-test)
