@@ -9,7 +9,10 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QTimer>
 #include <QVBoxLayout>
+
+#include <utility>
 
 namespace ncs::user
 {
@@ -26,12 +29,12 @@ StationListWidget::StationListWidget(const QVector<StationSummary>& stations, QW
                             QStringLiteral("望京"), QStringLiteral("国贸")});
     searchEdit_ = new QLineEdit;
     searchEdit_->setPlaceholderText(QStringLiteral("搜索站名或地址"));
-    auto* refreshButton = new QPushButton(QStringLiteral("刷新"));
-    refreshButton->setObjectName(QStringLiteral("primaryButton"));
-    refreshButton->setMinimumHeight(38);
+    refreshButton_ = new QPushButton(QStringLiteral("刷新"));
+    refreshButton_->setObjectName(QStringLiteral("primaryButton"));
+    refreshButton_->setMinimumHeight(38);
     controls->addWidget(locationBox_);
     controls->addWidget(searchEdit_, 1);
-    controls->addWidget(refreshButton);
+    controls->addWidget(refreshButton_);
     layout->addLayout(controls);
     summary_ = new QLabel;
     summary_->setStyleSheet(QStringLiteral("color:#667085;font-size:12px;"));
@@ -47,17 +50,71 @@ StationListWidget::StationListWidget(const QVector<StationSummary>& stations, QW
     layout->addWidget(scroll, 1);
     connect(locationBox_, &QComboBox::currentTextChanged, this, [this] { refresh(); });
     connect(searchEdit_, &QLineEdit::textChanged, this, [this] { refresh(); });
-    connect(refreshButton, &QPushButton::clicked, this, &StationListWidget::refresh);
+    connect(refreshButton_, &QPushButton::clicked, this, [this] {
+        setLoading(true);
+        QTimer::singleShot(260, this, [this] {
+            refresh();
+            setLoading(false);
+        });
+    });
     refresh();
 }
 
-void StationListWidget::refresh()
+void StationListWidget::setStations(QVector<StationSummary> stations)
+{
+    stations_ = std::move(stations);
+    refresh();
+}
+
+void StationListWidget::clearCards()
 {
     while (QLayoutItem* item = cards_->takeAt(0))
     {
         delete item->widget();
         delete item;
     }
+}
+
+void StationListWidget::setLoading(bool loading)
+{
+    refreshButton_->setEnabled(!loading);
+    if (!loading) return;
+    clearCards();
+    auto* loadingLabel = new QLabel(QStringLiteral("正在更新附近可用电桩…"));
+    loadingLabel->setAlignment(Qt::AlignCenter);
+    loadingLabel->setStyleSheet(QStringLiteral("padding:48px 12px;color:#52716C;font-size:14px;"));
+    cards_->addWidget(loadingLabel);
+    cards_->addStretch();
+    summary_->setText(QStringLiteral("正在刷新站点信息"));
+}
+
+void StationListWidget::showError(const QString& userMessage)
+{
+    clearCards();
+    auto* error = new QLabel(userMessage.isEmpty() ? QStringLiteral("网络服务不可用，请稍后重试")
+                                                     : userMessage);
+    error->setWordWrap(true);
+    error->setAlignment(Qt::AlignCenter);
+    error->setStyleSheet(QStringLiteral("padding:38px 18px 12px;color:#B42318;font-size:14px;"));
+    auto* retry = new QPushButton(QStringLiteral("重新加载"));
+    retry->setObjectName(QStringLiteral("primaryButton"));
+    retry->setMinimumHeight(38);
+    connect(retry, &QPushButton::clicked, this, [this] {
+        setLoading(true);
+        QTimer::singleShot(260, this, [this] {
+            refresh();
+            setLoading(false);
+        });
+    });
+    cards_->addWidget(error);
+    cards_->addWidget(retry, 0, Qt::AlignHCenter);
+    cards_->addStretch();
+    summary_->setText(QStringLiteral("站点加载失败"));
+}
+
+void StationListWidget::refresh()
+{
+    clearCards();
     const QString location = locationBox_->currentText();
     const QString keyword = searchEdit_->text().trimmed();
     int count = 0;
