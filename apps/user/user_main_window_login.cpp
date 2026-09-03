@@ -4,6 +4,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
 #include <QPushButton>
@@ -13,35 +14,66 @@
 
 namespace ncs::user
 {
+namespace
+{
+class EnergyMark final : public QWidget
+{
+  public:
+    explicit EnergyMark(QWidget* parent = nullptr) : QWidget(parent)
+    {
+        setFixedSize(44, 44);
+        setAttribute(Qt::WA_TranslucentBackground);
+    }
+
+  protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(QStringLiteral("#E2F5F0")));
+        painter.drawEllipse(rect());
+        painter.setPen(QPen(QColor(QStringLiteral("#0F766E")), 2.2, Qt::SolidLine, Qt::RoundCap,
+                            Qt::RoundJoin));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(QRectF(12, 14, 20, 20), 4, 4);
+        painter.drawLine(QPointF(19, 11), QPointF(25, 11));
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(QStringLiteral("#0F766E")));
+        painter.drawPolygon(QPolygonF{{24, 17}, {17, 26}, {22, 26}, {20, 33}, {29, 22}, {24, 22}});
+    }
+};
+} // namespace
 
 QWidget* UserMainWindow::createLoginPage()
 {
     auto* page = new QWidget;
     auto* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(14, 30, 14, 24);
-    layout->setSpacing(14);
-    auto* brand = new QFrame;
-    brand->setStyleSheet(QStringLiteral("QFrame{background:#0F766E;border-radius:20px;}"));
-    auto* brandLayout = new QVBoxLayout(brand);
-    brandLayout->setContentsMargins(22, 22, 22, 22);
-    auto* eyebrow = new QLabel(QStringLiteral("NCS · 智慧充电服务"));
-    eyebrow->setStyleSheet(QStringLiteral("color:#B9F3E9;font-size:12px;font-weight:600;"));
-    auto* title = new QLabel(QStringLiteral("让每次出行，\n都从容满电"));
-    title->setStyleSheet(QStringLiteral("color:white;font-size:27px;font-weight:700;"));
-    auto* subtitle = new QLabel(QStringLiteral("查找附近好桩，预约、充电、结算一站完成"));
+    layout->setContentsMargins(24, 38, 24, 24);
+    layout->setSpacing(12);
+    auto* brandHeader = new QHBoxLayout;
+    auto* mark = new EnergyMark;
+    auto* eyebrow = new QLabel(QStringLiteral("充电服务"));
+    eyebrow->setStyleSheet(QStringLiteral("color:#0F766E;background:transparent;font-size:13px;font-weight:700;letter-spacing:1px;"));
+    brandHeader->addWidget(mark);
+    brandHeader->addSpacing(10);
+    brandHeader->addWidget(eyebrow);
+    brandHeader->addStretch();
+    auto* title = new QLabel(QStringLiteral("为下一程，充好电"));
+    title->setStyleSheet(QStringLiteral("color:#1E293B;background:transparent;font-size:28px;font-weight:700;"));
+    auto* subtitle = new QLabel(QStringLiteral("轻松完成验证，随时安心出发"));
     subtitle->setWordWrap(true);
-    subtitle->setStyleSheet(QStringLiteral("color:#D4F7F0;font-size:13px;"));
-    brandLayout->addWidget(eyebrow);
-    brandLayout->addSpacing(8);
-    brandLayout->addWidget(title);
-    brandLayout->addSpacing(8);
-    brandLayout->addWidget(subtitle);
-    layout->addWidget(brand);
-    layout->addSpacing(8);
-    auto* loginTitle = new QLabel(QStringLiteral("手机号登录"));
+    subtitle->setStyleSheet(QStringLiteral("color:#667085;background:transparent;font-size:14px;"));
+    layout->addLayout(brandHeader);
+    layout->addSpacing(18);
+    layout->addWidget(title);
+    layout->addSpacing(2);
+    layout->addWidget(subtitle);
+    layout->addSpacing(22);
+    auto* loginTitle = new QLabel(QStringLiteral("登录"));
     loginTitle->setStyleSheet(QStringLiteral("font-size:21px;font-weight:700;color:#25324A;"));
     layout->addWidget(loginTitle);
-    auto* loginHint = new QLabel(QStringLiteral("首次登录将自动创建账户"));
+    auto* loginHint = new QLabel(QStringLiteral("使用手机号完成验证"));
     loginHint->setStyleSheet(QStringLiteral("font-size:13px;color:#667085;"));
     layout->addWidget(loginHint);
     phoneEdit_ = new QLineEdit;
@@ -63,7 +95,7 @@ QWidget* UserMainWindow::createLoginPage()
     layout->addWidget(login);
     auto* demoHelp = new QToolButton;
     demoHelp->setText(QStringLiteral("ⓘ 演示说明"));
-    demoHelp->setToolTip(QStringLiteral("演示验证码为 123456；验证码不会写入日志。"));
+    demoHelp->setToolTip(QStringLiteral("演示验证码为 123456。"));
     demoHelp->setCursor(Qt::PointingHandCursor);
     demoHelp->setStyleSheet(QStringLiteral("QToolButton{color:#0F766E;border:0;background:transparent;font-size:12px;padding:3px 0;text-align:left;}"));
     layout->addWidget(demoHelp, 0, Qt::AlignLeft);
