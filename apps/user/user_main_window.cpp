@@ -160,12 +160,7 @@ QWidget* UserMainWindow::createHomePage()
     auto* page = new QWidget;
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 8, 0, 0);
-    auto* heading = new QHBoxLayout;
-    heading->addWidget(label(QStringLiteral("附近充电站"), 23));
-    auto* profile = button(QStringLiteral("我的"), QStringLiteral("QPushButton{color:#0F766E;border:0;background:transparent;font-size:14px;}"));
-    heading->addStretch();
-    heading->addWidget(profile);
-    layout->addLayout(heading);
+    layout->addWidget(label(QStringLiteral("附近充电站"), 23));
     auto* recommendation = new QFrame;
     recommendation->setStyleSheet(QStringLiteral("QFrame{background:#0F766E;border-radius:18px;}"));
     auto* recommendationLayout = new QVBoxLayout(recommendation);
@@ -183,7 +178,6 @@ QWidget* UserMainWindow::createHomePage()
     stationList_ = new StationListWidget(service_.stations());
     layout->addWidget(stationList_, 1);
     connect(stationList_, &StationListWidget::stationSelected, this, &UserMainWindow::showDetail);
-    connect(profile, &QPushButton::clicked, this, &UserMainWindow::showProfile);
     return page;
 }
 
