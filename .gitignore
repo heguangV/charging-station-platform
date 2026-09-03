@@ -47,3 +47,7 @@ artifacts/
 Thumbs.db
 *~
 *.swp
+
+# Frontend & Node.js
+node_modules/
+.pnpm-store/
