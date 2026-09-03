@@ -8,6 +8,7 @@
 
 #include <QFormLayout>
 #include <QFrame>
+#include <QGraphicsOpacityEffect>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -15,6 +16,9 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QPauseAnimation>
+#include <QPropertyAnimation>
+#include <QSequentialAnimationGroup>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -71,9 +75,15 @@ UserMainWindow::UserMainWindow(UserClientService& service, QWidget* parent)
     auto* layout = new QVBoxLayout(root);
     layout->setContentsMargins(18, 14, 18, 14);
     layout->setSpacing(10);
-    notice_ = label({}, 12);
+    notice_ = label({}, 13);
+    notice_->setParent(root);
+    notice_->setFixedWidth(330);
+    notice_->setAlignment(Qt::AlignCenter);
+    notice_->setWordWrap(true);
+    noticeOpacity_ = new QGraphicsOpacityEffect(notice_);
+    noticeOpacity_->setOpacity(0.0);
+    notice_->setGraphicsEffect(noticeOpacity_);
     notice_->hide();
-    layout->addWidget(notice_);
     pages_ = new QStackedWidget(root);
     pages_->addWidget(createLoginPage());
     pages_->addWidget(createHomePage());
@@ -88,6 +98,20 @@ UserMainWindow::UserMainWindow(UserClientService& service, QWidget* parent)
     bottomNavigation_->hide();
     layout->addWidget(bottomNavigation_);
     setCentralWidget(root);
+    noticeAnimation_ = new QSequentialAnimationGroup(this);
+    auto* fadeIn = new QPropertyAnimation(noticeOpacity_, "opacity", noticeAnimation_);
+    fadeIn->setDuration(180);
+    fadeIn->setStartValue(0.0);
+    fadeIn->setEndValue(1.0);
+    noticePause_ = new QPauseAnimation(noticeAnimation_);
+    auto* fadeOut = new QPropertyAnimation(noticeOpacity_, "opacity", noticeAnimation_);
+    fadeOut->setDuration(260);
+    fadeOut->setStartValue(1.0);
+    fadeOut->setEndValue(0.0);
+    noticeAnimation_->addAnimation(fadeIn);
+    noticeAnimation_->addAnimation(noticePause_);
+    noticeAnimation_->addAnimation(fadeOut);
+    connect(noticeAnimation_, &QSequentialAnimationGroup::finished, notice_, &QLabel::hide);
     connect(bottomNavigation_, &BottomNavigation::homeRequested, this, &UserMainWindow::showHome);
     connect(bottomNavigation_, &BottomNavigation::profileRequested, this, &UserMainWindow::showProfile);
     connect(bottomNavigation_, &BottomNavigation::ordersRequested, this, &UserMainWindow::showOrders);

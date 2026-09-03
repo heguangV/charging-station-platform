@@ -6,10 +6,12 @@
 
 #include <QLabel>
 #include <QLineEdit>
+#include <QGraphicsOpacityEffect>
 #include <QKeyEvent>
+#include <QPauseAnimation>
 #include <QPixmap>
+#include <QSequentialAnimationGroup>
 #include <QStackedWidget>
-#include <QTimer>
 
 namespace ncs::user
 {
@@ -153,16 +155,19 @@ void UserMainWindow::refreshProfile()
 
 void UserMainWindow::notify(const QString& message, bool error)
 {
+    noticeAnimation_->stop();
     notice_->setText(message);
-    notice_->setVisible(true);
     notice_->setStyleSheet(
-        QStringLiteral("padding:7px 10px;border-radius:8px;font-size:12px;color:%1;background:%2;")
+        QStringLiteral("padding:10px 14px;border-radius:14px;font-size:13px;font-weight:600;color:%1;background:%2;")
             .arg(error ? QStringLiteral("#B42318") : QStringLiteral("#0F766E"),
-                 error ? QStringLiteral("#FFF0F0") : QStringLiteral("#E2F3F0")));
-    const int timeoutMs = error ? 5000 : 3200;
-    QTimer::singleShot(timeoutMs, notice_, [notice = notice_, message] {
-        if (notice->text() == message) notice->hide();
-    });
+                 error ? QStringLiteral("#FFF4F2") : QStringLiteral("#E7F6F2")));
+    notice_->setFixedHeight(qMax(44, notice_->sizeHint().height()));
+    notice_->move((centralWidget()->width() - notice_->width()) / 2, 18);
+    noticeOpacity_->setOpacity(0.0);
+    notice_->show();
+    notice_->raise();
+    noticePause_->setDuration(error ? 4200 : 2400);
+    noticeAnimation_->start();
 }
 
 } // namespace ncs::user

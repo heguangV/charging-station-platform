@@ -12,6 +12,9 @@ class QStackedWidget;
 class QTimer;
 class QTableWidget;
 class QComboBox;
+class QPauseAnimation;
+class QSequentialAnimationGroup;
+class QGraphicsOpacityEffect;
 namespace ncs::user { class ChargerTable; }
 namespace ncs::user { class ChargeSocGauge; }
 namespace ncs::user { class StationListWidget; }
@@ -50,6 +53,9 @@ class UserMainWindow final : public QMainWindow
     UserClientService& service_;
     QStackedWidget* pages_ = nullptr;
     QLabel* notice_ = nullptr;
+    QGraphicsOpacityEffect* noticeOpacity_ = nullptr;
+    QSequentialAnimationGroup* noticeAnimation_ = nullptr;
+    QPauseAnimation* noticePause_ = nullptr;
     QLineEdit* phoneEdit_ = nullptr;
     QLineEdit* codeEdit_ = nullptr;
     QPushButton* codeButton_ = nullptr;
