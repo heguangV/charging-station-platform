@@ -59,7 +59,7 @@ QWidget* UserMainWindow::createLoginPage()
     codeRow->addWidget(codeEdit_);
     codeRow->addWidget(codeButton_);
     layout->addLayout(codeRow);
-    auto* login = button(QStringLiteral("登录并开始找桩"));
+    auto* login = button(QStringLiteral("登录"));
     layout->addWidget(login);
     auto* demoHelp = new QToolButton;
     demoHelp->setText(QStringLiteral("ⓘ 演示说明"));

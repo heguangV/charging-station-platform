@@ -77,7 +77,7 @@ bool MockUserClientService::login(const QString& phone, const QString& code, QSt
     {
         nickname_ = QStringLiteral("用户%1").arg(phone.right(4));
     }
-    *userMessage = QStringLiteral("登录成功，已进入演示数据模式");
+    *userMessage = QStringLiteral("登录成功");
     return true;
 }
 
@@ -270,7 +270,7 @@ bool MockUserClientService::start(QString* userMessage)
             order.startTime = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
         }
     }
-    *userMessage = QStringLiteral("充电已开始，数据每秒刷新");
+    *userMessage = QStringLiteral("充电已开始");
     return true;
 }
 

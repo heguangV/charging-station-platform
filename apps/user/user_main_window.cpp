@@ -71,8 +71,8 @@ UserMainWindow::UserMainWindow(UserClientService& service, QWidget* parent)
     auto* layout = new QVBoxLayout(root);
     layout->setContentsMargins(18, 14, 18, 14);
     layout->setSpacing(10);
-    notice_ = label(QStringLiteral("演示数据模式：服务端尚未接入"), 12);
-    notify(notice_->text());
+    notice_ = label({}, 12);
+    notice_->hide();
     layout->addWidget(notice_);
     pages_ = new QStackedWidget(root);
     pages_->addWidget(createLoginPage());
@@ -221,7 +221,7 @@ QWidget* UserMainWindow::createChargePage()
     chargeState_ = label(QStringLiteral("已预约 · ZGC-DC-01"), 15);
     chargeState_->setStyleSheet(QStringLiteral("padding:10px 12px;background:#E8F8EF;color:#087443;border-radius:12px;font-size:15px;font-weight:600;"));
     layout->addWidget(chargeState_);
-    reservationCountdown_ = label(QStringLiteral("请在预约后 15:00 内开始充电"), 13);
+    reservationCountdown_ = label(QStringLiteral("预约保留中"), 13);
     reservationCountdown_->setStyleSheet(QStringLiteral("color:#B54708;font-size:13px;"));
     layout->addWidget(reservationCountdown_);
     auto* metrics = new QWidget;
@@ -250,7 +250,7 @@ QWidget* UserMainWindow::createChargePage()
         {
             chargingStarted_ = true;
             chargeState_->setText(QStringLiteral("充电中 · %1 · 60 kW").arg(selectedChargerCode_));
-            reservationCountdown_->setText(QStringLiteral("充电数据每秒刷新"));
+            reservationCountdown_->hide();
             startButton_->setEnabled(false);
             cancelButton_->setEnabled(false);
             settleButton_->setEnabled(true);

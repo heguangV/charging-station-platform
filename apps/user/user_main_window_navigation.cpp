@@ -28,12 +28,12 @@ QWidget* UserMainWindow::createNavigationPage()
     heading->addWidget(title);
     auto* routeHelp = new QToolButton;
     routeHelp->setText(QStringLiteral("ⓘ"));
-    routeHelp->setToolTip(QStringLiteral("路线会在系统浏览器中打开；地图服务暂不可用时仍可使用该方式继续导航。"));
+    routeHelp->setToolTip(QStringLiteral("路线将在地图服务中打开。"));
     routeHelp->setStyleSheet(QStringLiteral("QToolButton{color:#0F766E;border:0;background:transparent;font-size:17px;padding:2px;}"));
     heading->addWidget(routeHelp);
     heading->addStretch();
     layout->addLayout(heading);
-    layout->addWidget(new QLabel(QStringLiteral("起点：当前位置（模拟 GPS）")));
+    layout->addWidget(new QLabel(QStringLiteral("起点：当前位置")));
     navigationMode_ = new QComboBox;
     navigationMode_->addItem(QStringLiteral("驾车"), QStringLiteral("driving"));
     navigationMode_->addItem(QStringLiteral("步行"), QStringLiteral("walking"));
@@ -42,7 +42,7 @@ QWidget* UserMainWindow::createNavigationPage()
     navigationSummary_->setWordWrap(true);
     navigationSummary_->setStyleSheet(QStringLiteral("padding:24px;background:#FFFFFF;border:1px solid #E4EAF3;border-radius:16px;font-size:15px;"));
     layout->addWidget(navigationSummary_);
-    auto* open = button(QStringLiteral("在系统浏览器中打开路线"));
+    auto* open = button(QStringLiteral("打开地图路线"));
     auto* back = button(QStringLiteral("返回电站详情"), QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;border-radius:10px;font-size:15px;font-weight:600;}"));
     layout->addWidget(open);
     layout->addWidget(back);

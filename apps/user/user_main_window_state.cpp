@@ -95,6 +95,7 @@ void UserMainWindow::showDetail(int stationId)
 void UserMainWindow::showCharge()
 {
     bottomNavigation_->hide();
+    reservationCountdown_->setVisible(!chargingStarted_);
     pages_->setCurrentIndex(kChargePage);
 }
 
