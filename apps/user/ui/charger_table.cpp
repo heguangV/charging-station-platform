@@ -1,14 +1,39 @@
 #include "charger_table.h"
 
 #include <QFrame>
+#include <QGraphicsDropShadowEffect>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QVBoxLayout>
 
+#include <functional>
+
 namespace ncs::user
 {
+namespace
+{
+class ChargerCard final : public QFrame
+{
+  public:
+    explicit ChargerCard(std::function<void()> onDoubleClick, QWidget* parent = nullptr)
+        : QFrame(parent), onDoubleClick_(std::move(onDoubleClick))
+    {
+    }
+
+  protected:
+    void mouseDoubleClickEvent(QMouseEvent* event) override
+    {
+        if (onDoubleClick_) onDoubleClick_();
+        event->accept();
+    }
+
+  private:
+    std::function<void()> onDoubleClick_;
+};
+} // namespace
 
 ChargerTable::ChargerTable(QWidget* parent) : QWidget(parent)
 {
@@ -44,10 +69,24 @@ void ChargerTable::rebuild()
     {
         const bool available = charger.status == QStringLiteral("空闲");
         const bool selected = selectedCode_ == charger.code;
-        auto* card = new QFrame;
+        auto* card = new ChargerCard(selected ? [this] {
+            selectedCode_.clear();
+            rebuild();
+        } : std::function<void()>{});
+        card->setCursor(available ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        card->setToolTip(selected ? QStringLiteral("已选择；双击卡片空白处或点击“取消选择”可取消")
+                                  : QString());
         card->setStyleSheet(QStringLiteral("QFrame{background:%1;border:2px solid %2;border-radius:14px;}")
-                                .arg(selected ? QStringLiteral("#EEF5FF") : QStringLiteral("#FFFFFF"),
+                                .arg(selected ? QStringLiteral("#DDF5EF") : QStringLiteral("#FFFFFF"),
                                      selected ? QStringLiteral("#0F766E") : QStringLiteral("#DDEBE8")));
+        if (selected)
+        {
+            auto* shadow = new QGraphicsDropShadowEffect(card);
+            shadow->setBlurRadius(18);
+            shadow->setOffset(0, 4);
+            shadow->setColor(QColor(15, 118, 110, 70));
+            card->setGraphicsEffect(shadow);
+        }
         auto* layout = new QHBoxLayout(card);
         layout->setContentsMargins(14, 11, 14, 11);
         auto* text = new QVBoxLayout;
@@ -58,7 +97,7 @@ void ChargerTable::rebuild()
         const QString color = available ? QStringLiteral("#087443")
                                         : charger.status == QStringLiteral("故障") ? QStringLiteral("#B42318")
                                                                                 : QStringLiteral("#B54708");
-        auto* status = new QLabel(charger.status);
+        auto* status = new QLabel(selected ? QStringLiteral("✓ 已选择 · 双击取消") : charger.status);
         status->setStyleSheet(QStringLiteral("color:%1;font-size:12px;font-weight:600;").arg(color));
         text->addWidget(code);
         text->addWidget(meta);
@@ -68,19 +107,21 @@ void ChargerTable::rebuild()
         power->setAlignment(Qt::AlignCenter);
         power->setStyleSheet(QStringLiteral("font-size:20px;font-weight:700;color:#0F766E;"));
         layout->addWidget(power);
-        auto* choose = new QPushButton(available ? (selected ? QStringLiteral("已选择") : QStringLiteral("选择"))
+        auto* choose = new QPushButton(available ? (selected ? QStringLiteral("取消选择") : QStringLiteral("选择"))
                                                   : charger.status);
         choose->setMinimumSize(66, 36);
         choose->setEnabled(available);
         choose->setStyleSheet(QStringLiteral("QPushButton{background:%1;color:%2;border:0;border-radius:9px;font-weight:600;}"
+                                              "QPushButton:hover{background:%3;}"
                                               "QPushButton:disabled{background:#F2F4F7;color:#98A2B3;}")
                                   .arg(selected ? QStringLiteral("#0F766E") : QStringLiteral("#E2F3F0"),
-                                       selected ? QStringLiteral("white") : QStringLiteral("#0F766E")));
+                                       selected ? QStringLiteral("white") : QStringLiteral("#0F766E"),
+                                       selected ? QStringLiteral("#B42318") : QStringLiteral("#CFF0E9")));
         layout->addWidget(choose);
         if (available)
         {
             connect(choose, &QPushButton::clicked, this, [this, code = charger.code] {
-                selectedCode_ = code;
+                selectedCode_ = selectedCode_ == code ? QString() : code;
                 rebuild();
             });
         }
