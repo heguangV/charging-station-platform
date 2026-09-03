@@ -2,10 +2,12 @@
 
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QNetworkReply>
 #include <QUrl>
 #include <QUrlQuery>
 
 #include <functional>
+#include <memory>
 
 class QHttpMultiPart;
 class QNetworkAccessManager;
@@ -38,10 +40,18 @@ class ApiClient final : public QObject
     void putJson(const QString& path, const QJsonObject& body, Handler handler);
     void postMultipart(const QString& path, QHttpMultiPart* body, Handler handler);
 
+    // Kept public to make the stable HTTP-envelope contract unit-testable without a server.
+    static ApiReply parseEnvelope(int httpStatus, const QByteArray& payload,
+                                  QNetworkReply::NetworkError transportError,
+                                  const QString& transportMessage);
+    static bool isRetryableTransportError(QNetworkReply::NetworkError error);
+
   private:
-    void send(const QByteArray& method, const QString& path, const QByteArray& body,
-              const QHash<QByteArray, QByteArray>& headers, Handler handler,
-              QHttpMultiPart* multipart = nullptr);
+    struct PendingRequest;
+    void send(const std::shared_ptr<PendingRequest>& pending);
+    void enqueue(const QByteArray& method, const QString& path, const QByteArray& body,
+                 QHash<QByteArray, QByteArray> headers, Handler handler,
+                 QHttpMultiPart* multipart = nullptr);
     QUrl urlFor(const QString& path) const;
 
     QUrl baseUrl_;

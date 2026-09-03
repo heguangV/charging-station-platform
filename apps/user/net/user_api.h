@@ -31,10 +31,12 @@ class UserApi final
     void flow(const QString& flowNo, ApiClient::Handler done);
     void confirmQuote(const QString& flowNo, const QString& quoteNo, qint64 flowVersion,
                       ApiClient::Handler done);
-    void cancelFlow(const QString& flowNo, qint64 flowVersion, ApiClient::Handler done);
+    void cancelFlow(const QString& flowNo, qint64 flowVersion, const QString& reasonCode,
+                    ApiClient::Handler done);
     void startFlow(const QString& flowNo, qint64 flowVersion, ApiClient::Handler done);
     void progress(const QString& flowNo, ApiClient::Handler done);
-    void settleFlow(const QString& flowNo, qint64 flowVersion, ApiClient::Handler done);
+    void settleFlow(const QString& flowNo, qint64 flowVersion, const QString& reasonCode,
+                    ApiClient::Handler done);
 
   private:
     static QHash<QByteArray, QByteArray> idempotencyHeaders();

@@ -101,10 +101,10 @@ void UserApi::requestFlow(qint64 stationId, int chargerType, qint64 preferredCha
 void UserApi::activeFlow(ApiClient::Handler done) { client_.get(kUserBase + "/flows/active", {}, std::move(done)); }
 void UserApi::flow(const QString& flowNo, ApiClient::Handler done) { client_.get(kUserBase + QStringLiteral("/flows/%1").arg(flowNo), {}, std::move(done)); }
 void UserApi::confirmQuote(const QString& flowNo, const QString& quoteNo, qint64 flowVersion, ApiClient::Handler done) { client_.postJson(kUserBase + QStringLiteral("/flows/%1/quote-confirmations").arg(flowNo), {{"quoteNo", quoteNo}, {"flowVersion", flowVersion}}, std::move(done), idempotencyHeaders()); }
-void UserApi::cancelFlow(const QString& flowNo, qint64 flowVersion, ApiClient::Handler done) { client_.postJson(kUserBase + QStringLiteral("/flows/%1/cancellations").arg(flowNo), {{"reasonCode", "USER_CANCELLED"}, {"flowVersion", flowVersion}}, std::move(done), idempotencyHeaders()); }
+void UserApi::cancelFlow(const QString& flowNo, qint64 flowVersion, const QString& reasonCode, ApiClient::Handler done) { client_.postJson(kUserBase + QStringLiteral("/flows/%1/cancellations").arg(flowNo), {{"reasonCode", reasonCode}, {"flowVersion", flowVersion}}, std::move(done), idempotencyHeaders()); }
 void UserApi::startFlow(const QString& flowNo, qint64 flowVersion, ApiClient::Handler done) { client_.postJson(kUserBase + QStringLiteral("/flows/%1/start").arg(flowNo), {{"flowVersion", flowVersion}, {"targetAmountCent", QJsonValue::Null}, {"balanceFloorCent", QJsonValue::Null}}, std::move(done), idempotencyHeaders()); }
 void UserApi::progress(const QString& flowNo, ApiClient::Handler done) { client_.get(kUserBase + QStringLiteral("/flows/%1/progress").arg(flowNo), {}, std::move(done)); }
-void UserApi::settleFlow(const QString& flowNo, qint64 flowVersion, ApiClient::Handler done) { client_.postJson(kUserBase + QStringLiteral("/flows/%1/settlements").arg(flowNo), {{"flowVersion", flowVersion}, {"reasonCode", "USER_STOPPED"}}, std::move(done), idempotencyHeaders()); }
+void UserApi::settleFlow(const QString& flowNo, qint64 flowVersion, const QString& reasonCode, ApiClient::Handler done) { client_.postJson(kUserBase + QStringLiteral("/flows/%1/settlements").arg(flowNo), {{"flowVersion", flowVersion}, {"reasonCode", reasonCode}}, std::move(done), idempotencyHeaders()); }
 
 QHash<QByteArray, QByteArray> UserApi::idempotencyHeaders()
 {
