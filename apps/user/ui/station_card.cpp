@@ -2,7 +2,7 @@
 
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QPushButton>
+#include <QMouseEvent>
 #include <QVBoxLayout>
 
 namespace ncs::user
@@ -18,36 +18,46 @@ QLabel* text(const QString& value, const int size, const QString& color = QStrin
 }
 } // namespace
 
-StationCard::StationCard(const StationSummary& station, QWidget* parent) : QFrame(parent)
+StationCard::StationCard(const StationSummary& station, QWidget* parent)
+    : QFrame(parent), stationId_(station.id)
 {
     setObjectName(QStringLiteral("card"));
+    setCursor(Qt::PointingHandCursor);
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(16, 14, 16, 14);
-    layout->setSpacing(7);
+    layout->setContentsMargins(16, 14, 16, 13);
+    layout->setSpacing(8);
 
     auto* heading = new QHBoxLayout;
-    heading->addWidget(text(station.name, 16));
+    auto* name = text(station.name, 16);
+    name->setStyleSheet(name->styleSheet() + QStringLiteral("font-weight:600;"));
+    heading->addWidget(name);
     heading->addStretch();
     auto* distance = text(station.distance, 12, QStringLiteral("#0F766E"));
-    distance->setStyleSheet(distance->styleSheet() + QStringLiteral("font-weight:600;"));
+    distance->setStyleSheet(distance->styleSheet() +
+                            QStringLiteral("background:#EDF7F4;border-radius:8px;padding:4px 6px;font-weight:600;"));
     heading->addWidget(distance);
     layout->addLayout(heading);
     layout->addWidget(text(station.address, 12, QStringLiteral("#667085")));
 
-    const QString availability = QStringLiteral("%1 / %2 空闲 · %3 / 度")
-                                     .arg(station.idleCount)
-                                     .arg(station.totalCount)
-                                     .arg(QString::number(station.priceCentPerKwh / 100.0, 'f', 2));
-    auto* badge = text(availability, 13, QStringLiteral("#087443"));
-    badge->setStyleSheet(badge->styleSheet() +
-                         QStringLiteral("background:#E8F8EF;border-radius:8px;padding:5px 8px;"));
-    layout->addWidget(badge);
+    auto* details = new QHBoxLayout;
+    auto* availability = text(QStringLiteral("%1 / %2 空闲").arg(station.idleCount).arg(station.totalCount),
+                              13, QStringLiteral("#087443"));
+    availability->setStyleSheet(availability->styleSheet() +
+                                QStringLiteral("background:#E8F8EF;border-radius:8px;padding:5px 8px;font-weight:600;"));
+    details->addWidget(availability);
+    details->addSpacing(2);
+    details->addWidget(text(QStringLiteral("¥%1 / 度").arg(QString::number(station.priceCentPerKwh / 100.0, 'f', 2)),
+                            13, QStringLiteral("#475467")));
+    details->addStretch();
+    details->addWidget(text(QStringLiteral("查看电桩  ›"), 12, QStringLiteral("#0F766E")));
+    layout->addLayout(details);
+}
 
-    auto* open = new QPushButton(QStringLiteral("查看电桩详情"));
-    open->setObjectName(QStringLiteral("primaryButton"));
-    open->setMinimumHeight(36);
-    layout->addWidget(open);
-    connect(open, &QPushButton::clicked, this, [this, id = station.id] { emit selected(id); });
+void StationCard::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton && rect().contains(event->position().toPoint()))
+        emit selected(stationId_);
+    QFrame::mouseReleaseEvent(event);
 }
 
 } // namespace ncs::user
