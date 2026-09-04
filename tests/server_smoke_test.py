@@ -703,6 +703,12 @@ def main() -> int:
             dashboard_logout_retry, _, _ = request(
                 port, "/api/v1/dashboard/auth/logout", dashboard_headers, "POST")
             assert dashboard_logout == 200 and dashboard_logout_retry == 200
+        except BaseException:
+            # Surface server-side diagnostics (async dispatch traces, errors)
+            # before the temporary directory is cleaned up.
+            stop_server(process, 5)
+            print(process.stderr.read(), file=sys.stderr)
+            raise
         finally:
             forced_windows_stop = stop_server(process, 5)
         if process.returncode != 0 and not forced_windows_stop:
@@ -781,6 +787,10 @@ def main() -> int:
                 persisted_receipt_status == 200
                 and json.loads(persisted_receipt_body)["data"]["orderNo"] == receipt["orderNo"]
             )
+        except BaseException:
+            stop_server(restarted, 5)
+            print(restarted.stderr.read(), file=sys.stderr)
+            raise
         finally:
             forced_windows_stop = stop_server(restarted, 5)
         if restarted.returncode != 0 and not forced_windows_stop:

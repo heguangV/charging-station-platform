@@ -8,6 +8,7 @@
 #include <asio/steady_timer.hpp>
 
 #include <atomic>
+#include <cstdio>
 #include <memory>
 #include <utility>
 
@@ -15,6 +16,13 @@ namespace ncs::server::controller
 {
 namespace
 {
+
+// Temporary CI diagnostics for the Windows HTTPS smoke-test hang.
+void asyncTrace(const char* stage)
+{
+    std::fprintf(stderr, "[async-debug] %s\n", stage);
+    std::fflush(stderr);
+}
 
 struct DispatchState
 {
@@ -71,26 +79,41 @@ void dispatchBlocking(const crow::request& request, crow::response& response,
     state->timer.async_wait(
         [state, responsePointer](const asio::error_code& error)
         {
+            asyncTrace("timer handler entered");
             if (error || state->claimed.exchange(true))
+            {
+                asyncTrace(error ? "timer fired with error (cancelled)" : "timer fired but claimed");
                 return;
+            }
+            asyncTrace("timer claiming and writing timeout response");
             *responsePointer = timeoutResponse();
             responsePointer->end();
+            asyncTrace("timer end() returned");
         });
 
+    asyncTrace("arming timer and submitting work");
     const bool accepted = executor.submit(
         [state, responsePointer, ioContext, operation = std::move(operation)]() mutable
         {
+            asyncTrace("worker running operation");
             crow::response result = safeOperation(operation);
+            asyncTrace("worker operation finished, posting completion");
             asio::post(*ioContext,
                        [state, responsePointer, result = std::move(result)]() mutable
                        {
+                           asyncTrace("posted completion handler entered");
                            if (state->claimed.exchange(true))
+                           {
+                               asyncTrace("posted completion lost the claim");
                                return;
+                           }
                            state->timer.cancel();
                            *responsePointer = std::move(result);
                            responsePointer->end();
+                           asyncTrace("posted end() returned");
                        });
         });
+    asyncTrace(accepted ? "work submitted" : "work rejected (queue full)");
     if (!accepted && !state->claimed.exchange(true))
     {
         state->timer.cancel();
