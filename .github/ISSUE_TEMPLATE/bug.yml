@@ -1,0 +1,52 @@
+name: 缺陷报告
+description: 报告可复现的错误、回归或异常行为
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: input
+    id: requirement
+    attributes:
+      label: 关联需求
+      description: 填写 UC-*、BR-*、NFR-* 或“不确定”。
+      placeholder: UC-U-07
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题说明
+      description: 简要写明实际现象、预期结果和用户看到的错误文字。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      placeholder: "1. 启动...\n2. 登录...\n3. 点击..."
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: 环境
+      options:
+        - Ubuntu 用户端
+        - Ubuntu 管理端
+        - Ubuntu 服务端
+        - Windows
+        - CI / 自动化测试
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 补充证据
+      description: 可附脱敏日志、截图或版本信息；禁止粘贴令牌、密码、完整手机号和私钥。
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: 信息安全确认
+      options:
+        - label: 我已移除凭据、个人信息、内部路径和其他敏感数据。
+          required: true

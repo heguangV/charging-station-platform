@@ -1,0 +1,41 @@
+name: 需求或功能
+description: 提议新增或调整可观察的系统行为
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: input
+    id: requirement
+    attributes:
+      label: 需求编号
+      description: 已有需求填写 SRS 编号；新需求填写“待立项”。
+      placeholder: UC-A-05 / 待立项
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目标与期望结果
+      description: 简要说明使用者、场景、当前问题和期望结果。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收结果
+      description: 列出可以被测试观察的成功、失败、权限和边界结果。
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影响范围（可选）
+      description: 说明可能影响的 UI、接口、数据表、配置、部署与兼容性。
+    validations:
+      required: true
+  - type: checkboxes
+    id: baseline
+    attributes:
+      label: 基线确认
+      options:
+        - label: 若改变需求，我会先更新 SRS，再更新设计、实现和测试。
+          required: true

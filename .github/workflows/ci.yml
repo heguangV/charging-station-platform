@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ninja-build qt6-base-dev libgl1-mesa-dev
+          python3 -m pip install --disable-pip-version-check cmake==3.31.6
+
+      - name: Configure
+        run: cmake --preset dev
+
+      - name: Build
+        run: cmake --build --preset dev --parallel 2
+
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --preset dev
+
+      - name: Repository checks
+        run: ./scripts/check.sh
+
+  windows-source-build:
+    runs-on: windows-2022
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Qt 6.2
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.2.4"
+          arch: win64_msvc2019_64
+          cache: true
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build/windows
+          -G "Visual Studio 17 2022" -A x64
+          -DBUILD_TESTING=ON
+          -DNCS_ENABLE_STRICT_WARNINGS=ON
+
+      - name: Build
+        run: cmake --build build/windows --config Debug --parallel 2
+
+      - name: Test
+        run: ctest --test-dir build/windows -C Debug --output-on-failure

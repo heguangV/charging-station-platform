@@ -22,7 +22,6 @@ compile_commands.json
 logs/
 backups/
 apps/dashboard/public/data/
-*.sql
 *.dump
 *.db
 *.sqlite*
@@ -30,7 +29,7 @@ apps/dashboard/public/data/
 # Secrets and local configuration
 .env
 .env.*
-.env.example
+!.env.example
 .codex/skills/
 secrets/
 *.pem
@@ -39,19 +38,15 @@ secrets/
 *.jks
 key.properties
 google-services.json
-*.png
-*.jpg
-*.jpeg
-*.gif
-*.webp
-*.bmp
-*.svg
-*.ico
+
+# Generated captures and exported artifacts (source-controlled UI assets are allowed)
+screenshots/
+artifacts/
 
 # Platform noise
-__pycache__/
-*.py[cod]
 .DS_Store
 Thumbs.db
 *~
 *.swp
+__pycache__/
+*.py[cod]

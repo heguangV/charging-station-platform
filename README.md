@@ -8,24 +8,41 @@
 - [研发实施指南](docs/development-guide.md)：工程结构、研发阶段和完成流程。
 - [数据库设计](docs/database-design.md)：物理模型、约束、事务和迁移。
 - [REST / WebSocket 接口](docs/database-api.md)：客户端与服务端通信契约。
+- [完整需求矩阵](docs/01需求矩阵-NCS充电桩管理平台.xls)：负责人、排期、状态、困难和验收待办。
 - [腾讯地图接入](docs/tencent-map-setup.md)：本地配置和故障排查。
+- [运行与运维手册](docs/operations-guide.md)：启动、检查、备份、恢复和清理。
+- [发布指南](docs/release-guide.md)：发布门禁、步骤、回滚和说明模板。
+- [工程基础追踪](docs/requirements-traceability.md)：阶段一产物与验证状态。
 
 ## 仓库结构
 
 ```text
 .
-├── apps/mobile/        远期 Android/QML 地图实验
-├── docs/               需求、设计和接入文档
+├── apps/
+│   ├── user/           Qt Widgets 用户端（当前为模拟数据骨架）
+│   ├── admin/          Qt Widgets 管理端骨架
+│   ├── dashboard/      Vue/ECharts 大屏预留目录
+│   └── mobile/         远期 Android/QML 实验
 ├── server/             Crow 服务端
 │   ├── controller/     路由、DTO 转换与协议适配
 │   ├── middleware/     鉴权、错误、限流与请求日志
-│   └── runtime/        计费、调度、到期与通知任务
+│   ├── websocket/      WebSocket 接入、outbox 投递与进度推送
+│   └── runtime/        配置、启动检查、周期调度与 ML 子进程管理
 ├── core/               不依赖 UI、Crow 或 SQLite 的核心层
-│   ├── domain/         实体、值对象与状态机
-│   └── application/    用例、服务接口与权限边界
+│   ├── domain/         实体、值对象与错误码
+│   ├── application/    用例、服务接口与权限边界
+│   └── include/ncs/core/  公共 Result/Error 值类型
 ├── infrastructure/     外部能力实现
-│   └── files/          结构化日志（后续承载头像与快照）
-├── src/                当前 Qt Widgets 原型
+│   ├── sqlite/         数据库迁移、仓储、事务与备份
+│   ├── map/            腾讯地理编码与 Haversine 降级
+│   ├── files/          结构化日志、原子快照与模型产物
+│   ├── config/         .env 环境文件加载
+│   └── logging/        应用日志器
+├── ml/                 Python 训练与预测管线
+├── scripts/            构建、测试、证书和清理脚本
+├── tests/              单元、集成、契约与烟雾测试
+├── docs/               需求、设计和接入文档
+├── src/                旧学习原型（默认不构建）
 ├── CMakeLists.txt      CMake 工程入口
 ├── LICENSE             GPL-3.0
 └── README.md           仓库入口
@@ -35,32 +52,39 @@
 
 ## 环境与构建
 
-开发环境遵循 SRS 的 `NFR-C-*`，当前仓库使用 Qt 6.2+、C++17、CMake 3.22+、Ninja 和 GCC 11+；Qt 组件包括 Widgets、Network、Sql 和 Charts。Crow 1.3.3 与 standalone Asio 1.30.2 优先使用已安装包，未安装时由 CMake 按固定版本标签获取。
+开发环境遵循 SRS 的 `NFR-C-*`，当前仓库使用 Qt 6.2+、C++17、CMake 3.22+、Ninja 和 GCC 11+；基础 Qt 组件为 Core、Widgets、Network、Sql 和 Charts。Crow 1.3.3 与 standalone Asio 1.30.2 优先使用已安装包，未安装时由 CMake 按固定版本标签获取。
+
+推荐使用工程脚本配置、构建和测试（构建目录为 `build/dev`）：
 
 ```bash
-/path/to/Qt/6.2.0/gcc_64/bin/qt-cmake -S . -B build -G Ninja
-cmake --build build --target codex-qt-demo
-./build/codex-qt-demo
+cp .env.example .env
+export QT_CMAKE=/path/to/Qt/6.2.x/gcc_64/bin/qt-cmake
+./scripts/configure.sh dev
+./scripts/build.sh dev
+./scripts/test.sh dev
 ```
 
-构建并启动当前 Crow 服务端骨架：
+无桌面环境执行：
 
 ```bash
-cmake --build build --target ncs_server
-mkdir -p secrets
-openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 30 \
-  -keyout secrets/ncs-dev-key.pem \
-  -out secrets/ncs-dev-cert.pem \
-  -subj /CN=127.0.0.1 \
-  -addext subjectAltName=IP:127.0.0.1
-chmod 600 secrets/ncs-dev-key.pem
-./build/ncs_server
+./scripts/smoke-test.sh
 ```
 
-上述自签名证书仅用于本机开发，`secrets/`、`*.pem` 和 `*.key` 已被 Git 忽略，不得提交私钥。当前服务强制使用 HTTPS，默认只在 `https://127.0.0.1:8443` 监听；所有 REST 路由必须通过受控注册器挂载到 `/api/v1`。`GET /api/v1/system/health/live` 用于进程存活检查；`ready` 检查 SQLite schema、读写能力、WAL 和迁移版本，任一检查失败均返回 HTTP 503。
+单独构建并启动 Crow 服务端：
+
+```bash
+cmake --build build/dev --target ncs_server
+./scripts/generate-dev-cert.sh
+./build/dev/ncs_server \
+  --tls-certificate runtime/certs/dev-cert.pem \
+  --tls-private-key runtime/certs/dev-key.pem
+```
+
+上述开发证书仅用于本机，`runtime/certs/`、`secrets/`、`*.pem` 和 `*.key` 已被 Git 忽略，不得提交私钥。当前服务强制使用 HTTPS，默认只在 `https://127.0.0.1:8443` 监听；所有 REST 路由必须通过受控注册器挂载到 `/api/v1`。`GET /api/v1/system/health/live` 用于进程存活检查；`ready` 检查 SQLite schema、读写能力、WAL 和迁移版本，任一检查失败均返回 HTTP 503。
 
 服务端在监听前会检查证书时间、SAN 中的监听 IP、证书与私钥匹配关系、Unix 私钥权限及端口可用性。任一检查失败都以配置错误退出，不进入 Crow 事件循环。`SIGINT` 和 `SIGTERM` 会停止接收新连接、关闭 I/O 事件循环并以退出码 0 结束，正常退出后可立即重启。
 
+### 服务端启动配置
 ### 服务端启动配置
 
 命令行参数优先于同名进程环境变量，进程环境变量优先于环境文件；均未设置时使用受控的本机开发默认值。
@@ -124,6 +148,7 @@ QT_QPA_PLATFORM=offscreen ./build/codex-qt-demo --smoke-test
 ctest --test-dir build-ncs --output-on-failure
 ```
 
+
 ## 开发规范
 
 - 开发前确认对应的 `UC-*`、`BR-*` 或 `NFR-*`，并选择相关设计文档。
@@ -133,6 +158,7 @@ ctest --test-dir build-ncs --output-on-failure
 - 真实 `.env`、密钥、数据库、日志、备份、构建产物和个人 IDE 配置不得提交。
 - 提交前运行相关测试、烟雾测试和 `git diff --check`；Pull Request 关联需求编号并写明验证结果。
 - 分支职责、提交要求、PR 门禁和发布流程统一遵循[研发实施指南 §7](docs/development-guide.md#7-变更与协作)；禁止直接推送 `main` 或 `develop`。
+- 服务端（REST、WebSocket、SQLite 持久化、Dashboard、ML 管线）已实现并通过 21 项 CTest；用户端与管理端当前为模拟数据骨架。各模块真实完成状态以 `docs/backend-todo-temporary.md` 和[工程基础追踪](docs/requirements-traceability.md)为准。
 
 ## 许可证
 
