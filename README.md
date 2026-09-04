@@ -16,6 +16,15 @@
 .
 ├── apps/mobile/        远期 Android/QML 地图实验
 ├── docs/               需求、设计和接入文档
+├── server/             Crow 服务端
+│   ├── controller/     路由、DTO 转换与协议适配
+│   ├── middleware/     鉴权、错误、限流与请求日志
+│   └── runtime/        计费、调度、到期与通知任务
+├── core/               不依赖 UI、Crow 或 SQLite 的核心层
+│   ├── domain/         实体、值对象与状态机
+│   └── application/    用例、服务接口与权限边界
+├── infrastructure/     外部能力实现
+│   └── files/          结构化日志（后续承载头像与快照）
 ├── src/                当前 Qt Widgets 原型
 ├── CMakeLists.txt      CMake 工程入口
 ├── LICENSE             GPL-3.0
@@ -26,7 +35,7 @@
 
 ## 环境与构建
 
-开发环境遵循 SRS 的 `NFR-C-*`，当前仓库使用 Qt 6.2、C++17、CMake 3.24+、Ninja 和 GCC 11+；Qt 组件包括 Widgets、Network、Sql 和 Charts。
+开发环境遵循 SRS 的 `NFR-C-*`，当前仓库使用 Qt 6.2+、C++17、CMake 3.22+、Ninja 和 GCC 11+；Qt 组件包括 Widgets、Network、Sql 和 Charts。Crow 1.3.3 与 standalone Asio 1.30.2 优先使用已安装包，未安装时由 CMake 按固定版本标签获取。
 
 ```bash
 /path/to/Qt/6.2.0/gcc_64/bin/qt-cmake -S . -B build -G Ninja
@@ -34,10 +43,85 @@ cmake --build build --target codex-qt-demo
 ./build/codex-qt-demo
 ```
 
+构建并启动当前 Crow 服务端骨架：
+
+```bash
+cmake --build build --target ncs_server
+mkdir -p secrets
+openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 30 \
+  -keyout secrets/ncs-dev-key.pem \
+  -out secrets/ncs-dev-cert.pem \
+  -subj /CN=127.0.0.1 \
+  -addext subjectAltName=IP:127.0.0.1
+chmod 600 secrets/ncs-dev-key.pem
+./build/ncs_server
+```
+
+上述自签名证书仅用于本机开发，`secrets/`、`*.pem` 和 `*.key` 已被 Git 忽略，不得提交私钥。当前服务强制使用 HTTPS，默认只在 `https://127.0.0.1:8443` 监听；所有 REST 路由必须通过受控注册器挂载到 `/api/v1`。`GET /api/v1/system/health/live` 用于进程存活检查；`ready` 检查 SQLite schema、读写能力、WAL 和迁移版本，任一检查失败均返回 HTTP 503。
+
+服务端在监听前会检查证书时间、SAN 中的监听 IP、证书与私钥匹配关系、Unix 私钥权限及端口可用性。任一检查失败都以配置错误退出，不进入 Crow 事件循环。`SIGINT` 和 `SIGTERM` 会停止接收新连接、关闭 I/O 事件循环并以退出码 0 结束，正常退出后可立即重启。
+
+### 服务端启动配置
+
+命令行参数优先于同名进程环境变量，进程环境变量优先于环境文件；均未设置时使用受控的本机开发默认值。
+
+| 配置 | 命令行 | 环境变量 | 开发默认值 |
+| --- | --- | --- | --- |
+| 运行环境 | `--environment` | `NCS_ENVIRONMENT` | `development` |
+| 监听 IP | `--listen-address` | `NCS_LISTEN_ADDRESS` | `127.0.0.1` |
+| 监听端口 | `--port` | `NCS_PORT` | `8443` |
+| Crow 工作线程 | `--worker-threads` | `NCS_WORKER_THREADS` | `2` |
+| 充电时间倍率 | `--charge-time-scale` | `NCS_CHARGE_TIME_SCALE` | `60` |
+| 日志级别 | `--log-level` | `NCS_LOG_LEVEL` | `info` |
+| 日志目录 | `--log-directory` | `NCS_LOG_DIRECTORY` | `logs/` |
+| SQLite 数据库 | `--database-path` | `NCS_DATABASE_PATH` | `data/charge_platform.db` |
+| TLS 证书 | `--tls-certificate` | `NCS_TLS_CERTIFICATE` | `secrets/ncs-dev-cert.pem` |
+| TLS 私钥 | `--tls-private-key` | `NCS_TLS_PRIVATE_KEY` | `secrets/ncs-dev-key.pem` |
+| Dashboard 快照 | `--dashboard-snapshot` | `NCS_DASHBOARD_SNAPSHOT` | `apps/dashboard/public/data/dashboard.json` |
+| Python 解释器 | `--python-executable` | `NCS_PYTHON_EXECUTABLE` | `python3` |
+| ML 工作脚本 | `--ml-worker-script` | `NCS_ML_WORKER_SCRIPT` | `ml/worker.py` |
+| ML 活动模型 | `--ml-model-path` | `NCS_ML_MODEL_PATH` | `ml/models/load_rf.pkl` |
+
+`--environment` 允许 `development`、`test`、`acceptance`、`production`。开发模式会启用演示凭据，因此只允许监听回环地址；监听地址还必须是数字 IP，通配地址、多播地址和非法地址会在启动前被拒绝。未显式配置的文件路径以服务程序所在部署目录为稳定基准（源码构建会自动定位项目资源），不随 shell 当前目录漂移；证书或私钥缺失、不可读或指向同一文件时也会在监听前失败。执行 `./build/ncs_server --help` 查看完整参数。
+
+环境文件：`NCS_ENV_FILE` 指定的文件（必须存在且可读）或资产目录下的 `.env`（存在时加载）提供可由进程环境变量覆盖的默认值；条目名与上表环境变量一致，仅腾讯地图服务端 Key 写作 `TENCENT_MAP_SERVER_KEY`。`.env` 为 Git 忽略的仅本机文件（权限 600），真实 Key 不得提交，详见 `docs/tencent-map-setup.md`。
+
+### 结构化日志
+
+应用日志按 UTC 日期写入 `logs/ncs_YYYYMMDD.log`，每行是一个 JSON 对象，固定包含 `timestamp`、`level`、`module`、`requestId`、`message`。应用日志保留 30 天；Unix 日志文件权限设为 `0600`。Crow 内部日志已接入同一输出，URL 查询串和 Bearer 值会先脱敏。
+
+HTTP 请求会校验或生成 UUID `X-Request-ID`，并将同一值写入响应和请求日志。日志写入前统一过滤查询凭据、Bearer Token、手机号、验证码、密码、钱包/余额和订单字段；非请求启动日志的 `requestId` 为空字符串。审计/运维日志的 180 天保留将由独立业务能力实现，不混入普通应用日志。
+
+### 全局异常响应
+
+Crow 路由未捕获异常统一通过公共响应封装返回 HTTP 500 和 `INTERNAL_ERROR`（`code=13`），并设置 `Cache-Control: no-store`。响应和异常事件日志都不记录异常原文，避免泄露 SQL、内部路径、堆栈或令牌；请求 ID 会从请求作用域写入响应。
+
+### 公共 HTTP 安全策略
+
+普通 JSON、ML 批量和头像请求体上限分别为 1 MiB、8 MiB 和 5 MiB；普通接口截止时间 10 秒，统计接口 30 秒。默认限流支持持续 20 请求/秒和 50 请求突发，超限响应携带 `Retry-After`。跨域来源默认全部拒绝，只有显式加入运行时白名单的来源才会获得限定方法和请求头的 CORS 响应；同源 Qt/服务端调用不受影响。TLS 最低版本为 1.2，仅启用 AEAD 密码套件。
+
+Dashboard 每 30 秒生成受权完整快照，并原子写入 `apps/dashboard/public/data/dashboard.json` 供断线降级；该文件应由 Crow 的鉴权路径提供，不得配置成匿名静态资源。路径可用 `--dashboard-snapshot` 覆盖。
+
+ML 子进程默认使用 `python3 ml/worker.py`，依赖安装见 `ml/requirements.txt`。可通过 `--python-executable`、`--ml-worker-script` 和 `--ml-model-path` 覆盖；任务令牌只经子进程标准输入传递，内部接口仅接受回环来源。
+
+密码使用版本化 PBKDF2-HMAC-SHA256 专用摘要；Token 至少包含 256 bit 随机值且服务端状态只保存 SHA-256 摘要。用户会话最多 3 个终端且不超过 30 天，管理员最多 2 个终端，Dashboard 会话不超过 8 小时并在空闲 30 分钟后失效。验证码有效 10 分钟、最多错误 5 次、生成冷却 60 秒，只有受限开发模式可得到模拟验证码。
+
+### 用户身份接口
+
+`/api/v1/user` 下已提供短信验证码、用户名密码注册、密码/短信登录、退出、会话查询与撤销、个人资料、昵称更新、头像上传与条件读取、凭据更新和账号注销接口。头像不会原样保存：服务端验证真实 PNG/JPEG/BMP 格式和 4096×4096 尺寸上限，绘制到新图像后统一编码为 PNG，以剥离上传元数据。
+
+正式服务使用 `infrastructure/sqlite/sqlite_repository.*` 持久化用户、凭据、头像、钱包、站点、电桩、价格、排队、流程、订单、幂等结果和通知 outbox；每个调用线程独立打开连接，事务内的嵌套仓储操作复用同一连接。写接口的业务变化与幂等完成结果同事务提交，结算成功通知与订单、钱包和设备状态同事务写入。`core/application/in_memory_user_account_repository.*` 和 `InMemoryChargingRepository` 仅保留给快速单元与契约测试。服务端会话当前仍采用进程内安全存储，服务重启后客户端需要重新登录。
+
 无桌面环境执行：
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/codex-qt-demo --smoke-test
+```
+
+运行全部服务端测试（包含真实 HTTPS 启停烟雾测试）：
+
+```bash
+ctest --test-dir build-ncs --output-on-failure
 ```
 
 ## 开发规范

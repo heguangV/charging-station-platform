@@ -21,6 +21,7 @@ compile_commands.json
 *.log
 logs/
 backups/
+apps/dashboard/public/data/
 *.sql
 *.dump
 *.db
@@ -48,6 +49,8 @@ google-services.json
 *.ico
 
 # Platform noise
+__pycache__/
+*.py[cod]
 .DS_Store
 Thumbs.db
 *~
