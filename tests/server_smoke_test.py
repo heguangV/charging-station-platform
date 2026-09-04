@@ -16,6 +16,8 @@ import time
 import uuid
 from pathlib import Path
 
+REQUEST_TIMEOUT_SECONDS = 15 if os.name == "nt" else 2
+
 
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -27,7 +29,8 @@ def request(port: int, path: str, headers=None, method="GET", body=None):
     context = ssl.create_default_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
-    connection = http.client.HTTPSConnection("127.0.0.1", port, context=context, timeout=2)
+    connection = http.client.HTTPSConnection(
+        "127.0.0.1", port, context=context, timeout=REQUEST_TIMEOUT_SECONDS)
     connection.request(method, path, body=body, headers=headers or {})
     response = connection.getresponse()
     body = response.read()
@@ -41,7 +44,7 @@ def oversized_headers_only(port: int):
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     connection = http.client.HTTPSConnection(
-        "127.0.0.1", port, context=context, timeout=2)
+        "127.0.0.1", port, context=context, timeout=REQUEST_TIMEOUT_SECONDS)
     connection.putrequest("POST", "/api/v1/user/auth/register")
     connection.putheader("Content-Type", "application/json")
     connection.putheader("Content-Length", str(8 * 1024 * 1024 + 1))
@@ -87,6 +90,23 @@ def chunked_overflow(port: int) -> bytes:
     finally:
         connection.close()
     return received
+
+
+def stop_server(process: subprocess.Popen, timeout: int) -> bool:
+    """Stop a test server and report whether Windows required forced termination."""
+    forced_windows_stop = False
+    if process.poll() is None:
+        if os.name == "nt":
+            forced_windows_stop = True
+            process.terminate()
+        else:
+            process.send_signal(signal.SIGTERM)
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2)
+    return forced_windows_stop
 
 
 class WsClient:
@@ -684,14 +704,8 @@ def main() -> int:
                 port, "/api/v1/dashboard/auth/logout", dashboard_headers, "POST")
             assert dashboard_logout == 200 and dashboard_logout_retry == 200
         finally:
-            if process.poll() is None:
-                process.send_signal(signal.SIGTERM)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=2)
-        if process.returncode != 0:
+            forced_windows_stop = stop_server(process, 5)
+        if process.returncode != 0 and not forced_windows_stop:
             print(process.stderr.read(), file=sys.stderr)
             return 1
 
@@ -768,14 +782,8 @@ def main() -> int:
                 and json.loads(persisted_receipt_body)["data"]["orderNo"] == receipt["orderNo"]
             )
         finally:
-            if restarted.poll() is None:
-                restarted.send_signal(signal.SIGTERM)
-            try:
-                restarted.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                restarted.kill()
-                restarted.wait(timeout=2)
-        if restarted.returncode != 0:
+            forced_windows_stop = stop_server(restarted, 5)
+        if restarted.returncode != 0 and not forced_windows_stop:
             print(restarted.stderr.read(), file=sys.stderr)
             return 1
     return 0

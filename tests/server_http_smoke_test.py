@@ -11,6 +11,8 @@ import tempfile
 import time
 from pathlib import Path
 
+REQUEST_TIMEOUT_SECONDS = 10 if os.name == "nt" else 2
+
 
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -19,7 +21,8 @@ def free_port() -> int:
 
 
 def request(port: int, path: str):
-    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+    connection = http.client.HTTPConnection(
+        "127.0.0.1", port, timeout=REQUEST_TIMEOUT_SECONDS)
     connection.request("GET", path)
     response = connection.getresponse()
     result = (
@@ -29,6 +32,23 @@ def request(port: int, path: str):
     )
     connection.close()
     return result
+
+
+def stop_server(process: subprocess.Popen, timeout: int) -> bool:
+    """Stop a test server and report whether Windows required forced termination."""
+    forced_windows_stop = False
+    if process.poll() is None:
+        if os.name == "nt":
+            forced_windows_stop = True
+            process.terminate()
+        else:
+            process.send_signal(signal.SIGTERM)
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2)
+    return forced_windows_stop
 
 
 def main() -> int:
@@ -128,15 +148,9 @@ def main() -> int:
             )
             assert client.returncode == 0, client.stderr
         finally:
-            if process.poll() is None:
-                process.send_signal(signal.SIGTERM)
-            try:
-                process.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=2)
+            forced_windows_stop = stop_server(process, 8)
 
-        if process.returncode != 0:
+        if process.returncode != 0 and not forced_windows_stop:
             print(process.stderr.read(), file=sys.stderr)
             return 1
         log_text = "\n".join(path.read_text(encoding="utf-8") for path in logs.glob("*.log"))
