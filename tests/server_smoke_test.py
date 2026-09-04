@@ -12,6 +12,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -160,10 +161,53 @@ class WsClient:
         self.close_code = None
         self.close_reason = b""
         self.received = []
+        self._lock = threading.Lock()
+        self._socket_lock = threading.Lock()
+        # A real client reads its socket continuously. The background reader
+        # answers application pings immediately so the server's pong timeout
+        # cannot expire while the test drives the other connections: the
+        # phases before the heartbeat check take over a minute on slow
+        # Windows CI runners, longer than the server's 60 s pong timeout.
+        if self.status == 101:
+            threading.Thread(target=self._read_forever, daemon=True).start()
+
+    def _read_forever(self):
+        # The background reader owns the socket. It never holds _socket_lock
+        # while blocked in recv (SSLSocket allows one concurrent reader and
+        # writer), so the test thread can always send frames without waiting
+        # for a read to time out.
+        try:
+            while True:
+                with self._lock:
+                    if self.closed:
+                        return
+                self._socket.settimeout(1.0)
+                try:
+                    opcode, payload = self._recv_frame()
+                except socket.timeout:
+                    continue
+                if opcode == 0x1:
+                    event = json.loads(payload)
+                    if event.get("type") == "ping":
+                        self.send_pong()
+                    with self._lock:
+                        self.received.append(event)
+                elif opcode == 0x8:
+                    with self._lock:
+                        self.closed = True
+                        if len(payload) >= 2:
+                            self.close_code = int.from_bytes(payload[:2], "big")
+                            self.close_reason = payload[2:]
+                    return
+                elif opcode == 0x9:
+                    self._send_frame(0xA, payload)
+                # opcode 0xA (pong) and 0x2 (binary) are ignored
+        except (OSError, ValueError):
+            with self._lock:
+                self.closed = True
 
     def _read_exact(self, count: int) -> bytes:
         while len(self._buffer) < count:
-            self._socket.settimeout(8)
             part = self._socket.recv(65536)
             if not part:
                 raise ConnectionError("connection closed while reading")
@@ -182,7 +226,8 @@ class WsClient:
             header = bytes([0x80 | opcode, 0x80 | 126]) + length.to_bytes(2, "big")
         else:
             header = bytes([0x80 | opcode, 0x80 | 127]) + length.to_bytes(8, "big")
-        self._socket.sendall(header + mask + masked)
+        with self._socket_lock:
+            self._socket.sendall(header + mask + masked)
 
     def send_text(self, payload: str):
         self._send_frame(0x1, payload.encode())
@@ -207,46 +252,36 @@ class WsClient:
         return opcode, payload
 
     def recv_events(self, timeout: float):
-        """Collect text frames until `timeout` seconds pass with no new frame.
-        Application pings are answered automatically; a server close frame
-        sets closed/close_code/close_reason."""
+        """Block until `timeout` seconds elapse or the connection closes,
+        then return every frame collected so far. The background reader owns
+        the socket; this polls the shared queue instead of reading."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            self._socket.settimeout(max(0.1, deadline - time.monotonic()))
-            try:
-                opcode, payload = self._recv_frame()
-            except TimeoutError:
-                break
-            except OSError:
-                break
-            if opcode == 0x1:
-                event = json.loads(payload)
-                if event.get("type") == "ping":
-                    self.send_pong()
-                self.received.append(event)
-            elif opcode == 0x8:
-                self.closed = True
-                if len(payload) >= 2:
-                    self.close_code = int.from_bytes(payload[:2], "big")
-                    self.close_reason = payload[2:]
-                break
-            elif opcode == 0x9:
-                self._send_frame(0xA, payload)
-            # opcode 0xA (pong) and 0x2 (binary) are ignored
-        return list(self.received)
+            with self._lock:
+                if self.closed:
+                    break
+            time.sleep(0.05)
+        with self._lock:
+            return list(self.received)
 
     def wait_for(self, predicate, timeout: float, consume: bool = True):
-        """Poll recv_events until `predicate` matches any received event."""
+        """Poll the background reader's collected events until `predicate`
+        matches any received event."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            self.recv_events(min(2.0, deadline - time.monotonic()))
-            matches = [event for event in self.received if predicate(event)]
-            if matches:
-                return matches
+            with self._lock:
+                matches = [event for event in self.received if predicate(event)]
+                if matches:
+                    if consume:
+                        self.received = [event for event in self.received
+                                         if not predicate(event)]
+                    return matches
+            time.sleep(0.05)
         return []
 
     def events_of_type(self, event_type: str):
-        return [event for event in self.received if event.get("type") == event_type]
+        with self._lock:
+            return [event for event in self.received if event.get("type") == event_type]
 
     def close(self):
         self._send_frame(0x8, b"")
