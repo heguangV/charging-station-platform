@@ -34,7 +34,7 @@
 │   └── include/ncs/core/  公共 Result/Error 值类型
 ├── infrastructure/     外部能力实现
 │   ├── sqlite/         数据库迁移、仓储、事务与备份
-│   ├── map/            腾讯地理编码与 Haversine 降级
+│   ├── map/            腾讯地理编码/路线规划与 Haversine 降级
 │   ├── files/          结构化日志、原子快照与模型产物
 │   ├── config/         .env 环境文件加载
 │   └── logging/        应用日志器
@@ -80,7 +80,7 @@ cmake --build build/dev --target ncs_server
   --tls-private-key runtime/certs/dev-key.pem
 ```
 
-上述开发证书仅用于本机，`runtime/certs/`、`secrets/`、`*.pem` 和 `*.key` 已被 Git 忽略，不得提交私钥。当前服务强制使用 HTTPS，默认只在 `https://127.0.0.1:8443` 监听；所有 REST 路由必须通过受控注册器挂载到 `/api/v1`。`GET /api/v1/system/health/live` 用于进程存活检查；`ready` 检查 SQLite schema、读写能力、WAL 和迁移版本，任一检查失败均返回 HTTP 503。
+上述开发证书仅用于本机，`runtime/certs/`、`secrets/`、`*.pem` 和 `*.key` 已被 Git 忽略，不得提交私钥。服务默认只在 `https://127.0.0.1:8443` 监听；仅在显式启用 `NCS_ALLOW_INSECURE_HTTP=true`、环境为 `development` 且监听数字回环地址时，才使用本机 HTTP/WS 联调模式。测试、验收和生产环境仍强制 HTTPS/WSS。所有 REST 路由必须通过受控注册器挂载到 `/api/v1`。`GET /api/v1/system/health/live` 用于进程存活检查；`ready` 检查 SQLite schema、读写能力、WAL 和迁移版本，任一检查失败均返回 HTTP 503。
 
 服务端在监听前会检查证书时间、SAN 中的监听 IP、证书与私钥匹配关系、Unix 私钥权限及端口可用性。任一检查失败都以配置错误退出，不进入 Crow 事件循环。`SIGINT` 和 `SIGTERM` 会停止接收新连接、关闭 I/O 事件循环并以退出码 0 结束，正常退出后可立即重启。
 
@@ -101,14 +101,16 @@ cmake --build build/dev --target ncs_server
 | SQLite 数据库 | `--database-path` | `NCS_DATABASE_PATH` | `data/charge_platform.db` |
 | TLS 证书 | `--tls-certificate` | `NCS_TLS_CERTIFICATE` | `secrets/ncs-dev-cert.pem` |
 | TLS 私钥 | `--tls-private-key` | `NCS_TLS_PRIVATE_KEY` | `secrets/ncs-dev-key.pem` |
+| 本机开发 HTTP | `--allow-insecure-http` | `NCS_ALLOW_INSECURE_HTTP` | `false` |
 | Dashboard 快照 | `--dashboard-snapshot` | `NCS_DASHBOARD_SNAPSHOT` | `apps/dashboard/public/data/dashboard.json` |
 | Python 解释器 | `--python-executable` | `NCS_PYTHON_EXECUTABLE` | `python3` |
 | ML 工作脚本 | `--ml-worker-script` | `NCS_ML_WORKER_SCRIPT` | `ml/worker.py` |
 | ML 活动模型 | `--ml-model-path` | `NCS_ML_MODEL_PATH` | `ml/models/load_rf.pkl` |
+| 腾讯地图服务端 Key | `--tencent-map-key` | `NCS_TENCENT_MAP_KEY` | 空（地图能力降级） |
 
-`--environment` 允许 `development`、`test`、`acceptance`、`production`。开发模式会启用演示凭据，因此只允许监听回环地址；监听地址还必须是数字 IP，通配地址、多播地址和非法地址会在启动前被拒绝。未显式配置的文件路径以服务程序所在部署目录为稳定基准（源码构建会自动定位项目资源），不随 shell 当前目录漂移；证书或私钥缺失、不可读或指向同一文件时也会在监听前失败。执行 `./build/ncs_server --help` 查看完整参数。
+`--environment` 允许 `development`、`test`、`acceptance`、`production`。开发模式会启用演示凭据，因此只允许监听回环地址；监听地址还必须是数字 IP，通配地址、多播地址和非法地址会在启动前被拒绝。HTTP 模式还要求显式开关、`development` 和数字回环地址三项同时满足，并输出 WARNING；否则启动失败。未启用 HTTP 时，证书或私钥缺失、不可读或指向同一文件会在监听前失败。未显式配置的文件路径以服务程序所在部署目录为稳定基准（源码构建会自动定位项目资源），不随 shell 当前目录漂移。执行 `./build/ncs_server --help` 查看完整参数。
 
-环境文件：`NCS_ENV_FILE` 指定的文件（必须存在且可读）或资产目录下的 `.env`（存在时加载）提供可由进程环境变量覆盖的默认值；条目名与上表环境变量一致，仅腾讯地图服务端 Key 写作 `TENCENT_MAP_SERVER_KEY`。`.env` 为 Git 忽略的仅本机文件（权限 600），真实 Key 不得提交，详见 `docs/tencent-map-setup.md`。
+环境文件：`NCS_ENV_FILE` 指定的文件（必须存在且可读）或资产目录下的 `.env`（存在时加载）提供可由进程环境变量覆盖的默认值；条目名与上表环境变量一致，仅腾讯地图服务端 Key 写作 `TENCENT_MAP_SERVER_KEY`。用户端地图另读取 `TENCENT_MAP_JS_KEY` 和受限来源 `TENCENT_MAP_JS_ORIGIN`，不会保留 Server Key。`.env` 为 Git 忽略的仅本机文件（权限 600），真实 Key 不得提交；可运行 `./scripts/configure-local-map.sh` 安全写入并以 `--check` 验证，详见 `docs/tencent-map-setup.md`。
 
 ### 结构化日志
 
@@ -153,10 +155,10 @@ ctest --test-dir build-ncs --output-on-failure
 
 - 开发前确认对应的 `UC-*`、`BR-*` 或 `NFR-*`，并选择相关设计文档。
 - UI、Controller、Service 和数据访问层职责分离；客户端不得直接打开 SQLite。
-- 源码使用 UTF-8 和 C++17；路径使用 Qt 跨平台 API；单个手写源文件不超过 400 行。
+- 源码使用 UTF-8 和 C++17；路径使用 Qt 跨平台 API；单个手写源文件不超过 700 行，存量例外清单见 `scripts/check.sh`。
 - 数据库访问参数化，跨表写操作使用事务和持久化幂等键；后台任务不得阻塞事件循环或直接操作 UI。
 - 真实 `.env`、密钥、数据库、日志、备份、构建产物和个人 IDE 配置不得提交。
-- 提交前运行相关测试、烟雾测试和 `git diff --check`；Pull Request 关联需求编号并写明验证结果。
+- 提交前运行相关测试、烟雾测试和 `./scripts/check.sh`；该脚本只严格检查当前变更集，Pull Request 关联需求编号并写明验证结果。
 - 分支职责、提交要求、PR 门禁和发布流程统一遵循[研发实施指南 §7](docs/development-guide.md#7-变更与协作)；禁止直接推送 `main` 或 `develop`。
 - 服务端（REST、WebSocket、SQLite 持久化、Dashboard、ML 管线）已实现并通过 21 项 CTest；用户端与管理端当前为模拟数据骨架。各模块真实完成状态以 `docs/backend-todo-temporary.md` 和[工程基础追踪](docs/requirements-traceability.md)为准。
 

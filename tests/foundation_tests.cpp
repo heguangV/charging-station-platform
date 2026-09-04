@@ -56,7 +56,7 @@ int main(int argc, char* argv[])
         temporaryDirectory,
         QStringLiteral("NCS_ENV=test\nNCS_SERVER_HOST=127.0.0.1\nNCS_SERVER_PORT=18443\n"
                        "NCS_DATABASE_PATH=%1/data/test.db\nNCS_LOG_DIR=%1/logs\n"
-                       "NCS_ALLOW_INSECURE_HTTP=true\n")
+                       "NCS_ALLOW_INSECURE_HTTP=false\n")
             .arg(temporaryDirectory.path()));
     expect(!configPath.isEmpty(), "test configuration must be created");
 
@@ -92,6 +92,55 @@ int main(int argc, char* argv[])
                    "sensitive log value must not be persisted");
         }
     }
+
+    const QString localHttpPath = writeConfig(
+        temporaryDirectory, QStringLiteral("NCS_ENV=development\nNCS_SERVER_HOST=127.0.0.1\n"
+                                           "NCS_ALLOW_INSECURE_HTTP=true\n"));
+    expect(ncs::infrastructure::ApplicationConfig::load(localHttpPath).hasValue(),
+           "client accepts explicit development HTTP on numeric loopback");
+
+    const QString ipv6HttpPath =
+        writeConfig(temporaryDirectory, QStringLiteral("NCS_ENV=development\nNCS_SERVER_HOST=::1\n"
+                                                       "NCS_ALLOW_INSECURE_HTTP=true\n"));
+    expect(ncs::infrastructure::ApplicationConfig::load(ipv6HttpPath).hasValue(),
+           "client accepts explicit development HTTP on IPv6 loopback");
+
+    const QString testHttpPath =
+        writeConfig(temporaryDirectory, QStringLiteral("NCS_ENV=test\nNCS_SERVER_HOST=127.0.0.1\n"
+                                                       "NCS_ALLOW_INSECURE_HTTP=true\n"));
+    expect(!ncs::infrastructure::ApplicationConfig::load(testHttpPath).hasValue(),
+           "client rejects insecure HTTP outside development");
+
+    const QString remoteHttpPath = writeConfig(
+        temporaryDirectory, QStringLiteral("NCS_ENV=development\nNCS_SERVER_HOST=192.0.2.10\n"
+                                           "NCS_ALLOW_INSECURE_HTTP=true\n"));
+    expect(!ncs::infrastructure::ApplicationConfig::load(remoteHttpPath).hasValue(),
+           "client rejects insecure HTTP for non-loopback hosts");
+
+    const QString mapConfigPath = writeConfig(
+        temporaryDirectory, QStringLiteral("NCS_ENV=test\nTENCENT_MAP_JS_KEY=js-only-key\n"
+                                           "TENCENT_MAP_SERVER_KEY=must-not-enter-client-config\n"
+                                           "TENCENT_MAP_JS_ORIGIN=http://localhost/\n"));
+    const auto mapConfig = ncs::infrastructure::ApplicationConfig::load(mapConfigPath);
+    expect(mapConfig.hasValue(), "canonical Tencent client settings must load");
+    if (mapConfig)
+    {
+        expect(mapConfig.value().tencentMapWebKey() == QStringLiteral("js-only-key"),
+               "client loads only the Tencent JavaScript key");
+        expect(mapConfig.value().tencentMapJsOrigin() == QStringLiteral("http://localhost/"),
+               "client preserves the restricted Tencent JavaScript origin");
+        expect(!mapConfig.value()
+                    .safeSummary()
+                    .join(QLatin1Char(' '))
+                    .contains(QStringLiteral("js-only-key")),
+               "safe configuration summary must not expose the JavaScript key");
+    }
+
+    const QString invalidMapOriginPath =
+        writeConfig(temporaryDirectory,
+                    QStringLiteral("NCS_ENV=test\nTENCENT_MAP_JS_ORIGIN=file:///tmp/map.html\n"));
+    expect(!ncs::infrastructure::ApplicationConfig::load(invalidMapOriginPath).hasValue(),
+           "client rejects non-HTTP Tencent JavaScript origins");
 
     if (failures == 0)
     {

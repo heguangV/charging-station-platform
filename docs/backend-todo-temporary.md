@@ -11,9 +11,9 @@
 ## 1. 当前判断
 
 - 当前 CMake 已生成 `ncs_server` 和原型 `codex-qt-demo`，`ncs_user` 与 `ncs_admin` 目标尚未建立。
-- `server/`、`core/`、结构化日志、腾讯地理编码和用户业务 SQLite 仓储已建立；内存仓储只用于快速测试。
-- Crow HTTPS、系统健康接口、用户端 30 条、管理端 31 条、Dashboard 3 条、ML 内部 4 条 REST 路由及鉴权 WebSocket 实时服务已建立；前端 API 客户端尚未实现。
-- 当前冻结接口共70项：用户端30项、管理端31项、Dashboard 3项、ML内部4项、系统2项。
+- `server/`、`core/`、结构化日志、腾讯地理编码/路线规划和用户业务 SQLite 仓储已建立；内存仓储只用于快速测试。
+- Crow HTTPS、系统健康接口、用户端 31 条、管理端 31 条、Dashboard 3 条、ML 内部 4 条 REST 路由及鉴权 WebSocket 实时服务已建立；用户端路线接口已接入，其他页面仍在逐步替换模拟服务。
+- 当前冻结接口共71项：用户端31项、管理端31项、Dashboard 3项、ML内部4项、系统2项。
 - `apps/mobile/` 是远期 Android/QML 地图实验，不计为当前 Qt Widgets 用户端完成项。
 - 完成状态只以代码、契约和自动化验证证据为准。
 
@@ -51,6 +51,10 @@
   - 需求：`NFR-D-01`、`NFR-D-02` 及接口文档第 1.1 节；开发默认地址固定为 `https://127.0.0.1:8443/api/v1`，服务不接受通配或多播监听地址。
   - 代码：`CMakeLists.txt`启用 Crow/OpenSSL；`server/runtime/server_config.*` 提供证书与私钥配置、路径规范化和启动前文件检查；`server/controller/api_routes.*` 只允许将相对路径注册到 `/api/v1`；`server/main.cpp` 强制调用 `ssl_file`。
   - 验证（2026-09-02）：2 个 CTest 目标全部通过，覆盖 TLS 配置、缺失/同文件拒绝、Crow 最少 2 线程边界及 `/api/v1` 路由约束；临时自签名证书下服务在 18443 端口启动，OpenSSL 确认 TLS 1.3 / `TLS_AES_256_GCM_SHA384`，HTTPS 连通成功且明文 HTTP 无法获得响应；无证书启动退出码为 2，临时证书和私钥已删除。
+- [x] 实现只限本机开发的显式 HTTP/WS 联调模式。
+  - 需求：`NFR-D-01`；默认以及测试、验收、生产环境继续强制 HTTPS/WSS。仅 `NCS_ALLOW_INSECURE_HTTP=true`、`development` 和数字回环地址三项同时满足时允许明文模式；客户端执行同样的环境和目标地址检查，不允许忽略证书错误。
+  - 代码：`server/runtime/server_config.*` 解析并失败关闭；`startup_checks.*` 仅在合规明文模式跳过证书读取；`server/main.cpp` 选择 HTTP/HTTPS 并同步本机 ML 地址；HTTP 响应不发送 HSTS，启动日志写入显眼 WARNING。
+  - 验证（2026-09-04）：配置测试覆盖默认关闭、非法布尔值、非开发环境拒绝及启动检查二次防护；真实烟雾测试在无证书条件下启动回环 HTTP 服务，并由 `ncs_user --api-request-code` 完成 Qt 客户端到 Crow 的请求，确认健康检查、SQLite 就绪、无 HSTS 和 WARNING 记录。
 - [x] 实现启动检查、信号处理和优雅退出。
   - 需求：`NFR-C-04`、`NFR-R-02`、`NFR-D-01` 及实施指南阶段 1；无效启动条件必须给出明确错误且不进入 Crow 事件循环。
   - 代码：`server/runtime/startup_checks.h`、`server/runtime/startup_checks.cpp` 检查 PEM 大小/格式、证书有效期、私钥匹配、SAN 监听 IP、Unix 私钥权限和端口可绑定性；`server/main.cpp` 显式只注册 `SIGINT` 与 `SIGTERM`。
@@ -168,8 +172,8 @@ HTTP 边界与运行时生命周期加固证据（2026-09-03）：
 - 5.5 运行时：按"站点+类型"持久化 FIFO 队列与取消/过期后自动递补；每 15 秒维护任务处理报价和预约到期；开始时再次复验账号冻结、钱包和设备状态；计费倍率在开始充电时快照；启动时执行恢复和到期维护；结算事务失败整体回滚后单独转入 80，可按新版本重试。
 - 幂等接线：`server/controller/idempotent_response.*` 将 `Idempotency-Key` 契约接入充值（永久保留）、创建流程、确认报价、取消、开始（7 天保留）与结算（永久保留），重放返回首次结果、同键不同体返回 `IDEMPOTENCY_CONFLICT`、无键返回 400；RAII lease 保证异常路径自动 abort，正式 SQLite 接线将业务操作与幂等完成记录置于同一事务。
 - 结算通知：流程事件同步写入 `outbox_event`；结算成功的 `order.settled` 与订单、钱包、设备累计值及流程终态同事务提交，失败回滚不会留下伪成功通知。
-- 地图：`infrastructure/map/tencent_geocoder.*` 通过 `NCS_TENCENT_MAP_KEY`/`--tencent-map-key` 配置服务端 Key（环境文件中写作 `TENCENT_MAP_SERVER_KEY`，见 `docs/tencent-map-setup.md`），调用失败、超时或无 Key 一律回退预置坐标与 Haversine 距离。
-- 验证（2026-09-03）：14 个 CTest 目标全部通过。`ncs_sqlite_repository` 覆盖空库迁移、WAL、业务写与幂等完成的原子回滚、仓储实例重建后的充电恢复、结算失败转 80 与重试、outbox 原子提交及再次重建后的订单小票；`ncs_station_service` 覆盖地理编码成功和失败降级；真实 HTTPS 烟雾测试会重启 `ncs_server`，重新登录核验钱包与订单，并以相同充值幂等键确认余额不会重复增加。地图真实腾讯响应仍需要配置有效 Key 后执行外部集成验证。
+- 地图：`infrastructure/map/tencent_geocoder.*` 和 `tencent_route_planner.*` 通过 `NCS_TENCENT_MAP_KEY`/`--tencent-map-key` 配置服务端 Key（环境文件中写作 `TENCENT_MAP_SERVER_KEY`，见 `docs/tencent-map-setup.md`），优先提供地理编码及驾车、步行、公交路线；调用失败、超时或无 Key 时才回退预置坐标、Haversine 距离和浏览器导航。
+- 验证（2026-09-04）：路线应用服务、腾讯响应解析、鉴权 REST 契约和用户端烟雾测试通过；使用本机有效 Key 的隔离端到端测试完成验证码登录并取得 `provider=TENCENT_MAP` 的公交路线。仍需在有图形会话的环境完成三种模式内嵌地图截图验收。
 
 ### 5.2 钱包与订单（5项）
 
@@ -185,7 +189,8 @@ HTTP 边界与运行时生命周期加固证据（2026-09-03）：
 - [x] `GET /api/v1/user/stations/{stationId}`
 - [x] `GET /api/v1/user/stations/{stationId}/chargers`
 - [x] `GET /api/v1/user/stations/{stationId}/quote`
-- [x] 接入腾讯地图地理编码；失败时使用预置位置和 Haversine 降级。
+- [x] `GET /api/v1/user/stations/{stationId}/route`
+- [x] 接入腾讯地图地理编码与三种路线规划；仅失败时使用预置位置、Haversine 和浏览器导航降级。
 
 ### 5.4 充电流程（8项）
 

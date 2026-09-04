@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档版本 | V1.0 |
 | 接口版本 | `/api/v1` |
-| 通信 | HTTPS REST + JSON；实时事件使用鉴权 WebSocket |
+| 通信 | 默认及正式环境使用 HTTPS REST + JSON；实时事件使用鉴权 WebSocket；仅 NFR-D-01 允许的本机开发模式可使用 HTTP/WS |
 | 数据实现 | Crow Service → SQLite，客户端不得直接访问数据库 |
 | 适用模块 | Qt 用户端、Qt 管理端、Web 大屏、ML 子进程 |
 | 关联需求 | `UC-U`、`UC-A`、`UC-D`、`UC-W`、`UC-M`、`BR-01`～`BR-12` |
@@ -21,6 +21,8 @@
 ```text
 https://127.0.0.1:8443/api/v1
 ```
+
+本机联调可由服务端和客户端同时显式设置 `NCS_ALLOW_INSECURE_HTTP=true`，此时地址为 `http://127.0.0.1:8443/api/v1`，事件地址相应为 `ws://127.0.0.1:8443/api/v1/events`。该例外仅允许 `development` 和数字回环地址；测试、验收、生产或非回环地址必须拒绝明文模式。客户端不得忽略 HTTPS 证书错误。
 
 | 路由前缀 | 调用方 | 权限 |
 | --- | --- | --- |
@@ -489,6 +491,41 @@ Idempotency-Key: <uuid>
 ```
 
 该接口仅供展示，不能作为结算价格承诺；活动流程报价以 §5.3 返回的 `quoteNo` 和快照为准。
+
+### 4.5 GET `/stations/{stationId}/route` — 腾讯地图路线规划
+
+需要用户会话。参数：`latitudeE6`、`longitudeE6`、`keyword`、`mode`。`mode` 必填且仅允许 `driving`、`walking`、`transit`；经纬度必须成对出现。客户端已有有效坐标时优先使用坐标，否则服务端尝试地理编码 `keyword`，最后才使用演示默认位置。
+
+服务端使用 `TENCENT_MAP_SERVER_KEY` 请求固定的腾讯地图 HTTPS 路线规划端点；Key 不得出现在响应、URL 日志或客户端配置中。腾讯调用在有界阻塞工作队列执行，超时、无 Key、配额或响应异常时返回成功的降级结果，而不阻断导航页面。
+
+响应 `data`：
+
+```json
+{
+  "stationId": 1,
+  "stationName": "NCS 中关村充电站",
+  "destinationAddress": "北京市海淀区中关村大街 27 号",
+  "mode": "driving",
+  "originLatitudeE6": 39977680,
+  "originLongitudeE6": 116316417,
+  "destinationLatitudeE6": 39983700,
+  "destinationLongitudeE6": 116315200,
+  "distanceMeter": 2300,
+  "durationSecond": 480,
+  "provider": "TENCENT_MAP",
+  "locationFallback": false,
+  "routeFallback": false,
+  "polyline": [
+    {"latitudeE6": 39977680, "longitudeE6": 116316417}
+  ],
+  "steps": [
+    {"instruction": "向东行驶", "distanceMeter": 300, "durationSecond": 60}
+  ],
+  "browserUrl": "https://apis.map.qq.com/uri/v1/routeplan?..."
+}
+```
+
+腾讯路线成功时 `provider=TENCENT_MAP`、`routeFallback=false`。腾讯能力不可用时返回 `provider=LOCAL_FALLBACK`、`routeFallback=true`、`durationSecond=0`，`polyline` 只含起终点并以 Haversine 计算 `distanceMeter`；`browserUrl` 仅作为最终用户操作入口。`locationFallback` 只表示起点定位是否退回默认坐标，与路线服务是否降级相互独立。
 
 ## 5. 充电流程接口（`/api/v1/user`）
 

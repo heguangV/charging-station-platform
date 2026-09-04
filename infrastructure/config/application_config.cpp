@@ -6,6 +6,7 @@
 #include <QProcessEnvironment>
 #include <QStandardPaths>
 #include <QTextStream>
+#include <QUrl>
 
 #include <optional>
 #include <utility>
@@ -51,7 +52,14 @@ QHash<QString, QString> readEnvFile(const QString& path)
         {
             value = value.mid(1, value.size() - 2);
         }
-        values.insert(line.left(separator).trimmed(), value);
+        const QString name = line.left(separator).trimmed();
+        // The server-side Tencent key must never be retained by a client
+        // configuration object, even when both processes share one .env.
+        if (name == QStringLiteral("TENCENT_MAP_SERVER_KEY"))
+        {
+            continue;
+        }
+        values.insert(name, value);
     }
     return values;
 }
@@ -64,6 +72,25 @@ QString setting(const QHash<QString, QString>& fileValues, const QProcessEnviron
         return environment.value(name);
     }
     return fileValues.value(name, fallback);
+}
+
+QString settingWithLegacyAlias(const QHash<QString, QString>& fileValues,
+                               const QProcessEnvironment& environment, const QString& name,
+                               const QString& legacyName, const QString& fallback)
+{
+    if (environment.contains(name))
+    {
+        return environment.value(name);
+    }
+    if (environment.contains(legacyName))
+    {
+        return environment.value(legacyName);
+    }
+    if (fileValues.contains(name))
+    {
+        return fileValues.value(name);
+    }
+    return fileValues.value(legacyName, fallback);
 }
 
 std::optional<bool> parseBool(const QString& value)
@@ -85,6 +112,17 @@ std::optional<bool> parseBool(const QString& value)
 QString normalizedPath(const QString& value)
 {
     return value.trimmed().isEmpty() ? QString() : QDir::cleanPath(value);
+}
+
+bool validWebOrigin(const QString& value)
+{
+    const QUrl origin(value);
+    return origin.isValid() &&
+           (origin.scheme() == QStringLiteral("http") ||
+            origin.scheme() == QStringLiteral("https")) &&
+           !origin.host().isEmpty() && origin.userName().isEmpty() && origin.password().isEmpty() &&
+           origin.query().isEmpty() && origin.fragment().isEmpty() &&
+           (origin.path().isEmpty() || origin.path() == QStringLiteral("/"));
 }
 
 ncs::core::Result<ApplicationConfig> invalidConfig(const QString& diagnostic,
@@ -130,10 +168,17 @@ ncs::core::Result<ApplicationConfig> ApplicationConfig::load(const QString& envF
         setting(fileValues, processEnvironment, QStringLiteral("NCS_TLS_CERT_PATH"), QString()));
     config.tlsPrivateKeyPath_ = normalizedPath(
         setting(fileValues, processEnvironment, QStringLiteral("NCS_TLS_KEY_PATH"), QString()));
-    config.tencentMapWebKey_ = setting(fileValues, processEnvironment,
-                                       QStringLiteral("NCS_TENCENT_MAP_WEB_KEY"), QString());
-    config.tencentMapServiceKey_ = setting(
-        fileValues, processEnvironment, QStringLiteral("NCS_TENCENT_MAP_SERVICE_KEY"), QString());
+    config.tencentMapWebKey_ =
+        settingWithLegacyAlias(fileValues, processEnvironment, QStringLiteral("TENCENT_MAP_JS_KEY"),
+                               QStringLiteral("NCS_TENCENT_MAP_WEB_KEY"), QString());
+    config.tencentMapJsOrigin_ =
+        setting(fileValues, processEnvironment, QStringLiteral("TENCENT_MAP_JS_ORIGIN"),
+                QStringLiteral("http://localhost/"));
+    if (!validWebOrigin(config.tencentMapJsOrigin_))
+    {
+        return invalidConfig(QStringLiteral("TENCENT_MAP_JS_ORIGIN is not an HTTP origin"),
+                             QStringLiteral("腾讯地图页面来源配置无效"));
+    }
 
     bool portOk = false;
     const int port = setting(fileValues, processEnvironment, QStringLiteral("NCS_SERVER_PORT"),
@@ -159,13 +204,23 @@ ncs::core::Result<ApplicationConfig> ApplicationConfig::load(const QString& envF
 
     const auto insecure =
         parseBool(setting(fileValues, processEnvironment, QStringLiteral("NCS_ALLOW_INSECURE_HTTP"),
-                          QStringLiteral("true")));
+                          QStringLiteral("false")));
     if (!insecure.has_value())
     {
         return invalidConfig(QStringLiteral("NCS_ALLOW_INSECURE_HTTP is not a boolean"),
                              QStringLiteral("HTTP 安全模式配置无效"));
     }
     config.allowInsecureHttp_ = *insecure;
+
+    const bool loopbackHost = config.serverHost_ == QStringLiteral("127.0.0.1") ||
+                              config.serverHost_ == QStringLiteral("::1");
+    if (config.allowInsecureHttp_ &&
+        (config.environment_ != QStringLiteral("development") || !loopbackHost))
+    {
+        return invalidConfig(
+            QStringLiteral("insecure HTTP requires development and a numeric loopback host"),
+            QStringLiteral("明文 HTTP 仅允许本机开发联调"));
+    }
 
     const auto simulatedSms =
         parseBool(setting(fileValues, processEnvironment,

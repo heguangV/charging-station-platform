@@ -12,17 +12,33 @@ class QStackedWidget;
 class QTimer;
 class QTableWidget;
 class QComboBox;
-namespace ncs::user { class ChargerTable; }
-namespace ncs::user { class ChargeSocGauge; }
-namespace ncs::user { class StationListWidget; }
-namespace ncs::user { class BottomNavigation; }
+class QJsonObject;
 namespace ncs::user
 {
+class ChargerTable;
+}
+namespace ncs::user
+{
+class ChargeSocGauge;
+}
+namespace ncs::user
+{
+class StationListWidget;
+}
+namespace ncs::user
+{
+class BottomNavigation;
+}
+namespace ncs::user
+{
+
+class UserApi;
 
 class UserMainWindow final : public QMainWindow
 {
   public:
-    explicit UserMainWindow(UserClientService& service, QWidget* parent = nullptr);
+    explicit UserMainWindow(UserClientService& service, UserApi* userApi, QString tencentMapJsKey,
+                            QString tencentMapJsOrigin, QWidget* parent = nullptr);
 
   private:
     QWidget* createLoginPage();
@@ -37,6 +53,9 @@ class UserMainWindow final : public QMainWindow
     void showOrders();
     void showProfile();
     void showNavigation();
+    void showNavigationFallback(const QString& reason = {});
+    void applyNavigationRoute(const QJsonObject& data);
+    void renderNavigationMap(const QJsonObject& data);
     void showHome();
     void showDetail(int stationId);
     void showCharge();
@@ -48,6 +67,11 @@ class UserMainWindow final : public QMainWindow
     static QPushButton* button(const QString& text, const QString& style = {});
 
     UserClientService& service_;
+    UserApi* userApi_ = nullptr;
+    QString tencentMapJsKey_;
+    QString tencentMapJsOrigin_;
+    bool onlineSession_ = false;
+    int navigationRequestId_ = 0;
     QStackedWidget* pages_ = nullptr;
     QLabel* notice_ = nullptr;
     QLineEdit* phoneEdit_ = nullptr;
@@ -77,6 +101,8 @@ class UserMainWindow final : public QMainWindow
     QLabel* ordersEmpty_ = nullptr;
     QComboBox* navigationMode_ = nullptr;
     QLabel* navigationSummary_ = nullptr;
+    QWidget* navigationMap_ = nullptr;
+    QPushButton* navigationBrowserButton_ = nullptr;
     NavigationRoute navigationRoute_;
     QTimer* timer_ = nullptr;
     int selectedStationId_ = 1;

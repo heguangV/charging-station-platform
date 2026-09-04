@@ -1,6 +1,8 @@
 add_library(ncs_infrastructure_map STATIC
     tencent_geocoder.cpp
     tencent_geocoder.h
+    tencent_route_planner.cpp
+    tencent_route_planner.h
 )
 add_library(ncs::infrastructure_map ALIAS ncs_infrastructure_map)
 

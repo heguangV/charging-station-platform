@@ -21,7 +21,13 @@ class Client:
     def __init__(self, base_url: str, token: str, ca_file: str) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
-        self.context = ssl.create_default_context(cafile=ca_file)
+        endpoint = urllib.parse.urlsplit(self.base_url)
+        if endpoint.scheme == "https":
+            self.context = ssl.create_default_context(cafile=ca_file)
+        elif endpoint.scheme == "http" and endpoint.hostname in ("127.0.0.1", "::1"):
+            self.context = None
+        else:
+            raise ValueError("ML HTTP transport is restricted to numeric loopback")
 
     def request(self, method: str, path: str, body: dict | None = None,
                 idempotency_key: str | None = None) -> dict:
