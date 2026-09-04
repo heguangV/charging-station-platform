@@ -1,0 +1,111 @@
+diff --git a/include/crow/http_connection.h b/include/crow/http_connection.h
+index 2ebf72a..d913c2c 100644
+--- a/include/crow/http_connection.h
++++ b/include/crow/http_connection.h
+@@ -111,5 +111,6 @@ namespace crow
+         void handle_url()
+         {
++            req_.remote_ip_address = adaptor_.address();
+             routing_handle_result_ = handler_->handle_initial(req_, res);
+             // if no route is found for the request method, return the response without parsing or processing anything further.
+             if (!routing_handle_result_->rule_index && !routing_handle_result_->catch_all && (req_.method != HTTPMethod::Options || routing_handle_result_->method == HTTPMethod::InternalMethodCount))
+@@ -227,5 +228,6 @@ namespace crow
+         void complete_request()
+         {
++            auto keep_alive = this->shared_from_this();
+             CROW_LOG_INFO << "Response: " << this << ' ' << req_.raw_url << ' ' << res.code << ' ' << close_connection_;
+             res.is_alive_helper_ = nullptr;
+ 
+@@ -398,6 +398,16 @@ namespace crow
+                   if (!ec)
+                   {
+                       bool ret = self->parser_.feed(self->buffer_.data(), bytes_transferred);
++                      if (!ret && self->parser_.body_too_large())
++                      {
++                          self->cancel_deadline_timer();
++                          self->req_.remote_ip_address = self->adaptor_.address();
++                          self->close_connection_ = true;
++                          self->res = response(413);
++                          self->need_to_call_after_handlers_ = true;
++                          self->complete_request();
++                          return;
++                      }
+                       if (ret && self->adaptor_.is_open())
+                       {
+                           error_while_reading = false;
+diff --git a/include/crow/parser.h b/include/crow/parser.h
+index 1417d6c..7e06821 100644
+--- a/include/crow/parser.h
++++ b/include/crow/parser.h
+@@ -3,6 +3,8 @@
+ #include <string>
+ #include <unordered_map>
+ #include <algorithm>
++#include <cstdint>
++#include <limits>
+ 
+ #include "crow/http_request.h"
+ #include "crow/http_parser_merged.h"
+@@ -82,12 +84,25 @@ namespace crow
+ 
+             self->set_connection_parameters();
+ 
++            if (self->content_length != std::numeric_limits<uint64_t>::max()
++                && self->content_length > max_body_size)
++            {
++                self->body_too_large_ = true;
++                return 3;
++            }
++
+             self->process_header();
+             return 0;
+         }
+         static int on_body(http_parser* self_, const char* at, size_t length)
+         {
+             HTTPParser* self = static_cast<HTTPParser*>(self_);
++            if (length > max_body_size - self->received_body_size_)
++            {
++                self->body_too_large_ = true;
++                return 1;
++            }
++            self->received_body_size_ += length;
+             self->req.body.insert(self->req.body.end(), at, at + length);
+             return 0;
+         }
+@@ -137,6 +152,11 @@ namespace crow
+             return feed(nullptr, 0);
+         }
+ 
++        bool body_too_large() const
++        {
++            return body_too_large_;
++        }
++
+         void clear()
+         {
+             req = crow::request();
+@@ -145,6 +165,8 @@ namespace crow
+             header_building_state = 0;
+             qs_point = 0;
+             message_complete = false;
++            body_too_large_ = false;
++            received_body_size_ = 0;
+             state = CROW_NEW_MESSAGE();
+         }
+ 
+@@ -188,8 +210,15 @@ namespace crow
+         request req;
+ 
+     private:
++#ifdef CROW_HTTP_MAX_BODY_SIZE
++        static constexpr uint64_t max_body_size = CROW_HTTP_MAX_BODY_SIZE;
++#else
++        static constexpr uint64_t max_body_size = 8ULL * 1024ULL * 1024ULL;
++#endif
+         int header_building_state = 0;
+         bool message_complete = false;
++        bool body_too_large_ = false;
++        uint64_t received_body_size_ = 0;
+         std::string header_field;
+         std::string header_value;
+ 

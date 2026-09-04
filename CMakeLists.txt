@@ -1,11 +1,17 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.22)
 
 project(NcsChargingStation VERSION 0.1.0 LANGUAGES CXX)
+
+include(CTest)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
 
 set(PROJECT_MINIMUM_QT_VERSION 6.2)
 option(NCS_BUILD_ANDROID_EXPERIMENT "Build the future QML/Android experiment" OFF)
@@ -19,6 +25,60 @@ if(WIN32 AND NOT MSVC)
         "the current compiler is '${CMAKE_CXX_COMPILER_ID}'."
     )
 endif()
+
+include(FetchContent)
+
+set(CROW_ENABLE_SSL ON CACHE BOOL "Enable HTTPS support for NCS" FORCE)
+set(CROW_ENABLE_COMPRESSION OFF CACHE BOOL "" FORCE)
+find_package(Git REQUIRED)
+FetchContent_Declare(asio_source
+    GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
+    GIT_TAG asio-1-30-2
+    GIT_SHALLOW TRUE
+)
+FetchContent_GetProperties(asio_source)
+if(NOT asio_source_POPULATED)
+    FetchContent_Populate(asio_source)
+endif()
+set(ASIO_INCLUDE_DIR "${asio_source_SOURCE_DIR}/asio/include" CACHE PATH
+    "Standalone Asio include directory" FORCE)
+
+set(CROW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CROW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CROW_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(Crow
+    GIT_REPOSITORY https://github.com/CrowCpp/Crow.git
+    GIT_TAG v1.3.3
+    GIT_SHALLOW TRUE
+    PATCH_COMMAND
+        "${CMAKE_COMMAND}"
+        "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+        "-DSOURCE_DIR=<SOURCE_DIR>"
+        "-DPATCH_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/crow-http-body-limit.patch"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_crow_patch.cmake"
+    PATCH_COMMAND
+        "${CMAKE_COMMAND}"
+        "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+        "-DSOURCE_DIR=<SOURCE_DIR>"
+        "-DPATCH_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/crow-websocket-payload-1009.patch"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_crow_patch.cmake"
+)
+FetchContent_MakeAvailable(Crow)
+
+find_package(OpenSSL REQUIRED)
+find_package(SQLite3 REQUIRED)
+
+add_library(ncs_crow INTERFACE)
+add_library(ncs::crow ALIAS ncs_crow)
+target_compile_definitions(ncs_crow INTERFACE
+    CROW_ENABLE_SSL
+    CROW_HTTP_MAX_BODY_SIZE=8388608
+)
+target_link_libraries(ncs_crow INTERFACE
+    Crow::Crow
+    OpenSSL::SSL
+    OpenSSL::Crypto
+)
 
 find_package(Qt6 ${PROJECT_MINIMUM_QT_VERSION} REQUIRED COMPONENTS
     Core
