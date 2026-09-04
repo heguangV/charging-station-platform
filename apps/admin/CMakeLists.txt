@@ -1,6 +1,12 @@
 qt_add_executable(ncs_admin
+    admin_api_client.cpp
+    admin_api_client.h
     admin_main_window.cpp
     admin_main_window.h
+    admin_main_window_data.cpp
+    admin_types.h
+    login_widget.cpp
+    login_widget.h
     main.cpp
 )
 
