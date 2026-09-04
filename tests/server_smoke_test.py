@@ -704,10 +704,22 @@ def main() -> int:
                 port, "/api/v1/dashboard/auth/logout", dashboard_headers, "POST")
             assert dashboard_logout == 200 and dashboard_logout_retry == 200
         except BaseException:
-            # Surface server-side diagnostics (async dispatch traces, errors)
-            # before the temporary directory is cleaned up.
+            # Surface server-side diagnostics (async dispatch traces, errors,
+            # structured logs) before the temporary directory is cleaned up.
             stop_server(process, 5)
+            print("--- server stderr begin ---", file=sys.stderr)
             print(process.stderr.read(), file=sys.stderr)
+            print("--- server stderr end ---", file=sys.stderr)
+            try:
+                log_files = sorted(logs.iterdir()) if logs.is_dir() else []
+                newest = [path for path in log_files if path.name.endswith(".log")]
+                for path in newest[-2:]:
+                    print(f"--- {path.name} begin ---", file=sys.stderr)
+                    print(path.read_text(encoding="utf-8", errors="replace")[-8000:],
+                          file=sys.stderr)
+                    print(f"--- {path.name} end ---", file=sys.stderr)
+            except OSError:
+                pass
             raise
         finally:
             forced_windows_stop = stop_server(process, 5)
