@@ -29,10 +29,10 @@ add_source() {
         apps/user/*.cpp | apps/user/*.h | apps/admin/*.cpp | apps/admin/*.h | core/*.cpp | core/*.h | \
             infrastructure/*.cpp | infrastructure/*.h | server/*.cpp | server/*.h | tests/*.cpp | tests/*.h)
             ;;
-        *) return ;;
+        *) return 0 ;;
     esac
-    [[ -f "${source_file}" ]] || return
-    [[ -z "${seen_sources[${source_file}]+present}" ]] || return
+    [[ -f "${source_file}" ]] || return 0
+    [[ -z "${seen_sources[${source_file}]+present}" ]] || return 0
     seen_sources["${source_file}"]=true
     changed_sources+=("${source_file}")
 }

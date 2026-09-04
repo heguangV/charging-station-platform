@@ -144,24 +144,24 @@ void UserMainWindow::showNavigationFallback(const QString& reason)
 #endif
 }
 
-void UserMainWindow::applyNavigationRoute(const QJsonObject& data)
+void UserMainWindow::applyNavigationRoute(const QJsonObject& routeData)
 {
-    navigationRoute_.stationName = data.value(QStringLiteral("stationName")).toString();
+    navigationRoute_.stationName = routeData.value(QStringLiteral("stationName")).toString();
     navigationRoute_.destinationAddress =
-        data.value(QStringLiteral("destinationAddress")).toString();
-    navigationRoute_.mode = data.value(QStringLiteral("mode")).toString();
-    navigationRoute_.url = data.value(QStringLiteral("browserUrl")).toString();
+        routeData.value(QStringLiteral("destinationAddress")).toString();
+    navigationRoute_.mode = routeData.value(QStringLiteral("mode")).toString();
+    navigationRoute_.url = routeData.value(QStringLiteral("browserUrl")).toString();
     const qint64 distanceMeter =
-        data.value(QStringLiteral("distanceMeter")).toVariant().toLongLong();
+        routeData.value(QStringLiteral("distanceMeter")).toVariant().toLongLong();
     const qint64 durationSecond =
-        data.value(QStringLiteral("durationSecond")).toVariant().toLongLong();
+        routeData.value(QStringLiteral("durationSecond")).toVariant().toLongLong();
     navigationRoute_.distance = QStringLiteral("%1 km").arg(distanceMeter / 1000.0, 0, 'f', 1);
     const QString modeText =
         navigationRoute_.mode == QStringLiteral("walking")   ? QStringLiteral("步行")
         : navigationRoute_.mode == QStringLiteral("transit") ? QStringLiteral("公交")
                                                              : QStringLiteral("驾车");
-    const bool routeFallback = data.value(QStringLiteral("routeFallback")).toBool();
-    const bool locationFallback = data.value(QStringLiteral("locationFallback")).toBool();
+    const bool routeFallback = routeData.value(QStringLiteral("routeFallback")).toBool();
+    const bool locationFallback = routeData.value(QStringLiteral("locationFallback")).toBool();
     QString summary =
         QStringLiteral(
             "路线来源：%1\n终点：%2\n地址：%3\n路线距离：%4\n预计时间：%5 分钟\n出行方式：%6")
@@ -182,20 +182,21 @@ void UserMainWindow::applyNavigationRoute(const QJsonObject& data)
 #endif
         return;
     }
-    renderNavigationMap(data);
+    renderNavigationMap(routeData);
 }
 
-void UserMainWindow::renderNavigationMap(const QJsonObject& data)
+void UserMainWindow::renderNavigationMap(const QJsonObject& routeData)
 {
 #ifdef NCS_HAS_WEBENGINE
     if (tencentMapJsKey_.trimmed().isEmpty() ||
-        data.value(QStringLiteral("polyline")).toArray().size() < 2)
+        routeData.value(QStringLiteral("polyline")).toArray().size() < 2)
     {
         navigationMap_->setVisible(false);
         return;
     }
-    const QByteArray routeJson = QJsonDocument(data.value(QStringLiteral("polyline")).toArray())
-                                     .toJson(QJsonDocument::Compact);
+    const QByteArray routeJson =
+        QJsonDocument(routeData.value(QStringLiteral("polyline")).toArray())
+            .toJson(QJsonDocument::Compact);
     const QByteArray key = QUrl::toPercentEncoding(tencentMapJsKey_.trimmed());
     QString html = QString::fromUtf8(R"HTML(
 <!doctype html><html><head><meta charset="utf-8">

@@ -54,8 +54,8 @@ class UserMainWindow final : public QMainWindow
     void showProfile();
     void showNavigation();
     void showNavigationFallback(const QString& reason = {});
-    void applyNavigationRoute(const QJsonObject& data);
-    void renderNavigationMap(const QJsonObject& data);
+    void applyNavigationRoute(const QJsonObject& routeData);
+    void renderNavigationMap(const QJsonObject& routeData);
     void showHome();
     void showDetail(int stationId);
     void showCharge();

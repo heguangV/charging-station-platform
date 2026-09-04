@@ -62,6 +62,11 @@ git add tests/committed.cpp
 git commit --quiet -m "format change"
 NCS_CHECK_BASE_REF="${base_commit}" ./scripts/check.sh >/dev/null
 
+# The same file may occur in both the committed PR range and local changes;
+# de-duplication must not trip `set -e`.
+sed -i 's/return 2/return 3/' tests/committed.cpp
+NCS_CHECK_BASE_REF="${base_commit}" ./scripts/check.sh >/dev/null
+
 # Bad CI configuration and newly introduced oversized files fail closed.
 expect_failure invalid-base env NCS_CHECK_BASE_REF=missing-check-base ./scripts/check.sh
 grep -q "NCS_CHECK_BASE_REF" "${test_root}/invalid-base.out"
