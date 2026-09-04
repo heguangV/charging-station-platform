@@ -1,12 +1,14 @@
 #include "user_main_window.h"
 
+#include "net/user_api.h"
+
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPushButton>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
-#include <QPushButton>
 #include <QToolButton>
 #include <QToolTip>
 #include <QVBoxLayout>
@@ -47,7 +49,8 @@ QWidget* UserMainWindow::createLoginPage()
     phoneEdit_ = new QLineEdit;
     phoneEdit_->setPlaceholderText(QStringLiteral("请输入 11 位手机号"));
     phoneEdit_->setMaxLength(11);
-    phoneEdit_->setValidator(new QRegularExpressionValidator(QRegularExpression(QStringLiteral("1\\d{0,10}")), phoneEdit_));
+    phoneEdit_->setValidator(new QRegularExpressionValidator(
+        QRegularExpression(QStringLiteral("1\\d{0,10}")), phoneEdit_));
     phoneEdit_->setInputMethodHints(Qt::ImhDigitsOnly);
     layout->addWidget(phoneEdit_);
     auto* codeRow = new QHBoxLayout;
@@ -65,41 +68,110 @@ QWidget* UserMainWindow::createLoginPage()
     demoHelp->setText(QStringLiteral("ⓘ 演示说明"));
     demoHelp->setToolTip(QStringLiteral("演示验证码为 123456；验证码不会写入日志。"));
     demoHelp->setCursor(Qt::PointingHandCursor);
-    demoHelp->setStyleSheet(QStringLiteral("QToolButton{color:#0F766E;border:0;background:transparent;font-size:12px;padding:3px 0;text-align:left;}"));
+    demoHelp->setStyleSheet(
+        QStringLiteral("QToolButton{color:#0F766E;border:0;background:transparent;font-size:12px;"
+                       "padding:3px 0;text-align:left;}"));
     layout->addWidget(demoHelp, 0, Qt::AlignLeft);
     layout->addStretch();
     auto* agreement = new QLabel(QStringLiteral("登录即表示你同意 NCS 服务条款与隐私说明"));
     agreement->setAlignment(Qt::AlignCenter);
     agreement->setStyleSheet(QStringLiteral("font-size:11px;color:#98A2B3;"));
     layout->addWidget(agreement);
-    connect(codeButton_, &QPushButton::clicked, this, [this] {
-        if (phoneEdit_->text().size() != 11 || !phoneEdit_->text().startsWith(QLatin1Char('1')))
+    connect(
+        codeButton_, &QPushButton::clicked, this,
+        [this]
         {
-            notify(QStringLiteral("请输入正确的 11 位手机号"), true);
-            return;
-        }
-        codeCountdown_ = 60;
-        codeButton_->setEnabled(false);
-        notify(QStringLiteral("验证码已发送，请输入 %1").arg(service_.developmentCode()));
-    });
-    connect(demoHelp, &QToolButton::clicked, this, [demoHelp] {
-        QToolTip::showText(demoHelp->mapToGlobal(QPoint(0, demoHelp->height())), demoHelp->toolTip(), demoHelp);
-    });
-    connect(login, &QPushButton::clicked, this, [this] {
-        if (phoneEdit_->text().size() != 11)
+            if (phoneEdit_->text().size() != 11 || !phoneEdit_->text().startsWith(QLatin1Char('1')))
+            {
+                notify(QStringLiteral("请输入正确的 11 位手机号"), true);
+                return;
+            }
+            codeButton_->setEnabled(false);
+            if (!userApi_)
+            {
+                codeCountdown_ = 60;
+                notify(QStringLiteral("验证码已发送，请输入 %1").arg(service_.developmentCode()));
+                return;
+            }
+            userApi_->requestSmsCode(
+                phoneEdit_->text(),
+                [this](ApiReply reply)
+                {
+                    if (!reply.ok())
+                    {
+                        codeButton_->setEnabled(true);
+                        notify(reply.message + QStringLiteral("；可在服务恢复前使用本机演示"),
+                               true);
+                        return;
+                    }
+                    codeCountdown_ = 60;
+                    const QString developmentCode =
+                        reply.data.toObject().value(QStringLiteral("developmentCode")).toString();
+                    notify(developmentCode.isEmpty()
+                               ? QStringLiteral("验证码已发送")
+                               : QStringLiteral("验证码已发送，请输入 %1").arg(developmentCode));
+                });
+        });
+    connect(demoHelp, &QToolButton::clicked, this,
+            [demoHelp]
+            {
+                QToolTip::showText(demoHelp->mapToGlobal(QPoint(0, demoHelp->height())),
+                                   demoHelp->toolTip(), demoHelp);
+            });
+    connect(
+        login, &QPushButton::clicked, this,
+        [this, login]
         {
-            notify(QStringLiteral("请输入正确的 11 位手机号"), true);
-            return;
-        }
-        QString message;
-        if (!service_.login(phoneEdit_->text(), codeEdit_->text(), &message))
-        {
-            notify(message, true);
-            return;
-        }
-        notify(message);
-        showHome();
-    });
+            if (phoneEdit_->text().size() != 11)
+            {
+                notify(QStringLiteral("请输入正确的 11 位手机号"), true);
+                return;
+            }
+            QString message;
+            if (!service_.login(phoneEdit_->text(), codeEdit_->text(), &message))
+            {
+                notify(message, true);
+                return;
+            }
+            if (!userApi_)
+            {
+                notify(message);
+                showHome();
+                return;
+            }
+            const QString phone = phoneEdit_->text();
+            const QString smsCode = codeEdit_->text();
+            login->setEnabled(false);
+            userApi_->loginSms(
+                phone, smsCode, QStringLiteral("ncs-user-desktop"),
+                [this, login, message](ApiReply reply)
+                {
+                    login->setEnabled(true);
+                    if (reply.ok())
+                    {
+                        const QString token =
+                            reply.data.toObject().value(QStringLiteral("accessToken")).toString();
+                        if (token.isEmpty())
+                        {
+                            notify(QStringLiteral("服务端登录响应缺少会话令牌"), true);
+                            return;
+                        }
+                        userApi_->setAccessToken(token);
+                        onlineSession_ = true;
+                        notify(QStringLiteral("登录成功，腾讯地图路线服务已连接"));
+                        showHome();
+                        return;
+                    }
+                    if (reply.code != QStringLiteral("NetworkError"))
+                    {
+                        notify(reply.message, true);
+                        return;
+                    }
+                    onlineSession_ = false;
+                    notify(message + QStringLiteral("；服务端不可用，已进入本机降级模式"));
+                    showHome();
+                });
+        });
     return page;
 }
 

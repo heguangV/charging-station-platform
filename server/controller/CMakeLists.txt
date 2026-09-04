@@ -13,6 +13,8 @@ add_library(ncs_server_controller STATIC
     health_routes.h
     ml_routes.cpp
     ml_routes.h
+    navigation_routes.cpp
+    navigation_routes.h
     idempotent_response.cpp
     idempotent_response.h
     request_validation.cpp

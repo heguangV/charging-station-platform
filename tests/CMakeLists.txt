@@ -208,6 +208,31 @@ set_target_properties(ncs_station_service_tests PROPERTIES
 target_link_libraries(ncs_station_service_tests PRIVATE ncs::core_application)
 add_test(NAME ncs_station_service COMMAND ncs_station_service_tests)
 
+add_executable(ncs_navigation_service_tests
+    navigation_service_test.cpp
+)
+set_target_properties(ncs_navigation_service_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+target_link_libraries(ncs_navigation_service_tests PRIVATE ncs::core_application)
+add_test(NAME ncs_navigation_service COMMAND ncs_navigation_service_tests)
+
+add_executable(ncs_tencent_route_planner_tests
+    tencent_route_planner_test.cpp
+)
+set_target_properties(ncs_tencent_route_planner_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+target_link_libraries(ncs_tencent_route_planner_tests PRIVATE
+    ncs::infrastructure_map
+    Qt6::Core
+)
+add_test(NAME ncs_tencent_route_planner COMMAND ncs_tencent_route_planner_tests)
+
 add_executable(ncs_websocket_hub_tests
     websocket_hub_test.cpp
 )
@@ -314,6 +339,19 @@ set_tests_properties(ncs_server_smoke PROPERTIES
     TIMEOUT 300
 )
 
+add_test(
+    NAME ncs_server_http_smoke
+    COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/server_http_smoke_test.py
+        $<TARGET_FILE:ncs_server>
+        $<TARGET_FILE:ncs_user>
+)
+set_tests_properties(ncs_server_http_smoke PROPERTIES
+    RUN_SERIAL TRUE
+    TIMEOUT 60
+    LABELS "smoke;integration;http;user"
+)
+
 # --- Foundation and user-client tests (integrated from develop) ---
 qt_add_executable(ncs_foundation_tests
     foundation_tests.cpp
@@ -352,3 +390,18 @@ set_tests_properties(ncs_admin_smoke PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     LABELS "smoke;ui;foundation"
 )
+
+if(UNIX)
+    find_program(NCS_BASH_EXECUTABLE bash)
+    find_program(NCS_CLANG_FORMAT_EXECUTABLE clang-format)
+    if(NCS_BASH_EXECUTABLE AND NCS_CLANG_FORMAT_EXECUTABLE)
+        add_test(
+            NAME ncs_check_script
+            COMMAND ${NCS_BASH_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/check_script_test.sh
+                ${CMAKE_SOURCE_DIR}/scripts/check.sh
+                ${CMAKE_SOURCE_DIR}/.clang-format
+        )
+        set_tests_properties(ncs_check_script PROPERTIES LABELS "unit;repository")
+    endif()
+endif()

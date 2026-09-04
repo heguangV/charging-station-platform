@@ -2,6 +2,8 @@
 
 #include "api_client.h"
 
+#include <optional>
+
 class QFile;
 
 namespace ncs::user
@@ -12,6 +14,8 @@ class UserApi final
 {
   public:
     explicit UserApi(ApiClient& client);
+
+    void setAccessToken(const QString& token);
 
     void requestSmsCode(const QString& phone, ApiClient::Handler done);
     void loginSms(const QString& phone, const QString& smsCode, const QString& deviceId,
@@ -25,6 +29,9 @@ class UserApi final
     void stations(qint64 latitudeE6, qint64 longitudeE6, const QString& keyword,
                   ApiClient::Handler done);
     void chargers(qint64 stationId, ApiClient::Handler done);
+    void navigationRoute(qint64 stationId, std::optional<qint64> latitudeE6,
+                         std::optional<qint64> longitudeE6, const QString& keyword,
+                         const QString& mode, ApiClient::Handler done);
     void requestFlow(qint64 stationId, int chargerType, qint64 preferredChargerId,
                      ApiClient::Handler done);
     void activeFlow(ApiClient::Handler done);

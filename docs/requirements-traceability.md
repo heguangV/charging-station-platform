@@ -8,11 +8,13 @@
 | 正式 CMake 目标 | 阶段一、NFR-C-01 | `ncs_user`、`ncs_admin`、`ncs_server`、公共库 | 严格警告构建 | 完成 |
 | 分层目录与边界 | 研发指南 §2-3 | `apps/`、`server/`、`core/`、`infrastructure/`、`tests/` | CMake 依赖复核 | 完成 |
 | 配置基础 | NFR-S-*、NFR-D-* | `ApplicationConfig`、`.env.example` | 有效配置与启动测试 | 完成 |
+| 本机开发 HTTP 联调 | NFR-D-01 | 客户端/服务端 `NCS_ALLOW_INSECURE_HTTP`、回环限制、传输日志 | 配置拒绝测试、真实 HTTP 客户端—服务端烟雾测试 | 完成；验收与生产仍强制 HTTPS/WSS |
 | 公共错误码 | 接口文档 §2 | `ErrorCode`、`AppError`、`Result` | 错误码单元测试 | 完成 |
 | 日志基础 | NFR-M-04 | `ApplicationLogger` | 文件、请求 ID、脱敏测试 | 完成 |
 | 测试框架 | 研发指南 §6 | CTest 与基础/烟雾测试 | 4 项测试通过 | 完成 |
 | 本机精确基线构建 | NFR-C-01 | Qt 6.2.x + CMake 3.24+ | 本机工具链报告 | 部分完成：Qt 6.2.4 构建通过；本机 CMake 3.22.1 低于正式门槛 |
 | 数据库与领域 | 阶段二 | schema、迁移、仓储、状态机 | 数据库测试 | 未开始 |
 | Crow 通信 | 阶段三 | REST/WebSocket、会话、调度 | 契约与集成测试 | 未开始 |
+| 腾讯地图导航 | UC-U-02、UC-U-04 | 服务端地理编码/路线规划、用户端路线摘要/内嵌地图及最终降级 | 路线应用服务、腾讯响应解析、REST 契约与 UI 烟雾测试 | 部分完成：代码与隔离测试已实现，仍需有图形会话的三种路线截图验收 |
 
 完整业务、接口与数据库条目继续以项目需求矩阵和 SRS 第 9 节追踪，不得因本表“工程基础完成”而推断后续功能完成。

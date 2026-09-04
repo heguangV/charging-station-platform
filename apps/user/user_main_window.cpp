@@ -1,9 +1,9 @@
 #include "user_main_window.h"
 
-#include "ui/station_card.h"
-#include "ui/charge_soc_gauge.h"
 #include "ui/bottom_navigation.h"
+#include "ui/charge_soc_gauge.h"
 #include "ui/charger_table.h"
+#include "ui/station_card.h"
 #include "ui/station_list_widget.h"
 
 #include <QFormLayout>
@@ -19,6 +19,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QtMath>
+
+#include <utility>
 
 namespace ncs::user
 {
@@ -62,8 +64,11 @@ QFrame* metricCard(const QString& title, QLabel*& value, const QString& initialV
 }
 } // namespace
 
-UserMainWindow::UserMainWindow(UserClientService& service, QWidget* parent)
-    : QMainWindow(parent), service_(service)
+UserMainWindow::UserMainWindow(UserClientService& service, UserApi* userApi,
+                               QString tencentMapJsKey, QString tencentMapJsOrigin, QWidget* parent)
+    : QMainWindow(parent), service_(service), userApi_(userApi),
+      tencentMapJsKey_(std::move(tencentMapJsKey)),
+      tencentMapJsOrigin_(std::move(tencentMapJsOrigin))
 {
     setWindowTitle(QStringLiteral("NCS 充电"));
     setFixedSize(420, 760);
@@ -89,24 +94,28 @@ UserMainWindow::UserMainWindow(UserClientService& service, QWidget* parent)
     layout->addWidget(bottomNavigation_);
     setCentralWidget(root);
     connect(bottomNavigation_, &BottomNavigation::homeRequested, this, &UserMainWindow::showHome);
-    connect(bottomNavigation_, &BottomNavigation::profileRequested, this, &UserMainWindow::showProfile);
-    connect(bottomNavigation_, &BottomNavigation::ordersRequested, this, &UserMainWindow::showOrders);
+    connect(bottomNavigation_, &BottomNavigation::profileRequested, this,
+            &UserMainWindow::showProfile);
+    connect(bottomNavigation_, &BottomNavigation::ordersRequested, this,
+            &UserMainWindow::showOrders);
 
     timer_ = new QTimer(this);
-    connect(timer_, &QTimer::timeout, this, [this] {
-        if (codeCountdown_ > 0)
-        {
-            --codeCountdown_;
-            codeButton_->setText(QStringLiteral("%1 秒后重发").arg(codeCountdown_));
-            if (codeCountdown_ == 0)
+    connect(timer_, &QTimer::timeout, this,
+            [this]
             {
-                codeButton_->setEnabled(true);
-                codeButton_->setText(QStringLiteral("获取验证码"));
-            }
-        }
-        service_.tick();
-        refreshCharge();
-    });
+                if (codeCountdown_ > 0)
+                {
+                    --codeCountdown_;
+                    codeButton_->setText(QStringLiteral("%1 秒后重发").arg(codeCountdown_));
+                    if (codeCountdown_ == 0)
+                    {
+                        codeButton_->setEnabled(true);
+                        codeButton_->setText(QStringLiteral("获取验证码"));
+                    }
+                }
+                service_.tick();
+                refreshCharge();
+            });
     timer_->start(1000);
 }
 
@@ -138,7 +147,10 @@ QWidget* UserMainWindow::createHomePage()
     layout->setContentsMargins(0, 8, 0, 0);
     auto* heading = new QHBoxLayout;
     heading->addWidget(label(QStringLiteral("附近充电站"), 23));
-    auto* profile = button(QStringLiteral("我的"), QStringLiteral("QPushButton{color:#0F766E;border:0;background:transparent;font-size:14px;}"));
+    auto* profile =
+        button(QStringLiteral("我的"),
+               QStringLiteral(
+                   "QPushButton{color:#0F766E;border:0;background:transparent;font-size:14px;}"));
     heading->addStretch();
     heading->addWidget(profile);
     layout->addLayout(heading);
@@ -149,7 +161,8 @@ QWidget* UserMainWindow::createHomePage()
     auto* recommendationTitle = label(QStringLiteral("当前位置 · 中关村"), 13);
     recommendationTitle->setStyleSheet(QStringLiteral("color:#C9F4EC;font-size:13px;"));
     auto* recommendationText = label(QStringLiteral("附近有 10 个可用充电桩"), 21);
-    recommendationText->setStyleSheet(QStringLiteral("color:white;font-size:21px;font-weight:700;"));
+    recommendationText->setStyleSheet(
+        QStringLiteral("color:white;font-size:21px;font-weight:700;"));
     auto* recommendationMeta = label(QStringLiteral("已为你优先排列距离近、空闲多的电站"), 12);
     recommendationMeta->setStyleSheet(QStringLiteral("color:#B9E8DF;font-size:12px;"));
     recommendationLayout->addWidget(recommendationTitle);
@@ -168,7 +181,9 @@ QWidget* UserMainWindow::createDetailPage()
     auto* page = new QWidget;
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 8, 0, 0);
-    auto* back = button(QStringLiteral("‹ 返回附近电站"), QStringLiteral("QPushButton{color:#0F766E;border:0;background:transparent;text-align:left;font-size:14px;}"));
+    auto* back = button(QStringLiteral("‹ 返回附近电站"),
+                        QStringLiteral("QPushButton{color:#0F766E;border:0;background:transparent;"
+                                       "text-align:left;font-size:14px;}"));
     layout->addWidget(back);
     detailTitle_ = label({}, 22);
     detailMeta_ = label({}, 13);
@@ -176,38 +191,42 @@ QWidget* UserMainWindow::createDetailPage()
     layout->addWidget(detailMeta_);
     chargerTable_ = new ChargerTable;
     layout->addWidget(chargerTable_);
-    auto* navigate = button(QStringLiteral("一键导航"), QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;border-radius:10px;font-size:15px;font-weight:600;}"));
+    auto* navigate = button(QStringLiteral("一键导航"),
+                            QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;"
+                                           "border-radius:10px;font-size:15px;font-weight:600;}"));
     auto* reserve = button(QStringLiteral("选桩并预约"));
     layout->addWidget(navigate);
     layout->addWidget(reserve);
     layout->addStretch();
     connect(back, &QPushButton::clicked, this, &UserMainWindow::showHome);
     connect(navigate, &QPushButton::clicked, this, &UserMainWindow::showNavigation);
-    connect(reserve, &QPushButton::clicked, this, [this] {
-        if (service_.hasUnfinishedOrder())
-        {
-            QMessageBox::information(this, QStringLiteral("未完成订单"),
-                                     QStringLiteral("您有未完成的充电订单，请先结算。"));
-            showCharge();
-            return;
-        }
-        QString message;
-        selectedChargerCode_ = chargerTable_->selectedChargerCode();
-        if (service_.reserve(selectedStationId_, selectedChargerCode_, &message))
-        {
-            chargingStarted_ = false;
-            startButton_->setEnabled(true);
-            cancelButton_->setEnabled(true);
-            settleButton_->setEnabled(false);
-            chargeState_->setText(QStringLiteral("已预约 · %1").arg(selectedChargerCode_));
-            notify(message);
-            showCharge();
-        }
-        else
-        {
-            notify(message, true);
-        }
-    });
+    connect(reserve, &QPushButton::clicked, this,
+            [this]
+            {
+                if (service_.hasUnfinishedOrder())
+                {
+                    QMessageBox::information(this, QStringLiteral("未完成订单"),
+                                             QStringLiteral("您有未完成的充电订单，请先结算。"));
+                    showCharge();
+                    return;
+                }
+                QString message;
+                selectedChargerCode_ = chargerTable_->selectedChargerCode();
+                if (service_.reserve(selectedStationId_, selectedChargerCode_, &message))
+                {
+                    chargingStarted_ = false;
+                    startButton_->setEnabled(true);
+                    cancelButton_->setEnabled(true);
+                    settleButton_->setEnabled(false);
+                    chargeState_->setText(QStringLiteral("已预约 · %1").arg(selectedChargerCode_));
+                    notify(message);
+                    showCharge();
+                }
+                else
+                {
+                    notify(message, true);
+                }
+            });
     return page;
 }
 
@@ -219,7 +238,9 @@ QWidget* UserMainWindow::createChargePage()
     layout->setSpacing(14);
     layout->addWidget(label(QStringLiteral("充电控制"), 23));
     chargeState_ = label(QStringLiteral("已预约 · ZGC-DC-01"), 15);
-    chargeState_->setStyleSheet(QStringLiteral("padding:10px 12px;background:#E8F8EF;color:#087443;border-radius:12px;font-size:15px;font-weight:600;"));
+    chargeState_->setStyleSheet(QStringLiteral("padding:10px "
+                                               "12px;background:#E8F8EF;color:#087443;border-"
+                                               "radius:12px;font-size:15px;font-weight:600;"));
     layout->addWidget(chargeState_);
     reservationCountdown_ = label(QStringLiteral("请在预约后 15:00 内开始充电"), 13);
     reservationCountdown_->setStyleSheet(QStringLiteral("color:#B54708;font-size:13px;"));
@@ -229,80 +250,99 @@ QWidget* UserMainWindow::createChargePage()
     grid->setContentsMargins(0, 0, 0, 0);
     grid->setHorizontalSpacing(10);
     grid->setVerticalSpacing(10);
-    grid->addWidget(metricCard(QStringLiteral("充电时长"), chargeDuration_, QStringLiteral("00:00:00")), 0, 0);
-    grid->addWidget(metricCard(QStringLiteral("累计电量"), chargeEnergy_, QStringLiteral("0.000 kWh")), 0, 1);
-    grid->addWidget(metricCard(QStringLiteral("当前费用"), chargeAmount_, QStringLiteral("¥0.00")), 1, 0);
-    grid->addWidget(metricCard(QStringLiteral("实时功率"), chargePower_, QStringLiteral("0 kW")), 1, 1);
+    grid->addWidget(
+        metricCard(QStringLiteral("充电时长"), chargeDuration_, QStringLiteral("00:00:00")), 0, 0);
+    grid->addWidget(
+        metricCard(QStringLiteral("累计电量"), chargeEnergy_, QStringLiteral("0.000 kWh")), 0, 1);
+    grid->addWidget(metricCard(QStringLiteral("当前费用"), chargeAmount_, QStringLiteral("¥0.00")),
+                    1, 0);
+    grid->addWidget(metricCard(QStringLiteral("实时功率"), chargePower_, QStringLiteral("0 kW")), 1,
+                    1);
     layout->addWidget(metrics);
     chargeSoc_ = new ChargeSocGauge;
     layout->addWidget(chargeSoc_);
     startButton_ = button(QStringLiteral("开始充电"));
-    cancelButton_ = button(QStringLiteral("取消预约"), QStringLiteral("QPushButton{background:#FFF4E5;color:#B54708;border:0;border-radius:10px;font-size:15px;font-weight:600;}"));
-    settleButton_ = button(QStringLiteral("结束充电并结算"), QStringLiteral("QPushButton{background:#0F9D71;color:white;border:0;border-radius:10px;font-size:15px;font-weight:600;}"));
+    cancelButton_ = button(QStringLiteral("取消预约"),
+                           QStringLiteral("QPushButton{background:#FFF4E5;color:#B54708;border:0;"
+                                          "border-radius:10px;font-size:15px;font-weight:600;}"));
+    settleButton_ = button(QStringLiteral("结束充电并结算"),
+                           QStringLiteral("QPushButton{background:#0F9D71;color:white;border:0;"
+                                          "border-radius:10px;font-size:15px;font-weight:600;}"));
     settleButton_->setEnabled(false);
     layout->addWidget(startButton_);
     layout->addWidget(cancelButton_);
     layout->addWidget(settleButton_);
     layout->addStretch();
-    connect(startButton_, &QPushButton::clicked, this, [this] {
-        QString message;
-        if (service_.start(&message))
+    connect(startButton_, &QPushButton::clicked, this,
+            [this]
+            {
+                QString message;
+                if (service_.start(&message))
+                {
+                    chargingStarted_ = true;
+                    chargeState_->setText(
+                        QStringLiteral("充电中 · %1 · 60 kW").arg(selectedChargerCode_));
+                    reservationCountdown_->setText(QStringLiteral("充电数据每秒刷新"));
+                    startButton_->setEnabled(false);
+                    cancelButton_->setEnabled(false);
+                    settleButton_->setEnabled(true);
+                    notify(message);
+                }
+                else
+                {
+                    notify(message, true);
+                }
+            });
+    connect(cancelButton_, &QPushButton::clicked, this,
+            [this]
+            {
+                QString message;
+                if (service_.cancelReservation(&message))
+                {
+                    chargingStarted_ = false;
+                    selectedChargerCode_.clear();
+                    chargeState_->setText(QStringLiteral("预约已取消"));
+                    reservationCountdown_->setText(QStringLiteral("请返回详情重新选择空闲桩"));
+                    notify(message);
+                    showDetail(selectedStationId_);
+                }
+                else
+                {
+                    notify(message, true);
+                }
+            });
+    connect(
+        settleButton_, &QPushButton::clicked, this,
+        [this]
         {
-            chargingStarted_ = true;
-            chargeState_->setText(QStringLiteral("充电中 · %1 · 60 kW").arg(selectedChargerCode_));
-            reservationCountdown_->setText(QStringLiteral("充电数据每秒刷新"));
-            startButton_->setEnabled(false);
-            cancelButton_->setEnabled(false);
-            settleButton_->setEnabled(true);
-            notify(message);
-        }
-        else
-        {
-            notify(message, true);
-        }
-    });
-    connect(cancelButton_, &QPushButton::clicked, this, [this] {
-        QString message;
-        if (service_.cancelReservation(&message))
-        {
+            if (QMessageBox::question(this, QStringLiteral("确认结算"),
+                                      QStringLiteral("结束充电后将立即从余额扣款，是否继续？")) !=
+                QMessageBox::Yes)
+            {
+                return;
+            }
+            QString message;
+            if (!service_.settle(&message))
+            {
+                notify(message, true);
+                return;
+            }
+            const OrderSummary order = service_.orders().first();
+            const int minutes = order.durationSeconds / 60;
+            receiptText_->setText(
+                QStringLiteral("支付成功\n\n订单号  %1\n电站  %2\n充电桩  %3\n开始时间  "
+                               "%4\n结束时间  %5\n\n充电时长  %6 分钟\n累计电量  %7 kWh\n单价  %8 "
+                               "/ 度\n本次扣款  %9\n扣款后余额  %10\n\n感谢使用 NCS 充电服务")
+                    .arg(order.orderNo, order.stationName, order.chargerCode, order.startTime,
+                         order.endTime, QString::number(minutes),
+                         QString::number(order.energyMwh / 1000000.0, 'f', 3),
+                         money(service_.stations().at(selectedStationId_ - 1).priceCentPerKwh),
+                         money(order.amountCent), money(service_.balanceCent())));
             chargingStarted_ = false;
-            selectedChargerCode_.clear();
-            chargeState_->setText(QStringLiteral("预约已取消"));
-            reservationCountdown_->setText(QStringLiteral("请返回详情重新选择空闲桩"));
+            settleButton_->setEnabled(false);
             notify(message);
-            showDetail(selectedStationId_);
-        }
-        else
-        {
-            notify(message, true);
-        }
-    });
-    connect(settleButton_, &QPushButton::clicked, this, [this] {
-        if (QMessageBox::question(this, QStringLiteral("确认结算"),
-                                  QStringLiteral("结束充电后将立即从余额扣款，是否继续？")) !=
-            QMessageBox::Yes)
-        {
-            return;
-        }
-        QString message;
-        if (!service_.settle(&message))
-        {
-            notify(message, true);
-            return;
-        }
-        const OrderSummary order = service_.orders().first();
-        const int minutes = order.durationSeconds / 60;
-        receiptText_->setText(
-            QStringLiteral("支付成功\n\n订单号  %1\n电站  %2\n充电桩  %3\n开始时间  %4\n结束时间  %5\n\n充电时长  %6 分钟\n累计电量  %7 kWh\n单价  %8 / 度\n本次扣款  %9\n扣款后余额  %10\n\n感谢使用 NCS 充电服务")
-                .arg(order.orderNo, order.stationName, order.chargerCode, order.startTime, order.endTime,
-                     QString::number(minutes), QString::number(order.energyMwh / 1000000.0, 'f', 3),
-                     money(service_.stations().at(selectedStationId_ - 1).priceCentPerKwh),
-                     money(order.amountCent), money(service_.balanceCent())));
-        chargingStarted_ = false;
-        settleButton_->setEnabled(false);
-        notify(message);
-        pages_->setCurrentIndex(kReceiptPage);
-    });
+            pages_->setCurrentIndex(kReceiptPage);
+        });
     return page;
 }
 
@@ -313,7 +353,8 @@ QWidget* UserMainWindow::createReceiptPage()
     layout->setContentsMargins(14, 55, 14, 20);
     layout->addWidget(label(QStringLiteral("充电小票"), 25));
     receiptText_ = label({}, 16);
-    receiptText_->setStyleSheet(QStringLiteral("padding:22px;background:white;border:1px solid #E9EDF5;border-radius:14px;font-size:16px;"));
+    receiptText_->setStyleSheet(QStringLiteral("padding:22px;background:white;border:1px solid "
+                                               "#E9EDF5;border-radius:14px;font-size:16px;"));
     layout->addWidget(receiptText_);
     layout->addStretch();
     auto* done = button(QStringLiteral("完成，返回首页"));

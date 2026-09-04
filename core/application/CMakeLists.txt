@@ -27,6 +27,8 @@ add_library(ncs_core_application STATIC
     in_memory_admin_repository.h
     in_memory_user_account_repository.cpp
     in_memory_user_account_repository.h
+    navigation_service.cpp
+    navigation_service.h
     pricing.cpp
     pricing.h
     readiness_probe.h
