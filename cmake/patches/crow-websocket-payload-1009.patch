@@ -1,0 +1,16 @@
+diff --git a/include/crow/websocket.h b/include/crow/websocket.h
+index 7f91c3d..0129a3a 100644
+--- a/include/crow/websocket.h
++++ b/include/crow/websocket.h
+@@ -510,7 +510,10 @@ namespace crow // NOTE: Already documented in "crow/app.h"
+                         if (remaining_length_ > max_payload_bytes_)
+                         {
+                             close_connection_ = true;
+-                            adaptor_.close();
++                            // Send a protocol-level 1009 close frame before
++                            // tearing the transport down instead of dropping
++                            // the TCP connection without a close frame.
++                            close("Message length exceeds maximum payload.", MessageTooBig);
+                             if (error_handler_)
+                                 error_handler_(*this, "Message length exceeds maximum payload.");
+                             check_destroy(MessageTooBig);

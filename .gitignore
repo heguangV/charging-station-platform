@@ -21,6 +21,7 @@ compile_commands.json
 *.log
 logs/
 backups/
+apps/dashboard/public/data/
 *.dump
 *.db
 *.sqlite*
@@ -47,3 +48,5 @@ artifacts/
 Thumbs.db
 *~
 *.swp
+__pycache__/
+*.py[cod]

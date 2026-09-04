@@ -28,7 +28,7 @@ TENCENT_MAP_SERVER_KEY=你的WebServiceKey
 TENCENT_MAP_JS_ORIGIN=http://localhost/
 ```
 
-配置读取顺序为进程环境变量、`NCS_ENV_FILE` 指定文件、仓库或程序目录中的 `.env`。真实 Key 不得写入源码、普通日志或 Git。
+配置优先级从高到低为：命令行参数（`--tencent-map-key`）、进程环境变量（`NCS_TENCENT_MAP_KEY`）、`NCS_ENV_FILE` 指定文件、仓库或程序目录中的 `.env`。文件中除腾讯地图服务端 Key 使用 `TENCENT_MAP_SERVER_KEY` 外，其余条目与进程环境变量同名。`.env` 支持注释（`#`）、空行、`export` 前缀与引号包裹的值，同一键首次出现生效，空值视为未设置；`NCS_ENV_FILE` 指向的文件缺失或不可读时服务端拒绝启动。真实 Key 不得写入源码、普通日志或 Git。
 
 ## 3. 验证
 
