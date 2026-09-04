@@ -223,7 +223,7 @@ try {
     map->setHtml(html, origin);
     map->setVisible(true);
 #else
-    Q_UNUSED(data)
+    Q_UNUSED(routeData)
 #endif
 }
 

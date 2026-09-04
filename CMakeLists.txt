@@ -11,6 +11,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(MSVC)
     add_compile_options(/utf-8)
+    add_compile_definitions(
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+        _WIN32_WINNT=0x0A00
+    )
 endif()
 
 set(PROJECT_MINIMUM_QT_VERSION 6.2)
