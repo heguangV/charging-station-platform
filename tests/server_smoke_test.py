@@ -271,6 +271,10 @@ def main() -> int:
         dashboard_snapshot = root / "dashboard.json"
         model_path = root / "models" / "load_rf.pkl"
         worker_script = Path(__file__).resolve().parent.parent / "ml" / "worker.py"
+        server_stdout = root / "server-stdout.log"
+        server_stderr = root / "server-stderr.log"
+        restarted_stdout = root / "server-restarted-stdout.log"
+        restarted_stderr = root / "server-restarted-stderr.log"
         subprocess.run(
             [
                 "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
@@ -306,11 +310,13 @@ def main() -> int:
             ]
 
         port = free_port()
+        # Do not pipe the server's stderr without draining it: the server logs
+        # to stderr, and a full pipe buffer (4 KiB on Windows) would block the
+        # request-handling thread and deadlock the whole server.
         process = subprocess.Popen(
             server_arguments(port),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            stdout=open(server_stdout, "w", encoding="utf-8", errors="replace"),
+            stderr=open(server_stderr, "w", encoding="utf-8", errors="replace"),
         )
         try:
             live = None
@@ -324,7 +330,7 @@ def main() -> int:
                 except (ConnectionError, OSError, ssl.SSLError):
                     time.sleep(0.05)
             if live is None:
-                stderr = process.stderr.read() if process.poll() is not None else ""
+                stderr = server_stderr.read_text(encoding="utf-8", errors="replace")
                 raise AssertionError(f"server did not become live: {stderr}")
 
             status, headers, body = live
@@ -704,11 +710,12 @@ def main() -> int:
                 port, "/api/v1/dashboard/auth/logout", dashboard_headers, "POST")
             assert dashboard_logout == 200 and dashboard_logout_retry == 200
         except BaseException:
-            # Surface server-side diagnostics (async dispatch traces, errors,
-            # structured logs) before the temporary directory is cleaned up.
+            # Surface server-side diagnostics (errors, structured logs) before
+            # the temporary directory is cleaned up.
             stop_server(process, 5)
             print("--- server stderr begin ---", file=sys.stderr)
-            print(process.stderr.read(), file=sys.stderr)
+            print(server_stderr.read_text(encoding="utf-8", errors="replace"),
+                  file=sys.stderr)
             print("--- server stderr end ---", file=sys.stderr)
             try:
                 log_files = sorted(logs.iterdir()) if logs.is_dir() else []
@@ -724,15 +731,15 @@ def main() -> int:
         finally:
             forced_windows_stop = stop_server(process, 5)
         if process.returncode != 0 and not forced_windows_stop:
-            print(process.stderr.read(), file=sys.stderr)
+            print(server_stderr.read_text(encoding="utf-8", errors="replace"),
+                  file=sys.stderr)
             return 1
 
         restart_port = free_port()
         restarted = subprocess.Popen(
             server_arguments(restart_port),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            stdout=open(restarted_stdout, "w", encoding="utf-8", errors="replace"),
+            stderr=open(restarted_stderr, "w", encoding="utf-8", errors="replace"),
         )
         try:
             deadline = time.monotonic() + 10
@@ -801,12 +808,14 @@ def main() -> int:
             )
         except BaseException:
             stop_server(restarted, 5)
-            print(restarted.stderr.read(), file=sys.stderr)
+            print(restarted_stderr.read_text(encoding="utf-8", errors="replace"),
+                  file=sys.stderr)
             raise
         finally:
             forced_windows_stop = stop_server(restarted, 5)
         if restarted.returncode != 0 and not forced_windows_stop:
-            print(restarted.stderr.read(), file=sys.stderr)
+            print(restarted_stderr.read_text(encoding="utf-8", errors="replace"),
+                  file=sys.stderr)
             return 1
     return 0
 

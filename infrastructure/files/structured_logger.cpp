@@ -16,8 +16,10 @@
 #include <stdexcept>
 #include <utility>
 
-namespace ncs::infrastructure::files {
-namespace {
+namespace ncs::infrastructure::files
+{
+namespace
+{
 
 thread_local std::string requestIdContext;
 
@@ -35,7 +37,8 @@ int levelRank(const LogLevel level)
 
 std::string_view logLevelName(const LogLevel level)
 {
-    switch (level) {
+    switch (level)
+    {
     case LogLevel::Debug:
         return "DEBUG";
     case LogLevel::Info:
@@ -53,20 +56,18 @@ std::string_view logLevelName(const LogLevel level)
 std::string sanitizeSensitiveData(const std::string_view message)
 {
     QString sanitized = fromUtf8(message);
-    sanitized.replace(
-        QRegularExpression(QStringLiteral("(?i)(Bearer\\s+)[A-Za-z0-9._~-]+")),
-        QStringLiteral("\\1<redacted>"));
-    sanitized.replace(
-        QRegularExpression(QStringLiteral(
-            "(?i)([?&](?:token|accessToken|code|phone|password)\\s*=)[^&\\s]+")),
-        QStringLiteral("\\1<redacted>"));
+    sanitized.replace(QRegularExpression(QStringLiteral("(?i)(Bearer\\s+)[A-Za-z0-9._~-]+")),
+                      QStringLiteral("\\1<redacted>"));
+    sanitized.replace(QRegularExpression(QStringLiteral(
+                          "(?i)([?&](?:token|accessToken|code|phone|password)\\s*=)[^&\\s]+")),
+                      QStringLiteral("\\1<redacted>"));
     sanitized.replace(
         QRegularExpression(QStringLiteral(
-            "(?i)([\\\"](?:phone|mobile|token|accessToken|password|verificationCode|code|balance|balanceCent|wallet|orderNo)[\\\"]\\s*:\\s*)[\\\"]?[^,}\\s\\\"]+[\\\"]?")),
+            "(?i)([\\\"](?:phone|mobile|token|accessToken|password|verificationCode|code|balance|"
+            "balanceCent|wallet|orderNo)[\\\"]\\s*:\\s*)[\\\"]?[^,}\\s\\\"]+[\\\"]?")),
         QStringLiteral("\\1\"<redacted>\""));
-    sanitized.replace(
-        QRegularExpression(QStringLiteral("(?<!\\d)\\d{11,}(?!\\d)")),
-        QStringLiteral("<redacted-number>"));
+    sanitized.replace(QRegularExpression(QStringLiteral("(?<!\\d)\\d{11,}(?!\\d)")),
+                      QStringLiteral("<redacted-number>"));
     sanitized.replace(
         QRegularExpression(QStringLiteral(
             "(?i)\\b(?:SELECT|INSERT|UPDATE|DELETE|PRAGMA|CREATE|DROP)\\b[^;\\n]*;?")),
@@ -76,9 +77,8 @@ std::string sanitizeSensitiveData(const std::string_view message)
         // redacted query marker like ?<redacted> survives this pass.
         QRegularExpression(QStringLiteral("(?<![A-Za-z0-9:])/(?:[^\\s,;?]+/)*[^\\s,;?]*")),
         QStringLiteral("<redacted-path>"));
-    sanitized.replace(
-        QRegularExpression(QStringLiteral("(?i)\\b[A-Z]:\\\\[^\\s,;]+")),
-        QStringLiteral("<redacted-path>"));
+    sanitized.replace(QRegularExpression(QStringLiteral("(?i)\\b[A-Z]:\\\\[^\\s,;]+")),
+                      QStringLiteral("<redacted-path>"));
     const QByteArray bytes = sanitized.toUtf8();
     return {bytes.constData(), static_cast<std::size_t>(bytes.size())};
 }
@@ -99,28 +99,29 @@ std::string_view currentRequestId()
     return requestIdContext;
 }
 
-class StructuredLogger::Impl final {
-public:
+class StructuredLogger::Impl final
+{
+  public:
     explicit Impl(Options options)
         : options_(std::move(options)), directory_(fromUtf8(options_.directory))
     {
-        if (options_.retentionDays < 1) {
+        if (options_.retentionDays < 1)
+        {
             throw std::invalid_argument("log retention must be at least one day");
         }
-        if (options_.directory.empty()
-            || (!directory_.exists() && !QDir().mkpath(directory_.absolutePath()))) {
+        if (options_.directory.empty() ||
+            (!directory_.exists() && !QDir().mkpath(directory_.absolutePath())))
+        {
             throw std::runtime_error("log directory could not be created");
         }
         cleanupExpiredUnlocked();
     }
 
-    void log(
-        const LogLevel level,
-        const std::string_view module,
-        const std::string_view message,
-        const std::string_view requestId)
+    void log(const LogLevel level, const std::string_view module, const std::string_view message,
+             const std::string_view requestId)
     {
-        if (levelRank(level) < levelRank(options_.minimumLevel)) {
+        if (levelRank(level) < levelRank(options_.minimumLevel))
+        {
             return;
         }
 
@@ -135,12 +136,19 @@ public:
         QByteArray line = QJsonDocument(event).toJson(QJsonDocument::Compact);
         line.append('\n');
 
-        QMutexLocker locker(&mutex_);
-        ensureFileOpen(now.date());
-        if (file_.write(line) != line.size() || !file_.flush()) {
-            throw std::runtime_error("structured log write failed");
+        {
+            QMutexLocker locker(&mutex_);
+            ensureFileOpen(now.date());
+            if (file_.write(line) != line.size() || !file_.flush())
+            {
+                throw std::runtime_error("structured log write failed");
+            }
         }
-        if (options_.consoleEnabled) {
+        // Write to the console outside the mutex: a blocked stderr (for example a
+        // full pipe buffer on Windows) must not stall every logging thread and
+        // deadlock the server.
+        if (options_.consoleEnabled)
+        {
             std::fwrite(line.constData(), 1, static_cast<std::size_t>(line.size()), stderr);
             std::fflush(stderr);
         }
@@ -152,17 +160,19 @@ public:
         cleanupExpiredUnlocked();
     }
 
-private:
-    void ensureFileOpen(const QDate &date)
+  private:
+    void ensureFileOpen(const QDate& date)
     {
-        if (file_.isOpen() && openDate_ == date) {
+        if (file_.isOpen() && openDate_ == date)
+        {
             return;
         }
         file_.close();
         openDate_ = date;
         file_.setFileName(directory_.filePath(
             QStringLiteral("ncs_%1.log").arg(date.toString(QStringLiteral("yyyyMMdd")))));
-        if (!file_.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        if (!file_.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+        {
             throw std::runtime_error("structured log file could not be opened");
         }
 #ifdef Q_OS_UNIX
@@ -172,20 +182,21 @@ private:
 
     void cleanupExpiredUnlocked()
     {
-        static const QRegularExpression pattern(
-            QStringLiteral("^ncs_(\\d{8})\\.log$"));
-        const QDate cutoff = QDateTime::currentDateTimeUtc().date().addDays(
-            -(options_.retentionDays - 1));
-        const auto files = directory_.entryInfoList(
-            {QStringLiteral("ncs_*.log")},
-            QDir::Files | QDir::NoSymLinks);
-        for (const QFileInfo &file : files) {
+        static const QRegularExpression pattern(QStringLiteral("^ncs_(\\d{8})\\.log$"));
+        const QDate cutoff =
+            QDateTime::currentDateTimeUtc().date().addDays(-(options_.retentionDays - 1));
+        const auto files =
+            directory_.entryInfoList({QStringLiteral("ncs_*.log")}, QDir::Files | QDir::NoSymLinks);
+        for (const QFileInfo& file : files)
+        {
             const auto match = pattern.match(file.fileName());
-            if (!match.hasMatch()) {
+            if (!match.hasMatch())
+            {
                 continue;
             }
             const QDate date = QDate::fromString(match.captured(1), QStringLiteral("yyyyMMdd"));
-            if (date.isValid() && date < cutoff) {
+            if (date.isValid() && date < cutoff)
+            {
                 QFile::remove(file.absoluteFilePath());
             }
         }
@@ -205,11 +216,8 @@ StructuredLogger::StructuredLogger(Options options)
 
 StructuredLogger::~StructuredLogger() = default;
 
-void StructuredLogger::log(
-    const LogLevel level,
-    const std::string_view module,
-    const std::string_view message,
-    const std::string_view requestId)
+void StructuredLogger::log(const LogLevel level, const std::string_view module,
+                           const std::string_view message, const std::string_view requestId)
 {
     const std::string_view effectiveRequestId = requestId.empty() ? currentRequestId() : requestId;
     const std::string sanitized = sanitizeSensitiveData(message);
