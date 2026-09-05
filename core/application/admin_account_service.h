@@ -40,8 +40,11 @@ class AdminAccountService final
                                                   std::string newPassword,
                                                   std::chrono::system_clock::time_point now);
 
-  private:
+    // Shared with the one-shot OWNER bootstrap (server --bootstrap-owner):
+    // 3-32 characters, ASCII alphanumeric or underscore.
     static bool validUsername(std::string_view username);
+
+  private:
     static bool validReason(std::string_view reason);
     static std::string adminPrincipal(std::int64_t adminId);
 

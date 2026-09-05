@@ -459,6 +459,15 @@ StartupOptions parseStartupOptions(const std::vector<std::string>& arguments,
             }
             value = arguments[index];
         }
+        if (option == "--bootstrap-owner")
+        {
+            // One-shot OWNER bootstrap is an action, not a configuration
+            // setting; the rest of the configuration still applies (the
+            // database path in particular).
+            result.bootstrapOwnerUsername = std::string(value);
+            result.action = StartupAction::BootstrapOwner;
+            continue;
+        }
         applySetting(result.config, option, value, option);
     }
 
@@ -567,6 +576,9 @@ Options:
   --allow-insecure-http <true|false>  Development loopback only (default false)
   --cors-allowed-origins <origin,...>
   --tencent-map-key <key>         Server-side geocoding/route key; empty enables fallback
+  --bootstrap-owner <username>    One-shot first-OWNER bootstrap; the initial password
+                                  comes from NCS_ADMIN_BOOTSTRAP_KEY and the account
+                                  is flagged for a forced first-login password change
   --help, -h
   --version
 

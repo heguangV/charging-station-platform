@@ -54,6 +54,8 @@ void InMemoryAdminRepository::seedDemoAdmin() {
 void InMemoryAdminRepository::withTransaction(
     const std::function<void()> &work) {
   std::lock_guard lock(mutex_);
+  const auto admins = admins_;
+  const auto nextAdminId = nextAdminId_;
   const auto audit = audit_;
   const auto adjustments = adjustments_;
   const auto commands = deviceCommands_;
@@ -63,6 +65,8 @@ void InMemoryAdminRepository::withTransaction(
   try {
     charging_.withTransaction(work);
   } catch (...) {
+    admins_ = admins;
+    nextAdminId_ = nextAdminId;
     audit_ = audit;
     adjustments_ = adjustments;
     deviceCommands_ = commands;

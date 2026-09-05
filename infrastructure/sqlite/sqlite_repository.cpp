@@ -3802,6 +3802,53 @@ AdminAccountWriteResult SqliteRepository::createAdminAccount(const std::int64_t 
     }
 }
 
+std::optional<AdminAccount>
+SqliteRepository::bootstrapOwnerAccount(const std::string_view username,
+                                        const std::string_view passwordHash, const std::int64_t at)
+{
+    AdminAccount created;
+    withTransaction(
+        [&]
+        {
+            // A demo OWNER (is_demo=1, disabled in production) never blocks the
+            // bootstrap; only a real, non-demo OWNER makes it one-shot.
+            Statement existing(transactionContext.database,
+                               "SELECT 1 FROM admin_account a JOIN admin_role r ON "
+                               "r.admin_id=a.id WHERE r.role='OWNER' AND a.is_demo=0");
+            if (existing.row())
+            {
+                created.id = 0;
+                return;
+            }
+            Statement usernameTaken(
+                transactionContext.database, "SELECT 1 FROM admin_account WHERE username=?");
+            usernameTaken.bind(1, username);
+            if (usernameTaken.row())
+                throw std::runtime_error("bootstrap owner username already exists");
+            Statement insert(transactionContext.database,
+                             "INSERT INTO admin_account(username,password_hash,status,"
+                             "must_change_password,is_demo,version) VALUES(?,?,1,1,0,1)");
+            insert.bind(1, username);
+            insert.bind(2, passwordHash);
+            insert.execute();
+            created.id = sqlite3_last_insert_rowid(transactionContext.database);
+            created.username = std::string(username);
+            created.passwordHash = std::string(passwordHash);
+            created.status = 1;
+            created.roles = {Role::Owner};
+            created.mustChangePassword = true;
+            created.version = 1;
+            Statement role(transactionContext.database,
+                           "INSERT INTO admin_role(admin_id,role) VALUES(?,?)");
+            role.bind(1, created.id);
+            role.bind(2, "OWNER");
+            role.execute();
+            addAuditEvent(AuditEvent{created.id, "ADMIN_CREATED", "ADMIN",
+                                     std::to_string(created.id), "bootstrap-owner", at});
+        });
+    return created.id == 0 ? std::nullopt : std::optional<AdminAccount>(std::move(created));
+}
+
 AdminAccountWriteResult SqliteRepository::updateAdminAccountStatus(
     const std::int64_t actorAdminId, const std::int64_t adminId, const int status,
     const std::string_view reason, const std::int64_t expectedVersion, const std::int64_t at,

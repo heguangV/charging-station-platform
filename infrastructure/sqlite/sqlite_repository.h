@@ -136,6 +136,13 @@ class SqliteRepository final : public core::application::UserAccountRepository,
     std::size_t idempotencyRecordCount() override;
 
     void ensureDevelopmentAdmin(bool enabled);
+    // UC-A-09 one-shot first-OWNER bootstrap: creates the account with role
+    // OWNER, is_demo=0, must_change_password=1 and returns it; returns
+    // std::nullopt when a non-demo OWNER already exists. Only the server's
+    // --bootstrap-owner startup action calls this.
+    std::optional<core::application::AdminAccount>
+    bootstrapOwnerAccount(std::string_view username, std::string_view passwordHash,
+                          std::int64_t at);
     std::optional<core::application::AdminAccount>
     findAdminByUsername(std::string_view username) override;
     std::optional<core::application::AdminAccount> findAdminById(std::int64_t id) override;

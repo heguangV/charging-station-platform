@@ -323,6 +323,33 @@ def main() -> int:
         )
         os.chmod(private_key, 0o600)
 
+        # UC-A-09 first-OWNER bootstrap: the one-shot command seeds the
+        # production OWNER on the fresh database, never echoes the key, and
+        # refuses to run twice.
+        bootstrap_key = "Ncs-Bootstrap-2026-K3y"
+        without_key = {name: value for name, value in os.environ.items()
+                       if name != "NCS_ADMIN_BOOTSTRAP_KEY"}
+        with_key = {**without_key, "NCS_ADMIN_BOOTSTRAP_KEY": bootstrap_key}
+
+        def run_bootstrap(environment):
+            return subprocess.run(
+                [str(server), "--environment", "production", "--database-path",
+                 str(database), "--bootstrap-owner", "root_owner"],
+                env=environment, capture_output=True, text=True)
+
+        missing_key = run_bootstrap(without_key)
+        assert missing_key.returncode == 1
+        assert "NCS_ADMIN_BOOTSTRAP_KEY" in missing_key.stderr
+
+        bootstrapped = run_bootstrap(with_key)
+        assert bootstrapped.returncode == 0, bootstrapped.stderr
+        assert "root_owner" in bootstrapped.stdout and "created" in bootstrapped.stdout
+        assert bootstrap_key not in bootstrapped.stdout + bootstrapped.stderr
+
+        again = run_bootstrap(with_key)
+        assert again.returncode == 1
+        assert "one-shot" in again.stderr
+
         def server_arguments(server_port: int):
             return [
                 str(server),
@@ -682,6 +709,58 @@ def main() -> int:
                 port, "/api/v1/admin/predictions?horizonHour=1", admin_headers)
             assert prediction_status == 200
             assert len(json.loads(prediction_body)["data"]["items"]) == 3
+
+            # UC-A-09: the bootstrapped OWNER logs in with the one-shot key
+            # while flagged for a password change, changes it, and the old key
+            # stops working.
+            owner_login_status, _, owner_login_body = request(
+                port, "/api/v1/admin/auth/login", json_headers, "POST",
+                json.dumps({
+                    "username": "root_owner",
+                    "password": bootstrap_key,
+                    "deviceId": "smoke-owner",
+                }))
+            owner_login = json.loads(owner_login_body)["data"]
+            owner_headers = {"Authorization": f"Bearer {owner_login['accessToken']}"}
+            assert owner_login_status == 200 and owner_login["admin"]["mustChangePassword"]
+            owner_new_password = "Ncs-Owner-New-2026"
+            owner_stale_status, _, _ = request(
+                port, "/api/v1/admin/me/password",
+                {**owner_headers, **json_headers}, "PUT",
+                json.dumps({
+                    "currentPassword": "wrong-bootstrap-key",
+                    "newPassword": owner_new_password,
+                }))
+            assert owner_stale_status == 401
+            owner_change_status, _, owner_change_body = request(
+                port, "/api/v1/admin/me/password",
+                {**owner_headers, **json_headers}, "PUT",
+                json.dumps({
+                    "currentPassword": bootstrap_key,
+                    "newPassword": owner_new_password,
+                }))
+            owner_changed = json.loads(owner_change_body)["data"]
+            assert owner_change_status == 200 and not owner_changed["mustChangePassword"]
+            owner_old_status, _, _ = request(
+                port, "/api/v1/admin/auth/login", json_headers, "POST",
+                json.dumps({
+                    "username": "root_owner",
+                    "password": bootstrap_key,
+                    "deviceId": "smoke-owner-old",
+                }))
+            assert owner_old_status == 401
+            owner_new_status, _, owner_new_body = request(
+                port, "/api/v1/admin/auth/login", json_headers, "POST",
+                json.dumps({
+                    "username": "root_owner",
+                    "password": owner_new_password,
+                    "deviceId": "smoke-owner-new",
+                }))
+            owner_new_login = json.loads(owner_new_body)["data"]
+            assert (
+                owner_new_status == 200
+                and not owner_new_login["admin"]["mustChangePassword"]
+            )
 
             # Scope isolation: user B saw no user-A or admin business events
             # (its own session.ready and application pings are expected).

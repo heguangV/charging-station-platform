@@ -267,5 +267,65 @@ int main()
                     "a failing transaction rolls back the account insert");
     }
 
+    // UC-A-09 first-OWNER bootstrap: the demo OWNER and the existing OPERATOR
+    // (ops_wang) never block it; only a real OWNER makes it one-shot.
+    {
+        SqliteRepository repository(database.path());
+        const std::int64_t countBefore =
+            queryInteger(database.path(), "SELECT COUNT(*) FROM admin_account");
+
+        bool threw = false;
+        try
+        {
+            repository.bootstrapOwnerAccount("ops_wang", initialHash, at);
+        }
+        catch (const std::runtime_error&)
+        {
+            threw = true;
+        }
+        tests.check(threw && queryInteger(database.path(), "SELECT COUNT(*) FROM admin_account") ==
+                                 countBefore,
+                    "bootstrapping an existing username throws and rolls back");
+
+        const auto bootstrapped = repository.bootstrapOwnerAccount("root_owner", initialHash, at);
+        tests.check(bootstrapped.has_value() && bootstrapped->username == "root_owner" &&
+                        bootstrapped->status == 1 && bootstrapped->mustChangePassword &&
+                        bootstrapped->version == 1 && bootstrapped->roles.size() == 1 &&
+                        bootstrapped->roles.front() == Role::Owner,
+                    "bootstrap creates an enabled OWNER flagged for a password change");
+        tests.check(queryInteger(database.path(), "SELECT is_demo FROM admin_account WHERE "
+                                                  "username='root_owner'") == 0 &&
+                        queryInteger(database.path(), "SELECT COUNT(*) FROM admin_role WHERE "
+                                                      "admin_id=" +
+                                                          std::to_string(bootstrapped->id) +
+                                                          " AND role='OWNER'") == 1 &&
+                        queryInteger(database.path(), "SELECT COUNT(*) FROM ops_log WHERE "
+                                                      "action='ADMIN_CREATED' AND reason="
+                                                      "'bootstrap-owner'") == 1,
+                    "bootstrap persists the non-demo OWNER role and its audit row");
+
+        const auto opsAccount = repository.findAdminByUsername("ops_wang");
+        tests.check(opsAccount.has_value() &&
+                        queryInteger(database.path(), "SELECT COUNT(*) FROM admin_role WHERE "
+                                                      "admin_id=" +
+                                                          std::to_string(opsAccount->id) +
+                                                          " AND role='OPERATOR'") == 1 &&
+                        queryInteger(database.path(), "SELECT COUNT(*) FROM admin_role WHERE "
+                                                      "admin_id=" +
+                                                          std::to_string(opsAccount->id) +
+                                                          " AND role='OWNER'") == 0,
+                    "an OPERATOR created by the account service is untouched and does not block "
+                    "the bootstrap");
+
+        tests.check(!repository.bootstrapOwnerAccount("root_owner_2", initialHash, at).has_value(),
+                    "a second bootstrap is refused once a non-demo OWNER exists");
+        tests.check(queryInteger(database.path(), "SELECT COUNT(*) FROM admin_account") ==
+                            countBefore + 1 &&
+                        queryInteger(database.path(), "SELECT COUNT(*) FROM ops_log WHERE "
+                                                      "action='ADMIN_CREATED' AND reason="
+                                                      "'bootstrap-owner'") == 1,
+                    "the refused bootstrap leaves accounts and the audit trail unchanged");
+    }
+
     return tests.result();
 }
