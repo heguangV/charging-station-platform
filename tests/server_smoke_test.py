@@ -163,13 +163,16 @@ class WsClient:
         self.received = []
         self._lock = threading.Lock()
         self._socket_lock = threading.Lock()
+        self._reader_thread = None
         # A real client reads its socket continuously. The background reader
         # answers application pings immediately so the server's pong timeout
         # cannot expire while the test drives the other connections: the
         # phases before the heartbeat check take over a minute on slow
         # Windows CI runners, longer than the server's 60 s pong timeout.
         if self.status == 101:
-            threading.Thread(target=self._read_forever, daemon=True).start()
+            self._reader_thread = threading.Thread(
+                target=self._read_forever, daemon=True)
+            self._reader_thread.start()
 
     def _read_forever(self):
         # The background reader owns the socket. It never holds _socket_lock
@@ -229,6 +232,18 @@ class WsClient:
         with self._socket_lock:
             self._socket.sendall(header + mask + masked)
 
+    def send_oversized_header(self, payload_length: int):
+        """Announce an oversized inbound frame by sending only its header:
+        the server's 1009 check fires at header parse, before the mask or
+        payload bytes arrive. Keeping the writer out of the server's close
+        path makes the 1009 close frame readable back deterministically —
+        sending the full payload instead races the server's close against
+        the client's in-flight write (SSLEOFError on the writer)."""
+        header = (bytes([0x80 | 0x1, 0x80 | 127])
+                  + payload_length.to_bytes(8, "big"))
+        with self._socket_lock:
+            self._socket.sendall(header)
+
     def send_text(self, payload: str):
         self._send_frame(0x1, payload.encode())
 
@@ -284,8 +299,36 @@ class WsClient:
             return [event for event in self.received if event.get("type") == event_type]
 
     def close(self):
-        self._send_frame(0x8, b"")
-        self._socket.close()
+        """Send the close frame, read the server's close reply back (bounded
+        wait), then stop the background reader BEFORE the socket fd can be
+        reused. Closing the fd while the reader is inside SSL_read/SSL_write
+        leaves a live SSL object holding the old fd number: the next fresh
+        connection reuses that fd, and the stale reader then consumes the new
+        handshake's bytes or writes stale frames into it. Under CPU
+        contention this surfaces as WRONG_VERSION_NUMBER / bad record mac on
+        the request that follows close() — the reader must be joined before
+        this method returns."""
+        with self._lock:
+            already_closed = self.closed
+        if not already_closed:
+            try:
+                self._send_frame(0x8, b"")
+            except OSError:
+                pass
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                with self._lock:
+                    if self.closed:
+                        break
+                time.sleep(0.02)
+        with self._lock:
+            self.closed = True
+        try:
+            self._socket.close()
+        except OSError:
+            pass
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=2.0)
 
 
 def main() -> int:
@@ -796,17 +839,21 @@ def main() -> int:
                 ws_user.closed, ws_user.close_code)
 
             # Oversized inbound frame: the server answers with a protocol-level
-            # 1009 close frame instead of dropping the transport (13.1). The
-            # admin token reuses the admin session whose assertions are done;
-            # this replaces ws_admin (closed 1001) without disturbing the
-            # user-B heartbeat checks below.
+            # 1009 close frame instead of dropping the transport (13.1). Only
+            # the frame header is sent: the server must reject at header
+            # parse, and sending the full 70 KiB payload races the server's
+            # close against the client's in-flight write. The admin token
+            # reuses the admin session whose assertions are done; this
+            # replaces ws_admin (closed 1001) without disturbing the user-B
+            # heartbeat checks below.
             ws_oversized = WsClient(port, admin_token)
             assert ws_oversized.status == 101
             ws_oversized.recv_events(2.0)
-            ws_oversized.send_text("x" * (70 * 1024))
+            ws_oversized.send_oversized_header(70 * 1024)
             ws_oversized.recv_events(3.0)
             assert ws_oversized.closed and ws_oversized.close_code == 1009, (
                 ws_oversized.closed, ws_oversized.close_code)
+            ws_oversized.close()
 
             # Heartbeat: user B's idle connection receives the application
             # ping, answers with pong, and stays connected.
@@ -824,6 +871,7 @@ def main() -> int:
             dashboard_logout_retry, _, _ = request(
                 port, "/api/v1/dashboard/auth/logout", dashboard_headers, "POST")
             assert dashboard_logout == 200 and dashboard_logout_retry == 200
+            ws_dashboard.close()
         except BaseException:
             # Surface server-side diagnostics (errors, structured logs) before
             # the temporary directory is cleaned up.
