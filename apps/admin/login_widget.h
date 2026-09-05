@@ -17,7 +17,7 @@ class LoginWidget final : public QWidget
     explicit LoginWidget(QWidget* parent = nullptr);
 
   signals:
-    void loginRequested(const QString& username, const QString& password);
+    void loginRequested(const QString& username, const QString& password, const QString& deviceId);
 
   public slots:
     void showError(const QString& message);

@@ -6,8 +6,10 @@ TARGET = ncs_admin
 
 SOURCES += \
     admin_api_client.cpp \
+    admin_main_window_actions.cpp \
     admin_main_window.cpp \
     admin_main_window_data.cpp \
+    admin_main_window_utils.cpp \
     login_widget.cpp \
     main.cpp \
     $$PWD/../../core/src/error.cpp \
@@ -17,6 +19,7 @@ SOURCES += \
 HEADERS += \
     admin_api_client.h \
     admin_main_window.h \
+    admin_main_window_utils.h \
     admin_types.h \
     login_widget.h \
     $$PWD/../../core/include/ncs/core/error.h \

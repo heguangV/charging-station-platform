@@ -24,8 +24,6 @@ LoginWidget::LoginWidget(QWidget* parent)
     usernameEdit_->setPlaceholderText(QStringLiteral("请输入管理员账号"));
     passwordEdit_->setPlaceholderText(QStringLiteral("请输入密码"));
     passwordEdit_->setEchoMode(QLineEdit::Password);
-    usernameEdit_->setText(QStringLiteral("admin"));
-    passwordEdit_->setText(QStringLiteral("123456"));
     errorLabel_->setObjectName(QStringLiteral("loginError"));
     errorLabel_->setWordWrap(true);
 
@@ -52,7 +50,8 @@ LoginWidget::LoginWidget(QWidget* parent)
             showError(QStringLiteral("请输入账号和密码"));
             return;
         }
-        emit loginRequested(usernameEdit_->text().trimmed(), passwordEdit_->text());
+        emit loginRequested(usernameEdit_->text().trimmed(), passwordEdit_->text(),
+                            QStringLiteral("admin-desktop-a1"));
     });
     connect(passwordEdit_, &QLineEdit::returnPressed, loginButton_, &QPushButton::click);
 }

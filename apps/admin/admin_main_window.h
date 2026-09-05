@@ -26,16 +26,20 @@ class AdminMainWindow final : public QMainWindow
     explicit AdminMainWindow(QWidget* parent = nullptr);
 
   private slots:
-    void handleLogin(const QString& username, const QString& password);
+    void handleLogin(const QString& username, const QString& password, const QString& deviceId);
     void openWorkspace();
+    void refreshAllData();
     void showApiError(const QString& message);
     void refreshStations();
     void refreshChargers();
     void refreshUsers();
+    void refreshOverview();
+    void refreshPredictions();
     void addStation();
     void removeStation();
     void updateChargerStatus();
     void toggleUserStatus();
+    void restartCharger();
 
   private:
     void buildLoginPage();
@@ -45,8 +49,8 @@ class AdminMainWindow final : public QMainWindow
     QWidget* createChargersPage();
     QWidget* createUsersPage();
     QWidget* createPredictionsPage();
-    QWidget* createMetricCard(const QString& title, const QString& value, const QString& detail);
-    void seedDemoData();
+    QWidget* createMetricCard(const QString& title, const QString& value, const QString& detail,
+                              QLabel** valueLabel = nullptr);
     void styleApplication();
     void setPage(int index);
     void fillStationTable();
@@ -65,11 +69,22 @@ class AdminMainWindow final : public QMainWindow
     QLineEdit* userSearch_;
     QComboBox* chargerStatus_;
     QLabel* statusLabel_;
+    QLabel* dashboardTodayRevenue_;
+    QLabel* dashboardMonthRevenue_;
+    QLabel* dashboardOnlineCharger_;
+    QLabel* dashboardRegisteredUser_;
+    QLabel* dashboardIdleCharger_;
+    QLabel* dashboardInUseCharger_;
+    QLabel* dashboardFaultCharger_;
+    QLabel* dashboardHealthScore_;
+    QTableWidget* dashboardRevenueTable_;
+    QTableWidget* predictionTable_;
     AdminApiClient* apiClient_;
     QList<Station> stations_;
     QList<Charger> chargers_;
     QList<User> users_;
     QList<RevenuePoint> revenue_;
+    QList<PredictionPoint> predictions_;
 };
 
 } // namespace ncs::admin
