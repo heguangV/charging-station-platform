@@ -21,6 +21,7 @@ compile_commands.json
 *.log
 logs/
 backups/
+apps/dashboard/public/data/
 *.dump
 *.db
 *.sqlite*
@@ -51,3 +52,5 @@ Thumbs.db
 # Frontend & Node.js
 node_modules/
 .pnpm-store/
+__pycache__/
+*.py[cod]

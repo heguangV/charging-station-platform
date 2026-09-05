@@ -1,12 +1,12 @@
 #include "user_main_window.h"
 
-#include "ui/charger_table.h"
-#include "ui/charge_soc_gauge.h"
 #include "ui/bottom_navigation.h"
+#include "ui/charge_soc_gauge.h"
+#include "ui/charger_table.h"
 
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
-#include <QKeyEvent>
 #include <QPixmap>
 #include <QStackedWidget>
 #include <QTimer>
@@ -87,7 +87,8 @@ void UserMainWindow::showDetail(int stationId)
     const StationSummary station = service_.stations().at(stationId - 1);
     detailTitle_->setText(station.name);
     detailMeta_->setText(station.address + QStringLiteral("  ·  ") + station.distance +
-                         QStringLiteral("  ·  ") + money(station.priceCentPerKwh) + QStringLiteral(" / 度"));
+                         QStringLiteral("  ·  ") + money(station.priceCentPerKwh) +
+                         QStringLiteral(" / 度"));
     chargerTable_->setChargers(service_.chargers(stationId));
     pages_->setCurrentIndex(kDetailPage);
 }
@@ -100,7 +101,8 @@ void UserMainWindow::showCharge()
 
 void UserMainWindow::refreshCharge()
 {
-    if (!chargeDuration_) return;
+    if (!chargeDuration_)
+        return;
     const ChargeProgress value = service_.progress();
     const int hours = value.durationSeconds / 3600;
     const int minutes = value.durationSeconds / 60 % 60;
@@ -116,12 +118,13 @@ void UserMainWindow::refreshCharge()
     chargeSoc_->setValue(value.soc);
     if (!chargingStarted_ && !selectedChargerCode_.isEmpty())
     {
-        const int seconds = service_.reservationRemainingSeconds();
-        if (seconds > 0)
+        const int reservationSeconds = service_.reservationRemainingSeconds();
+        if (reservationSeconds > 0)
         {
             reservationCountdown_->setText(
-                QStringLiteral("请在 %1:%2 内开始充电").arg(seconds / 60, 2, 10, QLatin1Char('0'))
-                    .arg(seconds % 60, 2, 10, QLatin1Char('0')));
+                QStringLiteral("请在 %1:%2 内开始充电")
+                    .arg(reservationSeconds / 60, 2, 10, QLatin1Char('0'))
+                    .arg(reservationSeconds % 60, 2, 10, QLatin1Char('0')));
         }
         else
         {
@@ -145,8 +148,8 @@ void UserMainWindow::refreshProfile()
     else
     {
         profileAvatar_->setText({});
-        profileAvatar_->setPixmap(avatar.scaled(profileAvatar_->size(), Qt::KeepAspectRatioByExpanding,
-                                                 Qt::SmoothTransformation));
+        profileAvatar_->setPixmap(avatar.scaled(
+            profileAvatar_->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
     }
 }
 
@@ -159,9 +162,12 @@ void UserMainWindow::notify(const QString& message, bool error)
             .arg(error ? QStringLiteral("#B42318") : QStringLiteral("#0F766E"),
                  error ? QStringLiteral("#FFF0F0") : QStringLiteral("#E2F3F0")));
     const int timeoutMs = error ? 5000 : 3200;
-    QTimer::singleShot(timeoutMs, notice_, [notice = notice_, message] {
-        if (notice->text() == message) notice->hide();
-    });
+    QTimer::singleShot(timeoutMs, notice_,
+                       [notice = notice_, message]
+                       {
+                           if (notice->text() == message)
+                               notice->hide();
+                       });
 }
 
 } // namespace ncs::user
