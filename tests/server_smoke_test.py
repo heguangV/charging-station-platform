@@ -681,7 +681,8 @@ def main() -> int:
             prediction_status, _, prediction_body = request(
                 port, "/api/v1/admin/predictions?horizonHour=1", admin_headers)
             assert prediction_status == 200
-            assert len(json.loads(prediction_body)["data"]["items"]) == 3
+            # UC-D-02 v8 种子含 5 个站点，无站点过滤时逐站返回一项预测。
+            assert len(json.loads(prediction_body)["data"]["items"]) == 5
 
             # Scope isolation: user B saw no user-A or admin business events
             # (its own session.ready and application pings are expected).
