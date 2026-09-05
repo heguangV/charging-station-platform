@@ -228,6 +228,22 @@ target_link_libraries(ncs_sqlite_seed_tests PRIVATE
 add_test(NAME ncs_sqlite_seed COMMAND ncs_sqlite_seed_tests)
 set_tests_properties(ncs_sqlite_seed PROPERTIES LABELS "unit;database;seed")
 
+add_executable(ncs_sqlite_seed_conflict_tests
+    sqlite_seed_conflict_test.cpp
+)
+
+set_target_properties(ncs_sqlite_seed_conflict_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+target_link_libraries(ncs_sqlite_seed_conflict_tests PRIVATE
+    ncs::infrastructure_sqlite
+)
+add_test(NAME ncs_sqlite_seed_conflict COMMAND ncs_sqlite_seed_conflict_tests)
+set_tests_properties(ncs_sqlite_seed_conflict PROPERTIES LABELS "unit;database;seed")
+
 add_executable(ncs_station_service_tests
     station_service_test.cpp
 )

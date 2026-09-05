@@ -406,10 +406,10 @@ void validateSeedConflicts(sqlite3* database)
                                          std::string(username) +
                                          "' already exists; resolve the conflicting account "
                                          "before upgrading to schema v8");
-            throw std::runtime_error("UC-D-02 seed conflict: phone '" + std::string(phone) +
-                                     "' of user '" + find.text(0) +
-                                     "' collides with the seed phone set; resolve the "
-                                     "conflicting account before upgrading to schema v8");
+            throw std::runtime_error("UC-D-02 seed conflict: a phone identity of user '" +
+                                     find.text(0) +
+                                     "' collides with the seed set; resolve the conflicting "
+                                     "account before upgrading to schema v8");
         }
     }
 }
