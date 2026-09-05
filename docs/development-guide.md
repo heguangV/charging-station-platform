@@ -19,6 +19,7 @@
 | `database-api.md` | 定义 HTTPS REST / WebSocket 通信契约 |
 | `tencent-map-setup.md` | 定义腾讯地图本地配置与排错步骤 |
 | `enhancement-tasks-implementation-plan.md` | 定义 `UC-U-11`、`UC-X-01` 的模块边界、实施顺序、产物和验证门禁 |
+| `database-milestone-implementation-plan.md` | 定义数据库里程碑六条工作流的模块边界、文件归属、实施顺序与验证门禁 |
 
 若设计文档与 SRS 冲突，以 SRS 为准；设计文档不得新增未经需求支持的强制业务行为。
 
