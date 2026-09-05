@@ -1,3 +1,4 @@
+#include "core/application/admin_account_service.h"
 #include "core/application/bounded_executor.h"
 #include "core/application/business_numbers.h"
 #include "core/application/charge_flow_service.h"
@@ -98,6 +99,7 @@ int main()
     core::application::BusinessNumbers numbers;
     core::application::ChargeFlowService flowService(charging, accounts, accounts, numbers, 3600);
     core::application::AdminAuthService adminAuth(adminRepository, sessions);
+    core::application::AdminAccountService adminAccounts(adminRepository, sessions);
     core::application::AdminUserService adminUsers(adminRepository, flowService, sessions);
     core::application::AdminStationService adminStations(adminRepository, charging, flowService,
                                                          numbers);
@@ -106,7 +108,8 @@ int main()
     server::ServerApp app;
     server::controller::ApiRoutes api(app);
     server::controller::AdminRoutes adminRoutes(api, adminAuth, adminUsers, adminStations, adminOps,
-                                                sessions, blockingExecutor, idempotency);
+                                                sessions, blockingExecutor, idempotency,
+                                                adminAccounts);
     app.validate();
 
     const auto login = call(app, crow::HTTPMethod::POST, "/api/v1/admin/auth/login",

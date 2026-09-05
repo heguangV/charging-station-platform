@@ -1,5 +1,6 @@
 #include <crow.h>
 
+#include "core/application/admin_account_service.h"
 #include "core/application/admin_auth_service.h"
 #include "core/application/admin_ops_service.h"
 #include "core/application/admin_repository.h"
@@ -179,6 +180,7 @@ int main(int argc, char* argv[])
         chargeFlowService.runMaintenance(std::chrono::system_clock::now());
         ncs::server::websocket::ChargeProgressPusher progressPusher(chargeFlowService, hub);
         ncs::core::application::AdminAuthService adminAuthService(repository, sessions);
+        ncs::core::application::AdminAccountService adminAccountService(repository, sessions);
         ncs::core::application::AdminUserService adminUserService(repository, chargeFlowService,
                                                                   sessions);
         ncs::core::application::AdminStationService adminStationService(
@@ -232,7 +234,7 @@ int main(int argc, char* argv[])
             startup.config.demoCredentialsEnabled());
         ncs::server::controller::AdminRoutes adminRoutes(
             apiRoutes, adminAuthService, adminUserService, adminStationService, adminOpsService,
-            sessions, blockingExecutor, idempotency);
+            sessions, blockingExecutor, idempotency, adminAccountService);
         ncs::server::controller::DashboardRoutes dashboardRoutes(
             apiRoutes, adminAuthService, dashboardService, sessions, blockingExecutor,
             startup.config.dashboardSnapshotPath, hub);
