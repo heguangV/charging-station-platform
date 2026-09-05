@@ -30,14 +30,17 @@ class ApiClient final : public QObject
     Q_OBJECT
   public:
     using Handler = std::function<void(ApiReply)>;
+    using BytesHandler = std::function<void(QByteArray, QString, int)>;
 
     explicit ApiClient(QUrl baseUrl, QObject* parent = nullptr);
     void setAccessToken(const QString& token);
     QString accessToken() const;
     void get(const QString& path, const QUrlQuery& query, Handler handler);
+    void getBytes(const QString& path, BytesHandler handler);
     void postJson(const QString& path, const QJsonObject& body, Handler handler,
                   const QHash<QByteArray, QByteArray>& headers = {});
     void putJson(const QString& path, const QJsonObject& body, Handler handler);
+    void deleteJson(const QString& path, const QJsonObject& body, Handler handler);
     void postMultipart(const QString& path, QHttpMultiPart* body, Handler handler);
 
     // Kept public to make the stable HTTP-envelope contract unit-testable without a server.

@@ -15,7 +15,9 @@
 #include <QToolButton>
 #include <QToolTip>
 #include <QUrl>
+#include <QUrlQuery>
 #include <QVBoxLayout>
+#include <QtMath>
 
 #ifdef NCS_HAS_WEBENGINE
 #include <QWebEngineView>
@@ -23,6 +25,25 @@
 
 namespace ncs::user
 {
+namespace
+{
+NavigationRoute browserFallbackRoute(const StationSummary& station, const QString& mode,
+                                    const QString& distance)
+{
+    const QString routeType = mode == QStringLiteral("walking") ? QStringLiteral("walk")
+        : mode == QStringLiteral("transit") ? QStringLiteral("bus") : QStringLiteral("drive");
+    QUrl url(QStringLiteral("https://apis.map.qq.com/uri/v1/routeplan"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("type"), routeType);
+    query.addQueryItem(QStringLiteral("from"), QStringLiteral("当前位置"));
+    query.addQueryItem(QStringLiteral("to"), QStringLiteral("%1,%2,%3")
+        .arg(QString::number(station.latitude, 'f', 6),
+             QString::number(station.longitude, 'f', 6), station.name));
+    url.setQuery(query);
+    return {station.name, station.address, distance.isEmpty() ? station.distance : distance, mode,
+            url.toString()};
+}
+} // namespace
 
 QWidget* UserMainWindow::createNavigationPage()
 {
@@ -43,7 +64,7 @@ QWidget* UserMainWindow::createNavigationPage()
     heading->addWidget(routeHelp);
     heading->addStretch();
     layout->addLayout(heading);
-    layout->addWidget(new QLabel(QStringLiteral("起点：当前位置（模拟 GPS）")));
+    layout->addWidget(new QLabel(QStringLiteral("起点：当前位置")));
     navigationMode_ = new QComboBox;
     navigationMode_->addItem(QStringLiteral("驾车"), QStringLiteral("driving"));
     navigationMode_->addItem(QStringLiteral("步行"), QStringLiteral("walking"));
@@ -96,7 +117,19 @@ void UserMainWindow::showNavigation()
     bottomNavigation_->hide();
     const QString mode = navigationMode_->currentData().toString();
     const int requestId = ++navigationRequestId_;
-    navigationRoute_ = service_.route(selectedStationId_, mode);
+    if (userApi_)
+    {
+        const auto station = stationsById_.constFind(selectedStationId_);
+        if (station == stationsById_.cend())
+        {
+            notify(QStringLiteral("站点信息已更新，请重新选择"), true);
+            showHome();
+            return;
+        }
+        navigationRoute_ = browserFallbackRoute(*station, mode, selectedStationDistance_);
+    }
+    else
+        navigationRoute_ = service_.route(selectedStationId_, mode);
     navigationSummary_->setText(QStringLiteral("正在向腾讯地图请求路线…"));
     navigationBrowserButton_->setEnabled(!navigationRoute_.url.isEmpty());
 #ifdef NCS_HAS_WEBENGINE
@@ -110,7 +143,9 @@ void UserMainWindow::showNavigation()
     }
     const int stationId = selectedStationId_;
     userApi_->navigationRoute(
-        stationId, std::nullopt, std::nullopt, QStringLiteral("北京市海淀区中关村"), mode,
+        stationId, qRound64(stationsById_.value(stationId).latitude * 1000000),
+        qRound64(stationsById_.value(stationId).longitude * 1000000),
+        stationsById_.value(stationId).address, mode,
         [this, stationId, requestId](ApiReply reply)
         {
             if (requestId != navigationRequestId_ || stationId != selectedStationId_ ||
@@ -128,7 +163,18 @@ void UserMainWindow::showNavigation()
 void UserMainWindow::showNavigationFallback(const QString& reason)
 {
     const QString mode = navigationMode_->currentData().toString();
-    navigationRoute_ = service_.route(selectedStationId_, mode);
+    if (userApi_)
+    {
+        const auto station = stationsById_.constFind(selectedStationId_);
+        if (station == stationsById_.cend())
+        {
+            showHome();
+            return;
+        }
+        navigationRoute_ = browserFallbackRoute(*station, mode, selectedStationDistance_);
+    }
+    else
+        navigationRoute_ = service_.route(selectedStationId_, mode);
     const QString modeText = mode == QStringLiteral("walking")   ? QStringLiteral("步行")
                              : mode == QStringLiteral("transit") ? QStringLiteral("公交")
                                                                  : QStringLiteral("驾车");
