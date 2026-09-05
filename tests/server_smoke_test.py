@@ -738,7 +738,10 @@ def main() -> int:
             ml_task_no = json.loads(ml_start_body)["data"]["taskNo"]
             assert ml_start_status == 202
             ml_task = None
-            deadline = time.monotonic() + 20
+            # CI runners (Debug build, v8 seed with 90 days of history) can
+            # push a PREDICT task past 20s; 60s keeps the margin without
+            # masking a genuinely hung worker.
+            deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
                 task_status, _, task_body = request(
                     port, f"/api/v1/admin/ml-tasks/{ml_task_no}", admin_headers)
