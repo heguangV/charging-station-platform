@@ -5,10 +5,10 @@
 | 项目   | 内容                                       |
 | ---- | ---------------------------------------- |
 | 项目名称 | 东软电动汽车充电桩应用管理平台 NCS                      |
-| 文档版本 | V1.0                                     |
+| 文档版本 | V1.1                                     |
 | 文档类型 | 软件需求规格说明书                                |
 | 目标平台 | Ubuntu 22.04+ 用户端/PC 管理端/Crow 服务端；Windows 10/11 保持源码构建能力；Android 为远期目标 |
-| 技术栈  | Qt 6.2 / Qt Widgets / Crow / HTTPS REST + WebSocket / C++17 / CMake / SQLite 3 / Python 3.10+ / Vue 3 + ECharts |
+| 技术栈  | Qt 6.2 / Qt Widgets / Crow / HTTPS REST + WebSocket / C++17 / CMake / SQLite 3 / Python 3.10+ / Vue 3 + ECharts；增强任务按需使用 Qt Multimedia / Qt WebSockets |
 | 开发工具 | Qt Creator 6.2+ |
 | 数据库  | SQLite 3，单文件 `charge_platform.db`，仅由同机 Crow 服务端访问 |
 
@@ -54,7 +54,7 @@ NFR-<类别>-<序号>       非功能需求
 BR-<序号>               业务规则
 ```
 
-子系统代号：`U` 用户端、`A` 管理端、`D` 数据库端、`W` Web 大屏、`M` 机器学习。
+子系统代号：`U` 用户端、`A` 管理端、`D` 数据库端、`W` Web 大屏、`M` 机器学习、`X` 与正式产品解耦的独立增强子工程。
 
 ---
 
@@ -307,6 +307,28 @@ BR-<序号>               业务规则
 
 ---
 
+### UC-U-11 拍照上传头像增强
+
+**前置条件**：用户已登录，`UC-U-05` 规定的真实头像 REST 上传与受权读取链路可用。
+
+**主流程**
+
+1. 用户点击个人中心头像，可选“拍照”、“从本地选择”或“取消”；两种图片来源共用同一校验、裁剪、压缩和上传链路。
+2. 选择“拍照”后立即显示加载状态，对话框在可用摄像头的验收环境中应在 1 秒内展示预览。
+3. 用户点击“拍摄”后定格画面，可重拍或确认使用；处理期间拍摄按钮禁用。
+4. 确认时在内存中居中裁剪为正方形并压缩，摄像头生成的上传载荷不超过 200 KiB，然后调用现有 `POST /api/v1/user/me/avatar`。
+5. 只有服务端返回成功后才刷新头像；客户端不保存服务端文件路径、不直接访问 SQLite，也不因拍照留下未受控临时文件。
+
+**异常流**
+
+- 构建环境缺少 Qt Multimedia 时，`ncs_user` 必须继续构建，且只隐藏“拍照”入口，不影响本地选图。
+- 已构建拍照能力但无摄像头、设备被占用或权限被拒绝时，必须显示明确提示，不崩溃、不阻塞 UI。
+- 用户取消、关闭对话框、图片处理失败、网络失败或服务端拒绝时，头像和服务端数据保持原状，界面恢复可操作。
+
+**验收标准**：有摄像头环境完整通过预览、拍摄、重拍、上传和重启后重新加载；无摄像头和未安装 Multimedia 环境分别通过运行时与编译期降级验收；取消和失败场景不产生数据变化或文件残留。
+
+---
+
 ## 4. PC 管理端需求（UC-A）
 
 ### UC-A-01 管理员登录
@@ -526,6 +548,31 @@ Crow 服务端每 30 秒聚合数据并原子替换 `apps/dashboard/public/data/
 
 ---
 
+## 7A. 独立增强子工程需求（UC-X）
+
+### UC-X-01 充电桩设备通信模拟器
+
+**边界**：该任务为可独立构建和运行的教学子工程，不得改变或替换 `ncs_server` 的计费、结算、设备命令和鉴权 WebSocket 行为，不得成为 `ncs_user`、`ncs_admin` 或 `ncs_server` 的必需构建依赖。
+
+**主流程**
+
+1. `PlatformSimulator` 通过 `QWebSocketServer` 监听配置端口，`PileSimulator` 通过 `QWebSocket` 主动连接平台；默认只监听回环地址。
+2. 双方使用固定数组帧：请求 `[2,messageId,action,payload]`、成功响应 `[3,messageId,payload]`、失败响应 `[4,messageId,errorCode,errorDescription,details]`。
+3. 设备连接后先发送 `BootNotification`，接受后进入 `Idle`；每 10 秒发送 `Heartbeat`，状态变化时发送 `StatusNotification`，充电中每 2 秒发送 `MeterValues`。
+4. 平台可向指定设备发送 `RemoteStartTransaction`、`RemoteStopTransaction` 和 `RemoteReset`；设备状态机至少覆盖 `Booting`、`Idle`、`Charging` 和 `Faulted`。
+5. 桩端界面展示连接、设备和计量状态并支持通信中断、恢复连接、故障注入和恢复；平台界面展示设备状态、最后心跳和命令结果。
+
+**异常流和容量**
+
+- 断线后按 1、2、4、8、16、30 秒退避重连，之后保持 30 秒上限；连接成功后重置退避。
+- 底层连接已断开时立即标记离线；半开连接连续 30 秒未收到心跳时必须在第 30 秒截止前标记离线。注册表保留离线记录，在线视图不再计入该设备。
+- 未知响应 ID、非法 JSON、非法帧、未知 Action、重复设备 ID 和非法状态转移必须记录脱敏警告或返回结构化错误，不崩溃。同一设备 ID 已在线时拒绝后到连接。
+- 平台至少支持 5 个桩同时在线和并发命令，请求与响应不得跨设备或串号。
+
+**验收标准**：自动化集成测试同时启动 5 个桩，验证注册、心跳、并发开始、独立计量上报、并发停止、响应匹配、半开超时离线和恢复连接；两端 GUI 均提供正常、空状态、错误和恢复的验收证据。
+
+---
+
 ## 8. 非功能需求（NFR）
 
 | 编号       | 类别   | 要求                                       |
@@ -568,6 +615,7 @@ Crow 服务端每 30 秒聚合数据并原子替换 `apps/dashboard/public/data/
 | UC-U-01      | 用户登录   | `apps/user/`、`server/controller/`、`core/application/` | 阶段三 + 四 |
 | UC-U-02 ~ 03 | 电站查询   | `apps/user/`、`infrastructure/map/`、`core/application/` | 阶段三 + 四 |
 | UC-U-05      | 用户中心   | `apps/user/`、`infrastructure/files/`、`core/application/` | 阶段三 + 四 |
+| UC-U-11      | 拍照头像增强 | `apps/user/`、`tests/` | 阶段四 + 增强任务 |
 | UC-U-04      | 地图导航   | `apps/user/`、`infrastructure/map/`       | 阶段四      |
 | UC-U-06 ~ 10 | 充电流程   | `apps/user/`、`server/runtime/`、`core/application/` | 阶段三 + 四 |
 | UC-A-01 ~ 02 | 管理端框架  | `apps/admin/`、`server/controller/`       | 阶段三 + 五 |
@@ -576,6 +624,7 @@ Crow 服务端每 30 秒聚合数据并原子替换 `apps/dashboard/public/data/
 | UC-M-01 ~ 04 | 机器学习   | `ml/train.py`、`ml/predict.py`            | 阶段六      |
 | UC-A-08      | 预测展示   | `apps/admin/`、`server/runtime/`          | 阶段六      |
 | UC-W-01 ~ 04 | Web 大屏 | `apps/dashboard/`、`server/controller/`  | 阶段六      |
+| UC-X-01      | 设备通信模拟器 | `tools/device_link_sim/`（独立 CMake） | 增强任务 |
 | NFR-C-01     | 跨平台    | `CMakeLists.txt`、`CMakePresets.json`     | 阶段一 + 收尾 |
 | NFR-C-04     | 业务并发   | 数据库工作线程、Crow/WebSocket 事件处理、ML 子进程与相关测试 | 阶段一 + 收尾 |
 
@@ -587,6 +636,7 @@ Crow 服务端每 30 秒聚合数据并原子替换 `apps/dashboard/public/data/
 - [ ] 用户端：电站列表页截图（含距离、价格、空闲数）
 - [ ] 用户端：地图导航页面截图
 - [ ] 用户端：个人中心页面截图（头像、昵称、余额）
+- [ ] 用户端：有摄像头完整拍照上传，无摄像头/无 Multimedia 降级证据
 - [ ] 用户端：充电中实时计费页 + 结算小票截图
 - [ ] 管理端：充电站管理界面截图
 - [ ] 管理端：充电桩管理界面截图
@@ -595,3 +645,4 @@ Crow 服务端每 30 秒聚合数据并原子替换 `apps/dashboard/public/data/
 - [ ] Web 大屏：综合数据分析大屏截图
 - [ ] 机器学习：负荷预测曲线与评估指标输出
 - [ ] Ubuntu 22.04 下编译运行成功的终端截图
+- [ ] 设备通信模拟器：5 桩并发、计量上报、离线判定和重连恢复证据

@@ -3,6 +3,8 @@
 | 依赖 | 基线版本 | 用途 | 许可/获取 | 安全与升级原则 |
 | --- | --- | --- | --- | --- |
 | Qt | 6.2.x | Core、Widgets、Network、Sql；Charts/WebEngine 按模块启用 | Qt 官方发行；使用前确认团队许可条件 | 小版本升级先做 Windows/Ubuntu 构建与 UI 回归 |
+| Qt Multimedia / MultimediaWidgets | 6.2.x（计划） | `UC-U-11` 摄像头枚举、预览和拍照；仅 `ncs_user` 可选启用 | Qt 官方发行；Ubuntu 对应 `qt6-multimedia-dev` | 缺少模块时必须降级构建；升级后回归无设备、权限拒绝和实机拍摄 |
+| Qt WebSockets | 6.2.x（计划） | `UC-X-01` 独立模拟器的 WebSocket 客户端与服务端 | Qt 官方发行；Ubuntu 对应 `qt6-websockets-dev` | 不链接正式 NCS 目标；升级后回归帧限制、断线重连和 5 设备并发 |
 | CMake | 3.24+ | 统一构建与安装 | BSD-3-Clause | CI 固定已验证版本，本地不得低于最低版本 |
 | Ninja | 1.10+ | 默认构建器 | Apache-2.0 | 跟随受支持系统包 |
 | Crow | 待阶段三锁定 | HTTPS REST / WebSocket 服务端 | BSD-3-Clause | 锁定提交/版本并审查传递依赖与安全公告 |
