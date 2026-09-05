@@ -15,6 +15,23 @@ target_link_libraries(ncs_admin_routes_tests PRIVATE
 )
 add_test(NAME ncs_admin_routes COMMAND ncs_admin_routes_tests)
 
+add_executable(ncs_admin_account_routes_tests
+    admin_account_routes_test.cpp
+)
+
+set_target_properties(ncs_admin_account_routes_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+target_link_libraries(ncs_admin_account_routes_tests PRIVATE
+    ncs::server_controller
+    Qt6::Core
+    Qt6::Gui
+)
+add_test(NAME ncs_admin_account_routes COMMAND ncs_admin_account_routes_tests)
+
 add_executable(ncs_server_config_tests
     server_config_test.cpp
 )
