@@ -229,6 +229,18 @@ class WsClient:
         with self._socket_lock:
             self._socket.sendall(header + mask + masked)
 
+    def send_oversized_header(self, payload_length: int):
+        """Announce an oversized inbound frame by sending only its header:
+        the server's 1009 check fires at header parse, before the mask or
+        payload bytes arrive. Keeping the writer out of the server's close
+        path makes the 1009 close frame readable back deterministically —
+        sending the full payload instead races the server's close against
+        the client's in-flight write (SSLEOFError on the writer)."""
+        header = (bytes([0x80 | 0x1, 0x80 | 127])
+                  + payload_length.to_bytes(8, "big"))
+        with self._socket_lock:
+            self._socket.sendall(header)
+
     def send_text(self, payload: str):
         self._send_frame(0x1, payload.encode())
 
@@ -716,14 +728,17 @@ def main() -> int:
                 ws_user.closed, ws_user.close_code)
 
             # Oversized inbound frame: the server answers with a protocol-level
-            # 1009 close frame instead of dropping the transport (13.1). The
-            # admin token reuses the admin session whose assertions are done;
-            # this replaces ws_admin (closed 1001) without disturbing the
-            # user-B heartbeat checks below.
+            # 1009 close frame instead of dropping the transport (13.1). Only
+            # the frame header is sent: the server must reject at header
+            # parse, and sending the full 70 KiB payload races the server's
+            # close against the client's in-flight write. The admin token
+            # reuses the admin session whose assertions are done; this
+            # replaces ws_admin (closed 1001) without disturbing the user-B
+            # heartbeat checks below.
             ws_oversized = WsClient(port, admin_token)
             assert ws_oversized.status == 101
             ws_oversized.recv_events(2.0)
-            ws_oversized.send_text("x" * (70 * 1024))
+            ws_oversized.send_oversized_header(70 * 1024)
             ws_oversized.recv_events(3.0)
             assert ws_oversized.closed and ws_oversized.close_code == 1009, (
                 ws_oversized.closed, ws_oversized.close_code)
