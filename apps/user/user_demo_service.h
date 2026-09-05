@@ -15,6 +15,8 @@ struct StationSummary
     int idleCount = 0;
     int totalCount = 0;
     QString distance;
+    double latitude = 0.0;
+    double longitude = 0.0;
 };
 
 struct ChargerSummary
@@ -24,6 +26,8 @@ struct ChargerSummary
     int powerKw = 0;
     QString status;
     int totalCount = 0;
+    qint64 id = 0;
+    int typeValue = 0;
 };
 
 struct ChargeProgress

@@ -21,6 +21,12 @@ void UserApi::requestSmsCode(const QString& phone, ApiClient::Handler done)
                      {{"phone", phone}, {"purpose", "LOGIN"}}, std::move(done));
 }
 
+void UserApi::requestPasswordResetCode(const QString& phone, ApiClient::Handler done)
+{
+    client_.postJson(kUserBase + "/auth/sms/code",
+                     {{"phone", phone}, {"purpose", "RESET_PASSWORD"}}, std::move(done));
+}
+
 void UserApi::loginSms(const QString& phone, const QString& smsCode, const QString& deviceId,
                        ApiClient::Handler done)
 {
@@ -37,6 +43,11 @@ void UserApi::logout(ApiClient::Handler done)
 void UserApi::currentProfile(ApiClient::Handler done)
 {
     client_.get(kUserBase + "/me", {}, std::move(done));
+}
+
+void UserApi::avatarContent(ApiClient::BytesHandler done)
+{
+    client_.getBytes(kUserBase + "/me/avatar/content", std::move(done));
 }
 
 void UserApi::updateProfile(const QString& nickname, qint64 version, ApiClient::Handler done)
@@ -70,6 +81,18 @@ void UserApi::orders(int page, int pageSize, ApiClient::Handler done)
     query.addQueryItem("pageSize", QString::number(pageSize));
     query.addQueryItem("sort", "-createdAt");
     client_.get(kUserBase + "/orders", query, std::move(done));
+}
+
+void UserApi::order(const QString& orderNo, ApiClient::Handler done)
+{
+    client_.get(kUserBase + QStringLiteral("/orders/%1").arg(orderNo), {}, std::move(done));
+}
+
+void UserApi::deleteAccount(const QString& smsCode, ApiClient::Handler done)
+{
+    client_.deleteJson(kUserBase + "/me",
+                       {{"confirm", true}, {"password", QJsonValue::Null}, {"smsCode", smsCode}},
+                       std::move(done));
 }
 
 void UserApi::stations(qint64 latitudeE6, qint64 longitudeE6, const QString& keyword,

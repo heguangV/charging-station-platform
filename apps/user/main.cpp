@@ -11,6 +11,9 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QDebug>
+#include <QFile>
+#include <QSslCertificate>
+#include <QSslConfiguration>
 #include <QTimer>
 #include <QUrl>
 
@@ -27,7 +30,7 @@ int main(int argc, char* argv[])
     parser.addOption({QStringLiteral("smoke-test"), QStringLiteral("启动后自动退出")});
     parser.addOption({QStringLiteral("mock-scenario"),
                       QStringLiteral("选择 Mock 场景：happy-path、low-balance、no-available-charger、active-charging"),
-                      QStringLiteral("name"), QStringLiteral("happy-path")});
+                      QStringLiteral("name")});
     parser.addOption({QStringLiteral("api-request-code"),
                       QStringLiteral("向配置的 REST 服务请求一次验证码后退出"),
                       QStringLiteral("phone")});
@@ -50,6 +53,30 @@ int main(int argc, char* argv[])
         return 3;
     }
 
+    const QString tlsCaPath = qEnvironmentVariable("NCS_TLS_CA_PATH").trimmed();
+    if (!tlsCaPath.isEmpty())
+    {
+        QFile caFile(tlsCaPath);
+        if (!caFile.open(QIODevice::ReadOnly))
+        {
+            qCritical().noquote() << QStringLiteral("无法读取 TLS CA 证书");
+            ncs::infrastructure::ApplicationLogger::shutdown();
+            return 4;
+        }
+        const QList<QSslCertificate> certificates = QSslCertificate::fromData(caFile.readAll());
+        if (certificates.isEmpty())
+        {
+            qCritical().noquote() << QStringLiteral("TLS CA 证书格式无效");
+            ncs::infrastructure::ApplicationLogger::shutdown();
+            return 4;
+        }
+        QSslConfiguration sslConfiguration = QSslConfiguration::defaultConfiguration();
+        auto trustedCertificates = sslConfiguration.caCertificates();
+        trustedCertificates.append(certificates);
+        sslConfiguration.setCaCertificates(trustedCertificates);
+        QSslConfiguration::setDefaultConfiguration(sslConfiguration);
+    }
+
     if (parser.isSet(QStringLiteral("api-request-code")))
     {
         QUrl baseUrl;
@@ -69,16 +96,24 @@ int main(int argc, char* argv[])
         return result;
     }
 
-    ncs::user::MockUserClientService service;
+    QUrl baseUrl;
+    baseUrl.setScheme(config.value().allowInsecureHttp() ? QStringLiteral("http") : QStringLiteral("https"));
+    baseUrl.setHost(config.value().serverHost());
+    baseUrl.setPort(config.value().serverPort());
+    ncs::user::ApiClient apiClient(baseUrl, &app);
+    ncs::user::UserApi userApi(apiClient);
+    ncs::user::MockUserClientService mockService;
+    const bool mockMode = parser.isSet(QStringLiteral("mock-scenario"));
     QString scenarioMessage;
-    if (!service.configureScenario(parser.value(QStringLiteral("mock-scenario")), &scenarioMessage))
+    if (mockMode && !mockService.configureScenario(parser.value(QStringLiteral("mock-scenario")), &scenarioMessage))
     {
         qCritical().noquote() << scenarioMessage;
         ncs::infrastructure::ApplicationLogger::shutdown();
         return 4;
     }
-    qInfo().noquote() << scenarioMessage;
-    ncs::user::UserMainWindow window(service);
+    if (mockMode) qInfo().noquote() << scenarioMessage;
+    ncs::user::UserMainWindow window(mockService, mockMode ? nullptr : &apiClient,
+                                     mockMode ? nullptr : &userApi);
     window.show();
     if (parser.isSet(QStringLiteral("smoke-test")))
     {

@@ -135,4 +135,18 @@ QString ChargerTable::selectedChargerCode() const
     return selectedCode_;
 }
 
+qint64 ChargerTable::selectedChargerId() const
+{
+    for (const ChargerSummary& charger : chargers_)
+        if (charger.code == selectedCode_) return charger.id;
+    return 0;
+}
+
+int ChargerTable::selectedChargerType() const
+{
+    for (const ChargerSummary& charger : chargers_)
+        if (charger.code == selectedCode_) return charger.typeValue;
+    return 0;
+}
+
 } // namespace ncs::user

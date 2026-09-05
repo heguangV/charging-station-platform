@@ -1,5 +1,8 @@
 #include "user_main_window.h"
 
+#include "net/api_client.h"
+#include "net/user_api.h"
+
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -95,7 +98,8 @@ QWidget* UserMainWindow::createLoginPage()
     layout->addWidget(login);
     auto* demoHelp = new QToolButton;
     demoHelp->setText(QStringLiteral("ⓘ 演示说明"));
-    demoHelp->setToolTip(QStringLiteral("演示验证码为 123456。"));
+    demoHelp->setToolTip(userApi_ ? QStringLiteral("开发环境会在获取验证码后显示本次验证码。")
+                                  : QStringLiteral("演示验证码为 123456。"));
     demoHelp->setCursor(Qt::PointingHandCursor);
     demoHelp->setStyleSheet(QStringLiteral("QToolButton{color:#0F766E;border:0;background:transparent;font-size:12px;padding:3px 0;text-align:left;}"));
     layout->addWidget(demoHelp, 0, Qt::AlignLeft);
@@ -110,9 +114,27 @@ QWidget* UserMainWindow::createLoginPage()
             notify(QStringLiteral("请输入正确的 11 位手机号"), true);
             return;
         }
-        codeCountdown_ = 60;
+        if (!userApi_)
+        {
+            codeCountdown_ = 60;
+            codeButton_->setEnabled(false);
+            notify(QStringLiteral("验证码已发送，请输入 %1").arg(service_.developmentCode()));
+            return;
+        }
         codeButton_->setEnabled(false);
-        notify(QStringLiteral("验证码已发送，请输入 %1").arg(service_.developmentCode()));
+        userApi_->requestSmsCode(phoneEdit_->text(), [this](ApiReply reply) {
+            if (!reply.ok())
+            {
+                codeButton_->setEnabled(true);
+                notify(reply.message, true);
+                return;
+            }
+            codeCountdown_ = qMax(1, reply.data.toObject().value(QStringLiteral("retryAfterSec")).toInt(60));
+            const QString developmentCode =
+                reply.data.toObject().value(QStringLiteral("developmentCode")).toString();
+            notify(developmentCode.isEmpty() ? QStringLiteral("验证码已发送，请注意查收")
+                                              : QStringLiteral("开发验证码：%1").arg(developmentCode));
+        });
     });
     connect(demoHelp, &QToolButton::clicked, this, [demoHelp] {
         QToolTip::showText(demoHelp->mapToGlobal(QPoint(0, demoHelp->height())), demoHelp->toolTip(), demoHelp);
@@ -121,6 +143,29 @@ QWidget* UserMainWindow::createLoginPage()
         if (phoneEdit_->text().size() != 11)
         {
             notify(QStringLiteral("请输入正确的 11 位手机号"), true);
+            return;
+        }
+        if (userApi_)
+        {
+            userApi_->loginSms(phoneEdit_->text(), codeEdit_->text(), QStringLiteral("ncs-qt-user"),
+                               [this](ApiReply reply) {
+                                   if (!reply.ok())
+                                   {
+                                       notify(reply.message, true);
+                                       return;
+                                   }
+                                   const QString token = reply.data.toObject()
+                                                             .value(QStringLiteral("accessToken"))
+                                                             .toString();
+                                   if (token.isEmpty())
+                                   {
+                                       notify(QStringLiteral("登录响应缺少会话信息"), true);
+                                       return;
+                                   }
+                                   apiClient_->setAccessToken(token);
+                                   notify(QStringLiteral("登录成功"));
+                                   restoreActiveFlow();
+                               });
             return;
         }
         QString message;

@@ -13,7 +13,10 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
+
 
 namespace ncs::user
 {
@@ -39,6 +42,29 @@ class SearchGlyph final : public QWidget
         painter.drawLine(QPointF(11.0, 11.0), QPointF(16.5, 16.5));
     }
 };
+
+QPointF locationCoordinate(const QString& location)
+{
+    if (location == QStringLiteral("望京")) return {116.473200, 39.993300};
+    if (location == QStringLiteral("国贸")) return {116.460900, 39.909100};
+    return {116.318600, 39.984000};
+}
+
+double distanceKm(const QPointF& location, const StationSummary& station)
+{
+    constexpr double kEarthRadiusKm = 6371.0;
+    constexpr double kPi = 3.14159265358979323846;
+    const auto radians = [](double degree) { return degree * kPi / 180.0; };
+    const double latitudeDelta = radians(station.latitude - location.y());
+    const double longitudeDelta = radians(station.longitude - location.x());
+    const double fromLatitude = radians(location.y());
+    const double toLatitude = radians(station.latitude);
+    const double sineLatitude = std::sin(latitudeDelta / 2.0);
+    const double sineLongitude = std::sin(longitudeDelta / 2.0);
+    const double a = sineLatitude * sineLatitude + std::cos(fromLatitude) * std::cos(toLatitude) *
+                                                     sineLongitude * sineLongitude;
+    return 2.0 * kEarthRadiusKm * std::atan2(std::sqrt(a), std::sqrt(1.0 - a));
+}
 } // namespace
 
 StationListWidget::StationListWidget(const QVector<StationSummary>& stations, QWidget* parent)
@@ -73,7 +99,7 @@ StationListWidget::StationListWidget(const QVector<StationSummary>& stations, QW
         "QLineEdit:focus{border:0;}"));
     refreshButton_ = new QPushButton(QStringLiteral("刷新"));
     refreshButton_->setToolTip(QStringLiteral("刷新站点"));
-    refreshButton_->setFixedSize(48, 38);
+    refreshButton_->setFixedSize(44, 38);
     refreshButton_->setStyleSheet(QStringLiteral(
         "QPushButton{background:transparent;color:#0F766E;border:0;border-radius:10px;"
         "font-size:13px;font-weight:600;}"
@@ -97,15 +123,9 @@ StationListWidget::StationListWidget(const QVector<StationSummary>& stations, QW
     cards_->setSpacing(10);
     scroll->setWidget(content);
     layout->addWidget(scroll, 1);
-    connect(locationBox_, &QComboBox::currentTextChanged, this, [this] { refresh(); });
-    connect(searchEdit_, &QLineEdit::textChanged, this, [this] { refresh(); });
-    connect(refreshButton_, &QPushButton::clicked, this, [this] {
-        setLoading(true);
-        QTimer::singleShot(260, this, [this] {
-            refresh();
-            setLoading(false);
-        });
-    });
+    connect(locationBox_, &QComboBox::currentTextChanged, this, &StationListWidget::requestRefresh);
+    connect(searchEdit_, &QLineEdit::textChanged, this, &StationListWidget::requestRefresh);
+    connect(refreshButton_, &QPushButton::clicked, this, &StationListWidget::requestRefresh);
     refresh();
 }
 
@@ -113,6 +133,12 @@ void StationListWidget::setStations(QVector<StationSummary> stations)
 {
     stations_ = std::move(stations);
     refresh();
+}
+
+void StationListWidget::setRemoteSource(bool enabled)
+{
+    remoteSource_ = enabled;
+    if (remoteSource_) requestRefresh();
 }
 
 void StationListWidget::clearCards()
@@ -149,11 +175,7 @@ void StationListWidget::showError(const QString& userMessage)
     retry->setObjectName(QStringLiteral("primaryButton"));
     retry->setMinimumHeight(38);
     connect(retry, &QPushButton::clicked, this, [this] {
-        setLoading(true);
-        QTimer::singleShot(260, this, [this] {
-            refresh();
-            setLoading(false);
-        });
+        requestRefresh();
     });
     cards_->addWidget(error);
     cards_->addWidget(retry, 0, Qt::AlignHCenter);
@@ -161,21 +183,43 @@ void StationListWidget::showError(const QString& userMessage)
     summary_->setText(QStringLiteral("站点加载失败"));
 }
 
+void StationListWidget::requestRefresh()
+{
+    if (!remoteSource_)
+    {
+        refresh();
+        return;
+    }
+    setLoading(true);
+    const QPointF coordinate = locationCoordinate(locationBox_->currentText());
+    // Per the REST contract, keyword is an address/location hint, not a local name filter.
+    emit loadRequested(qRound64(coordinate.y() * 1000000), qRound64(coordinate.x() * 1000000),
+                       searchEdit_->text().trimmed());
+}
+
 void StationListWidget::refresh()
 {
     clearCards();
     const QString location = locationBox_->currentText();
     const QString keyword = searchEdit_->text().trimmed();
+    const QPointF currentLocation = locationCoordinate(location);
+    QVector<StationSummary> sortedStations = stations_;
+    if (!remoteSource_)
+        std::sort(sortedStations.begin(), sortedStations.end(), [&currentLocation](const StationSummary& left,
+                                                                                    const StationSummary& right) {
+            return distanceKm(currentLocation, left) < distanceKm(currentLocation, right);
+        });
     int count = 0;
-    for (const StationSummary& station : stations_)
+    for (StationSummary station : sortedStations)
     {
-        const bool locationMatch = location == QStringLiteral("附近") || station.name.contains(location) ||
-                                   station.address.contains(location);
-        const bool keywordMatch = keyword.isEmpty() || station.name.contains(keyword, Qt::CaseInsensitive) ||
-                                  station.address.contains(keyword, Qt::CaseInsensitive);
-        if (!locationMatch || !keywordMatch) continue;
+        const bool keywordMatch = remoteSource_ || keyword.isEmpty()
+            || station.name.contains(keyword, Qt::CaseInsensitive)
+            || station.address.contains(keyword, Qt::CaseInsensitive);
+        if (!keywordMatch) continue;
+        if (!remoteSource_)
+            station.distance = QStringLiteral("%1 km").arg(distanceKm(currentLocation, station), 0, 'f', 1);
         auto* card = new StationCard(station);
-        connect(card, &StationCard::selected, this, &StationListWidget::stationSelected);
+        connect(card, &StationCard::selected, this, [this, station](int) { emit stationSelected(station); });
         cards_->addWidget(card);
         ++count;
     }
@@ -187,7 +231,8 @@ void StationListWidget::refresh()
         cards_->addWidget(empty);
     }
     cards_->addStretch();
-    summary_->setText(QStringLiteral("%1 · 已按距离排序 · 找到 %2 个充电站").arg(location).arg(count));
+    const QString locationLabel = location == QStringLiteral("附近") ? QStringLiteral("当前位置") : location;
+    summary_->setText(QStringLiteral("%1 · 按距离排序 · 找到 %2 个充电站").arg(locationLabel).arg(count));
 }
 
 } // namespace ncs::user
