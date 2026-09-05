@@ -145,10 +145,10 @@
 # 0) 前置：本套件已提交（90c1ae9），服务端二进制已构建（见 §2 构建信息）
 # 1) 冒烟自检（约 1 分钟，先于全量）
 python3 -m tests.performance.run_load_tests \
-    --server build-w6/ncs_server --smoke --work-dir /tmp/ncs-load-smoke
+    --server build-w6/ncs_server --smoke
 # 2) 全量压测（本证据对应运行，约 15 分钟）
 python3 -m tests.performance.run_load_tests \
-    --server build-w6/ncs_server --work-dir /tmp/ncs-load-full
+    --server build-w6/ncs_server
 ```
 
 退出码 0 = 全部阈值通过；`load-report.json` 含本节全部数字与逐项 PASS/FAIL。

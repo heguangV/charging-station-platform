@@ -80,4 +80,3 @@ def build_thresholds(scenario: dict, report: dict) -> list[dict]:
         detail="第 101 个握手被 403 拒绝、未升级；心跳 30 s ping / 60 s "
                "关闭均未误伤会话")
     return results
-

@@ -43,11 +43,11 @@ ninja -C build-w6 -j <CPU 核数> ncs_server
 
 # 2) 先跑小规模冒烟（验证脚本自身；约 1 分钟）
 python3 -m tests.performance.run_load_tests \
-    --server build-w6/ncs_server --smoke --work-dir /tmp/ncs-load-smoke
+    --server build-w6/ncs_server --smoke
 
 # 3) 完整压测（约 15-20 分钟，产出 load-report.json 与阈值表）
 python3 -m tests.performance.run_load_tests \
-    --server build-w6/ncs_server --work-dir /tmp/ncs-load-full
+    --server build-w6/ncs_server
 ```
 
 退出码 0 = 全部阈值通过。`load-report.json` 含每阶段 P50/P95/P99 延迟、通过率、

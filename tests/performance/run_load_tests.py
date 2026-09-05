@@ -351,6 +351,9 @@ def main() -> int:
     scenario = SMOKE if args.smoke else FULL
     if args.work_dir:
         root = Path(args.work_dir)
+        if root.exists() and any(root.iterdir()):
+            print(f"work directory must be empty: {root}", file=sys.stderr)
+            return 2
         root.mkdir(parents=True, exist_ok=True)
     else:
         root = Path(tempfile.mkdtemp(prefix="ncs-load-"))

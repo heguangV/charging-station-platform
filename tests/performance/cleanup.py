@@ -101,4 +101,3 @@ class CleanupMixin:
                 if fresh.process.poll() is None:
                     stop_server(fresh, timeout=15.0)
                 fresh.delete_database()
-
