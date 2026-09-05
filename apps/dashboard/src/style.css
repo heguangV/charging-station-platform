@@ -1,0 +1,107 @@
+:root {
+  --bg-color: #0b111e;
+  --panel-bg: rgba(16, 26, 47, 0.75);
+  --panel-border: rgba(43, 88, 160, 0.45);
+  --panel-glow: rgba(0, 220, 255, 0.15);
+  --primary-color: #00d2ff;
+  --accent-color: #00f0ff;
+  --success-color: #00e676;
+  --warning-color: #ffab00;
+  --danger-color: #ff3d71;
+  --text-primary: #e6f1ff;
+  --text-secondary: #8da4c4;
+  --text-muted: #536988;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  user-select: none;
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 30%, #152544 0%, #0a0f1d 75%, #050811 100%);
+}
+
+/* 科技感发光面板容器基础样式 */
+.tech-card {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  box-shadow: 0 4px 24px var(--panel-glow), inset 0 0 16px rgba(0, 210, 255, 0.04);
+  border-radius: 8px;
+  position: relative;
+  overflow: hidden;
+  backdrop-filter: blur(8px);
+}
+
+.tech-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  border-top: 2px solid var(--primary-color);
+  border-left: 2px solid var(--primary-color);
+}
+
+.tech-card::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  border-bottom: 2px solid var(--primary-color);
+  border-right: 2px solid var(--primary-color);
+}
+
+.card-header {
+  min-height: 40px;
+  flex-wrap: wrap;
+  gap: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(43, 88, 160, 0.25);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--primary-color);
+  letter-spacing: 1px;
+}
+
+.card-title-decor {
+  display: inline-block;
+  width: 4px;
+  height: 14px;
+  background: var(--accent-color);
+  margin-right: 8px;
+  box-shadow: 0 0 8px var(--accent-color);
+  vertical-align: middle;
+}
+
+.card-body {
+  width: 100%;
+  height: calc(100% - 40px);
+  position: relative;
+}
+
+.chart-empty { position: absolute; inset: 40px 0 0; display: grid; place-items: center; color: var(--text-secondary); pointer-events: none; }
