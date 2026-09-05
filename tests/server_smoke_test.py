@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 
 REQUEST_TIMEOUT_SECONDS = 15 if os.name == "nt" else 2
+EVENT_TIMEOUT_SECONDS = 15 if os.name == "nt" else 5
 
 
 def free_port() -> int:
@@ -117,7 +118,8 @@ class WsClient:
 
     GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-    def __init__(self, port: int, token: str | None):
+    def __init__(self, port: int, token: str | None,
+                 background_reader: bool = True):
         raw = socket.create_connection(("127.0.0.1", port), timeout=5)
         context = ssl.create_default_context()
         context.check_hostname = False
@@ -163,45 +165,32 @@ class WsClient:
         self.received = []
         self._lock = threading.Lock()
         self._socket_lock = threading.Lock()
+        self._background_reader = self.status == 101 and background_reader
         # A real client reads its socket continuously. The background reader
         # answers application pings immediately so the server's pong timeout
         # cannot expire while the test drives the other connections: the
         # phases before the heartbeat check take over a minute on slow
         # Windows CI runners, longer than the server's 60 s pong timeout.
-        if self.status == 101:
+        if self._background_reader:
             threading.Thread(target=self._read_forever, daemon=True).start()
 
     def _read_forever(self):
-        # The background reader owns the socket. It never holds _socket_lock
-        # while blocked in recv (SSLSocket allows one concurrent reader and
-        # writer), so the test thread can always send frames without waiting
-        # for a read to time out.
+        # Python's SSLSocket must not be read and written concurrently. The
+        # one-second read timeout bounds how long a writer can wait for the
+        # shared socket lock.
         try:
             while True:
                 with self._lock:
                     if self.closed:
                         return
-                self._socket.settimeout(1.0)
                 try:
-                    opcode, payload = self._recv_frame()
+                    with self._socket_lock:
+                        self._socket.settimeout(1.0)
+                        opcode, payload = self._recv_frame()
                 except socket.timeout:
                     continue
-                if opcode == 0x1:
-                    event = json.loads(payload)
-                    if event.get("type") == "ping":
-                        self.send_pong()
-                    with self._lock:
-                        self.received.append(event)
-                elif opcode == 0x8:
-                    with self._lock:
-                        self.closed = True
-                        if len(payload) >= 2:
-                            self.close_code = int.from_bytes(payload[:2], "big")
-                            self.close_reason = payload[2:]
+                if not self._handle_frame(opcode, payload):
                     return
-                elif opcode == 0x9:
-                    self._send_frame(0xA, payload)
-                # opcode 0xA (pong) and 0x2 (binary) are ignored
         except (OSError, ValueError):
             with self._lock:
                 self.closed = True
@@ -251,11 +240,46 @@ class WsClient:
             payload = self._read_exact(length)
         return opcode, payload
 
+    def _handle_frame(self, opcode: int, payload: bytes) -> bool:
+        if opcode == 0x1:
+            event = json.loads(payload)
+            if event.get("type") == "ping":
+                self.send_pong()
+            with self._lock:
+                self.received.append(event)
+        elif opcode == 0x8:
+            with self._lock:
+                self.closed = True
+                if len(payload) >= 2:
+                    self.close_code = int.from_bytes(payload[:2], "big")
+                    self.close_reason = payload[2:]
+            return False
+        elif opcode == 0x9:
+            self._send_frame(0xA, payload)
+        # opcode 0xA (pong) and 0x2 (binary) are ignored
+        return True
+
     def recv_events(self, timeout: float):
         """Block until `timeout` seconds elapse or the connection closes,
-        then return every frame collected so far. The background reader owns
-        the socket; this polls the shared queue instead of reading."""
+        then return every frame collected so far."""
         deadline = time.monotonic() + timeout
+        if not self._background_reader:
+            while time.monotonic() < deadline:
+                with self._lock:
+                    if self.closed:
+                        break
+                try:
+                    with self._socket_lock:
+                        self._socket.settimeout(
+                            max(0.1, deadline - time.monotonic()))
+                        opcode, payload = self._recv_frame()
+                except (socket.timeout, OSError):
+                    break
+                if not self._handle_frame(opcode, payload):
+                    break
+            with self._lock:
+                return list(self.received)
+
         while time.monotonic() < deadline:
             with self._lock:
                 if self.closed:
@@ -267,25 +291,48 @@ class WsClient:
     def wait_for(self, predicate, timeout: float, consume: bool = True):
         """Poll the background reader's collected events until `predicate`
         matches any received event."""
+        return self.wait_for_count(predicate, 1, timeout, consume)
+
+    def wait_for_count(self, predicate, expected_count: int, timeout: float,
+                       consume: bool = True):
+        """Wait until at least `expected_count` matching events arrive.
+
+        Returning as soon as the first match arrives is not sufficient when a
+        test drives multiple asynchronous updates: on slower runners, later
+        events may still be in flight. Return partial matches on timeout so a
+        failed assertion can report what was actually received.
+        """
+        if expected_count < 1:
+            raise ValueError("expected_count must be positive")
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        while True:
             with self._lock:
                 matches = [event for event in self.received if predicate(event)]
-                if matches:
+                if len(matches) >= expected_count:
                     if consume:
                         self.received = [event for event in self.received
                                          if not predicate(event)]
                     return matches
+                if self.closed or time.monotonic() >= deadline:
+                    return matches
             time.sleep(0.05)
-        return []
 
     def events_of_type(self, event_type: str):
         with self._lock:
             return [event for event in self.received if event.get("type") == event_type]
 
     def close(self):
-        self._send_frame(0x8, b"")
-        self._socket.close()
+        with self._lock:
+            already_closed = self.closed
+        if not already_closed:
+            try:
+                self._send_frame(0x8, b"")
+            except OSError:
+                pass
+        with self._lock:
+            self.closed = True
+        with self._socket_lock:
+            self._socket.close()
 
 
 def main() -> int:
@@ -511,7 +558,7 @@ def main() -> int:
             flow_events = ws_user.wait_for(
                 lambda event: event.get("type") == "flow.updated"
                 and event["data"].get("flowNo") == flow["flowNo"],
-                5.0)
+                EVENT_TIMEOUT_SECONDS)
             assert flow_events, "flow.updated did not reach the creator"
             assert flow_events[0]["sequence"] > ready_events[0]["sequence"]
 
@@ -539,7 +586,8 @@ def main() -> int:
             assert start_status == 200 and started["status"] == 40
 
             progress_events = ws_user.wait_for(
-                lambda event: event.get("type") == "charge.progress", 5.0)
+                lambda event: event.get("type") == "charge.progress",
+                EVENT_TIMEOUT_SECONDS)
             assert progress_events, "charge.progress did not reach the creator"
             progress_data = progress_events[0]["data"]
             assert progress_data["flowNo"] == flow["flowNo"]
@@ -607,7 +655,8 @@ def main() -> int:
             ), (settle_status, receipt)
 
             settled_events = ws_user.wait_for(
-                lambda event: event.get("type") == "order.settled", 5.0)
+                lambda event: event.get("type") == "order.settled",
+                EVENT_TIMEOUT_SECONDS)
             assert settled_events, "order.settled did not reach the creator"
             settled_data = settled_events[0]["data"]
             assert settled_data["orderNo"] == receipt["orderNo"]
@@ -617,13 +666,13 @@ def main() -> int:
             admin_settled = ws_admin.wait_for(
                 lambda event: event.get("type") == "order.settled"
                 and event["data"].get("orderNo") == receipt["orderNo"],
-                5.0)
+                EVENT_TIMEOUT_SECONDS)
             assert admin_settled, "order.settled did not reach the administrator"
             admin_release = ws_admin.wait_for(
                 lambda event: event.get("type") == "charger.statusChanged"
                 and event["data"].get("fromStatus") == 1
                 and event["data"].get("toStatus") == 0,
-                5.0)
+                EVENT_TIMEOUT_SECONDS)
             assert admin_release, "charger release did not reach the administrator"
 
             # The administrator changes a free charger to faulty and back.
@@ -652,11 +701,11 @@ def main() -> int:
                 )
                 assert change_status == 200, change_status
                 free_charger["version"] += 1
-            admin_charger_changes = ws_admin.wait_for(
+            admin_charger_changes = ws_admin.wait_for_count(
                 lambda event: event.get("type") == "charger.statusChanged"
                 and event["data"].get("chargerId") == free_charger["id"],
-                5.0)
-            assert len(admin_charger_changes) >= 2
+                2, EVENT_TIMEOUT_SECONDS)
+            assert len(admin_charger_changes) >= 2, admin_charger_changes
             assert any(event["data"]["toStatus"] == 2 for event in admin_charger_changes)
             assert any(event["data"]["toStatus"] == 0 for event in admin_charger_changes)
 
@@ -720,10 +769,16 @@ def main() -> int:
             # admin token reuses the admin session whose assertions are done;
             # this replaces ws_admin (closed 1001) without disturbing the
             # user-B heartbeat checks below.
-            ws_oversized = WsClient(port, admin_token)
+            ws_oversized = WsClient(port, admin_token, background_reader=False)
             assert ws_oversized.status == 101
             ws_oversized.recv_events(2.0)
-            ws_oversized.send_text("x" * (70 * 1024))
+            try:
+                ws_oversized.send_text("x" * (70 * 1024))
+            except (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError):
+                # The server may reject and close the oversized frame before
+                # the client finishes writing it. The close-code assertion
+                # below still verifies that this was the expected 1009 close.
+                pass
             ws_oversized.recv_events(3.0)
             assert ws_oversized.closed and ws_oversized.close_code == 1009, (
                 ws_oversized.closed, ws_oversized.close_code)
