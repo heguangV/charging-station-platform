@@ -560,7 +560,6 @@ int main()
         tests.check(repository.pollOutbox(t0 + 100, 10).size() == 3,
                     "rows become available once available_at passes");
         tests.check(repository.pollOutbox(t0 + 100, 2).size() == 2, "poll respects the limit");
-
         const auto first = repository.pollOutbox(t0 + 100, 10);
         tests.check(first.size() == 3, "pending rows remain pollable before delivery");
         std::vector<std::int64_t> deliveredIds{first[0].id, first[1].id};
@@ -572,7 +571,6 @@ int main()
                                  "SELECT COUNT(*) FROM outbox_event WHERE delivery_status=1 "
                                  "AND published_at IS NOT NULL") == 2,
                     "delivered rows carry status 1 and a published timestamp");
-
         repository.markOutboxAttempted({remaining.front().id});
         for (int attempt = 0; attempt < 9; ++attempt)
         {
@@ -583,7 +581,6 @@ int main()
                                          std::to_string(remaining.front().id);
         tests.check(none.empty() && queryInteger(database.path(), attemptedSql.c_str()) == 2,
                     "ten delivery attempts flip a row to dead");
-
         ChargerStatusEvent deadEvent = statusEvent;
         deadEvent.chargerId = 2;
         repository.addChargerStatusEvent(deadEvent);
@@ -595,12 +592,9 @@ int main()
                         queryInteger(database.path(), deadSql.c_str()) == 2,
                     "an explicitly dead row stops being polled");
     }
-
     {
-        // NFR-M-04 / UC-M-04 retention: ops_log and device_command keep 180
-        // days, predictions 90, models 30 unless referenced by a retained
-        // prediction, hourly metrics 365; cleanup never leaves dangling
-        // references (outbox and backup retention are covered above).
+        // NFR-M-04 / UC-M-04 retention boundaries and reference integrity;
+        // outbox and backup retention are covered above.
         TemporaryDatabase database;
         SqliteRepository repository(database.path());
         repository.ensureDevelopmentAdmin(true);
@@ -614,8 +608,8 @@ int main()
              std::to_string(adminId) + ",'RETENTION','test','old-181','RETENTION'," +
              std::to_string(now - 181 * day - 1) + "),(" + std::to_string(adminId) +
              ",'RETENTION','test','edge-180','RETENTION'," + std::to_string(now - 180 * day) +
-             "),(" + std::to_string(adminId) +
-             ",'RETENTION','test','old-179','RETENTION'," + std::to_string(now - 179 * day) +
+             "),(" + std::to_string(adminId) + ",'RETENTION','test','old-179','RETENTION'," +
+             std::to_string(now - 179 * day) +
              ");"
              "INSERT INTO device_command(command_no,charger_id,charger_code,status,reason,actor_id,"
              "created_at,execute_at,completed_at,error_summary) VALUES"
@@ -674,24 +668,22 @@ int main()
                 .c_str());
         repository.cleanupAdminRecords(now);
         repository.cleanupAnalytics(now);
-        tests.check(queryInteger(database.path(),
-                                 "SELECT COUNT(*) FROM ops_log WHERE target_id='old-179'") == 1 &&
-                        queryInteger(database.path(),
-                                     "SELECT COUNT(*) FROM ops_log WHERE target_id='edge-180'") ==
-                            1 &&
-                        queryInteger(database.path(),
-                                     "SELECT COUNT(*) FROM ops_log WHERE target_id='old-181'") ==
-                            0 &&
-                        queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
-                                                      "command_no='CMD-NEW-DONE'") == 1 &&
-                        queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
-                                                      "command_no='CMD-EDGE-DONE'") == 1 &&
-                        queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
-                                                      "command_no='CMD-OLD-RUN'") == 1 &&
-                        queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
-                                                      "command_no='CMD-OLD-DONE'") == 0,
-                    "180-day retention prunes aged completed audit and command rows and keeps "
-                    "pending, recent and exactly-180-day rows (the bound is strict <)");
+        tests.check(
+            queryInteger(database.path(),
+                         "SELECT COUNT(*) FROM ops_log WHERE target_id='old-179'") == 1 &&
+                queryInteger(database.path(),
+                             "SELECT COUNT(*) FROM ops_log WHERE target_id='edge-180'") == 1 &&
+                queryInteger(database.path(),
+                             "SELECT COUNT(*) FROM ops_log WHERE target_id='old-181'") == 0 &&
+                queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
+                                              "command_no='CMD-NEW-DONE'") == 1 &&
+                queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
+                                              "command_no='CMD-EDGE-DONE'") == 1 &&
+                queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
+                                              "command_no='CMD-OLD-RUN'") == 1 &&
+                queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
+                                              "command_no='CMD-OLD-DONE'") == 0,
+            "retention keeps pending, recent and exactly-180-day rows");
         tests.check(
             queryInteger(database.path(), "SELECT COUNT(*) FROM load_prediction") == 1 &&
                 queryInteger(database.path(), "SELECT COUNT(*) FROM model_version") == 2 &&
@@ -701,9 +693,7 @@ int main()
                                               "version_no='MV-OLD-DROP'") == 0 &&
                 queryInteger(database.path(), "SELECT COUNT(*) FROM station_hourly_metric") == 1 &&
                 queryInteger(database.path(), "SELECT COUNT(*) FROM pragma_foreign_key_check") == 0,
-            "analytics retention keeps models referenced by retained predictions, prunes "
-            "aged rows, and leaves no dangling references");
+            "analytics retention preserves references and foreign keys");
     }
-
     return tests.result();
 }
