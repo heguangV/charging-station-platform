@@ -596,5 +596,103 @@ int main()
                     "an explicitly dead row stops being polled");
     }
 
+    {
+        // NFR-M-04 / UC-M-04 retention: ops_log and device_command keep 180
+        // days, predictions 90, models 30 unless referenced by a retained
+        // prediction, hourly metrics 365; cleanup never leaves dangling
+        // references (outbox and backup retention are covered above).
+        TemporaryDatabase database;
+        SqliteRepository repository(database.path());
+        repository.ensureDevelopmentAdmin(true);
+        const std::int64_t now = 1788500000;
+        const std::int64_t day = 24 * 3600;
+        const std::int64_t adminId =
+            queryInteger(database.path(), "SELECT id FROM admin_account WHERE username='admin'");
+        executeSql(
+            database.path(),
+            ("INSERT INTO ops_log(actor_admin_id,action,target_type,target_id,reason,at) VALUES(" +
+             std::to_string(adminId) + ",'RETENTION','test','old-181','RETENTION'," +
+             std::to_string(now - 181 * day - 1) + "),(" + std::to_string(adminId) +
+             ",'RETENTION','test','old-179','RETENTION'," + std::to_string(now - 179 * day) +
+             ");"
+             "INSERT INTO device_command(command_no,charger_id,charger_code,status,reason,actor_id,"
+             "created_at,execute_at,completed_at,error_summary) VALUES"
+             "('CMD-OLD-DONE',1,'ZGC-DC-01','SUCCEEDED','RETENTION','test'," +
+             std::to_string(now - 200 * day) + "," + std::to_string(now - 200 * day) + "," +
+             std::to_string(now - 181 * day) +
+             ",''),"
+             "('CMD-NEW-DONE',1,'ZGC-DC-01','SUCCEEDED','RETENTION','test'," +
+             std::to_string(now - 200 * day) + "," + std::to_string(now - 200 * day) + "," +
+             std::to_string(now - 179 * day) +
+             ",''),"
+             "('CMD-OLD-RUN',1,'ZGC-DC-01','PENDING','RETENTION','test'," +
+             std::to_string(now - 200 * day) + "," + std::to_string(now - 200 * day) +
+             ",NULL,'');"
+             "INSERT INTO ml_task(task_no,task_type,status,created_at) VALUES"
+             "('TASK-OLD-REF','TRAIN','SUCCEEDED'," +
+             std::to_string(now - 40 * day) +
+             "),"
+             "('TASK-OLD-DROP','TRAIN','SUCCEEDED'," +
+             std::to_string(now - 40 * day) +
+             "),"
+             "('TASK-NEW','TRAIN','SUCCEEDED'," +
+             std::to_string(now - 10 * day) +
+             ");"
+             "INSERT INTO model_version(version_no,task_no,algorithm,feature_schema_version,"
+             "random_seed,train_from_at,train_to_at,mae,rmse,mape,wape,baseline_mae,baseline_rmse,"
+             "excluded_sample_count,qualified,artifact_checksum,artifact_path,created_at) VALUES"
+             "('MV-OLD-REF','TASK-OLD-REF','RF',1,20260901,0,1,0,0,0,0,0,0,0,1,'x',''," +
+             std::to_string(now - 40 * day) +
+             "),"
+             "('MV-OLD-DROP','TASK-OLD-DROP','RF',1,20260901,0,1,0,0,0,0,0,0,0,1,'x',''," +
+             std::to_string(now - 40 * day) +
+             "),"
+             "('MV-NEW','TASK-NEW','RF',1,20260901,0,1,0,0,0,0,0,0,0,1,'x',''," +
+             std::to_string(now - 10 * day) +
+             ");"
+             "INSERT INTO load_prediction(station_id,model_version_no,generated_at,target_at,"
+             "horizon_hour,predicted_energy_mwh,predicted_free_count,is_peak) VALUES"
+             "(1,'MV-OLD-REF'," +
+             std::to_string(now - 1 * day) + "," + std::to_string(now - 1 * day) +
+             ",24,10,0,0),"
+             "(1,'MV-OLD-DROP'," +
+             std::to_string(now - 100 * day) + "," + std::to_string(now - 100 * day) +
+             ",24,10,0,0);"
+             "INSERT INTO station_hourly_metric(station_id,bucket_at,energy_mwh,order_count,"
+             "fast_order_count,slow_order_count,busy_device_seconds,refreshed_at) VALUES"
+             "(1," +
+             std::to_string(now - 366 * day) +
+             ",0,0,0,0,0,0),"
+             "(1," +
+             std::to_string(now - 300 * day) + ",0,0,0,0,0,0);")
+                .c_str());
+        repository.cleanupAdminRecords(now);
+        repository.cleanupAnalytics(now);
+        tests.check(queryInteger(database.path(),
+                                 "SELECT COUNT(*) FROM ops_log WHERE target_id='old-179'") == 1 &&
+                        queryInteger(database.path(),
+                                     "SELECT COUNT(*) FROM ops_log WHERE target_id='old-181'") ==
+                            0 &&
+                        queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
+                                                      "command_no='CMD-NEW-DONE'") == 1 &&
+                        queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
+                                                      "command_no='CMD-OLD-RUN'") == 1 &&
+                        queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
+                                                      "command_no='CMD-OLD-DONE'") == 0,
+                    "180-day retention prunes aged completed audit and command rows and keeps "
+                    "pending and recent rows");
+        tests.check(
+            queryInteger(database.path(), "SELECT COUNT(*) FROM load_prediction") == 1 &&
+                queryInteger(database.path(), "SELECT COUNT(*) FROM model_version") == 2 &&
+                queryInteger(database.path(), "SELECT COUNT(*) FROM model_version WHERE "
+                                              "version_no='MV-OLD-REF'") == 1 &&
+                queryInteger(database.path(), "SELECT COUNT(*) FROM model_version WHERE "
+                                              "version_no='MV-OLD-DROP'") == 0 &&
+                queryInteger(database.path(), "SELECT COUNT(*) FROM station_hourly_metric") == 1 &&
+                queryInteger(database.path(), "SELECT COUNT(*) FROM pragma_foreign_key_check") == 0,
+            "analytics retention keeps models referenced by retained predictions, prunes "
+            "aged rows, and leaves no dangling references");
+    }
+
     return tests.result();
 }
