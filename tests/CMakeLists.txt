@@ -296,6 +296,23 @@ target_link_libraries(ncs_sqlite_corruption_tests PRIVATE
 add_test(NAME ncs_sqlite_corruption COMMAND ncs_sqlite_corruption_tests)
 set_tests_properties(ncs_sqlite_corruption PROPERTIES LABELS "unit;database")
 
+add_executable(ncs_sqlite_revenue_bench
+    sqlite_revenue_bench.cpp
+)
+
+set_target_properties(ncs_sqlite_revenue_bench PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+target_link_libraries(ncs_sqlite_revenue_bench PRIVATE
+    ncs::core_application
+    ncs::infrastructure_sqlite
+)
+add_test(NAME ncs_sqlite_revenue_bench COMMAND ncs_sqlite_revenue_bench)
+set_tests_properties(ncs_sqlite_revenue_bench PROPERTIES LABELS "performance")
+
 add_executable(ncs_station_service_tests
     station_service_test.cpp
 )
