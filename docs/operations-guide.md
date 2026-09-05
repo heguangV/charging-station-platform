@@ -3,9 +3,9 @@
 | 项目 | 内容 |
 | --- | --- |
 | 适用范围 | 开发、测试和验收环境的启动、检查、备份、恢复与清理 |
-| 需求依据 | SRS `NFR-M-04`、`NFR-R-*`、`NFR-D-*` |
-| 当前状态 | 阶段一基础能力；标注“阶段二/三”的命令需对应实现完成后启用 |
-| 更新日期 | 2026-09-02 |
+| 需求依据 | SRS `NFR-M-04`、`NFR-R-*`、`NFR-D-*`、`UC-U-11`、`UC-X-01` |
+| 当前状态 | 服务端（REST/WebSocket/SQLite/Dashboard/ML 管线）已交付；管理端与大屏前端尚未实现；新增拍照头像与设备模拟器命令待对应产物实现后启用 |
+| 更新日期 | 2026-09-05 |
 
 ## 1. 环境与配置
 
@@ -14,6 +14,47 @@
 正式环境的服务端必须满足：`NCS_ENVIRONMENT=production`、`NCS_ALLOW_INSECURE_HTTP=false`，并配置可读的证书和私钥路径。客户端使用 `NCS_ENV=production` 并同样保持 `NCS_ALLOW_INSECURE_HTTP=false`。日志和安全输出不得包含配置值中的密钥、令牌、验证码或个人信息。
 
 本机开发联调可在两个进程中显式设置 `NCS_ALLOW_INSECURE_HTTP=true`。服务端还必须使用 `NCS_ENVIRONMENT=development` 和 `NCS_LISTEN_ADDRESS=127.0.0.1`（或 `::1`）；客户端必须使用 `NCS_ENV=development` 和相同的数字回环地址。服务端启动日志必须出现明文开发模式 WARNING；证书文件在此模式下不读取。完成联调后取消该变量即可恢复默认 HTTPS。
+
+### 1.1 服务端启动配置
+
+命令行参数优先于同名进程环境变量，进程环境变量优先于环境文件；均未设置时使用受控的本机开发默认值。执行 `ncs_server --help` 查看完整参数。
+
+| 配置 | 命令行 | 环境变量 | 开发默认值 |
+| --- | --- | --- | --- |
+| 运行环境 | `--environment` | `NCS_ENVIRONMENT` | `development` |
+| 监听 IP | `--listen-address` | `NCS_LISTEN_ADDRESS` | `127.0.0.1` |
+| 监听端口 | `--port` | `NCS_PORT` | `8443` |
+| Crow 工作线程 | `--worker-threads` | `NCS_WORKER_THREADS` | `2` |
+| 充电时间倍率 | `--charge-time-scale` | `NCS_CHARGE_TIME_SCALE` | `60` |
+| 日志级别 | `--log-level` | `NCS_LOG_LEVEL` | `info` |
+| 日志目录 | `--log-directory` | `NCS_LOG_DIRECTORY` | `logs/` |
+| SQLite 数据库 | `--database-path` | `NCS_DATABASE_PATH` | `data/charge_platform.db` |
+| TLS 证书 | `--tls-certificate` | `NCS_TLS_CERTIFICATE` | `secrets/ncs-dev-cert.pem` |
+| TLS 私钥 | `--tls-private-key` | `NCS_TLS_PRIVATE_KEY` | `secrets/ncs-dev-key.pem` |
+| 本机开发 HTTP | `--allow-insecure-http` | `NCS_ALLOW_INSECURE_HTTP` | `false` |
+| Dashboard 快照 | `--dashboard-snapshot` | `NCS_DASHBOARD_SNAPSHOT` | `apps/dashboard/public/data/dashboard.json` |
+| Python 解释器 | `--python-executable` | `NCS_PYTHON_EXECUTABLE` | `python3` |
+| ML 工作脚本 | `--ml-worker-script` | `NCS_ML_WORKER_SCRIPT` | `ml/worker.py` |
+| ML 活动模型 | `--ml-model-path` | `NCS_ML_MODEL_PATH` | `ml/models/load_rf.pkl` |
+| 腾讯地图服务端 Key | `--tencent-map-key` | `NCS_TENCENT_MAP_KEY` | 空（地图能力降级） |
+
+`--environment` 允许 `development`、`test`、`acceptance`、`production`。开发模式会启用演示凭据，因此只允许监听数字回环地址；通配地址、多播地址和非法地址会在启动前被拒绝。未显式配置的文件路径以服务程序所在部署目录为稳定基准（源码构建会自动定位项目资源），不随 shell 当前目录漂移。
+
+环境文件：`NCS_ENV_FILE` 指定的文件（必须存在且可读）或资产目录下的 `.env`（存在时加载）提供可由进程环境变量覆盖的默认值；条目名与上表环境变量一致，仅腾讯地图服务端 Key 写作 `TENCENT_MAP_SERVER_KEY`。用户端地图另读取 `TENCENT_MAP_JS_KEY` 和受限来源 `TENCENT_MAP_JS_ORIGIN`，不会保留 Server Key。`.env` 为 Git 忽略的仅本机文件（权限 600），真实 Key 不得提交；可运行 `./scripts/configure-local-map.sh` 安全写入并以 `--check` 验证，详见 `docs/tencent-map-setup.md`。
+
+### 1.2 新增增强任务依赖
+
+`UC-U-11` 计划使用 Qt Multimedia 和 MultimediaWidgets，Ubuntu 开发环境需提供 `qt6-multimedia-dev`。依赖未安装时，根 CMake 和 `ncs_user` 必须成功配置与构建，仅不编译摄像头适配和拍照对话框。
+
+`UC-X-01` 计划使用 Qt WebSockets，Ubuntu 开发环境需提供 `qt6-websockets-dev`。模拟器使用独立 CMake，依赖缺失不得影响根工程或正式可执行目标。实现后单独构建方式为：
+
+```bash
+cmake -S tools/device_link_sim -B build/device-link-sim -G Ninja
+cmake --build build/device-link-sim
+ctest --test-dir build/device-link-sim --output-on-failure
+```
+
+上述模拟器命令只在 `tools/device_link_sim/CMakeLists.txt` 实现后可用；规划期不得将命令输出作为构建证据。
 
 ## 2. 构建与启动顺序
 
@@ -27,7 +68,7 @@ export QT_CMAKE=/path/to/Qt/6.2.x/gcc_64/bin/qt-cmake
 
 完整运行时按以下顺序启动：
 
-1. 启动 `ncs_server`，等待 `/api/v1/health/ready` 成功；健康接口在阶段三交付前不可作为现有能力。
+1. 启动 `ncs_server`，等待 `/api/v1/health/ready` 成功（校验 SQLite schema、读写能力、WAL 和迁移版本，任一失败返回 503）。
 2. 启动 `ncs_user` 和 `ncs_admin`，确认连接状态正常。
 3. 需要时启动 Dashboard 与 ML；两者失败不得阻断基础充电结算。
 
@@ -70,6 +111,8 @@ QT_QPA_PLATFORM=offscreen ./build/dev/apps/admin/ncs_admin --smoke-test
 | 结算中断 | 按幂等键和恢复检查点重放 | 人工直接改余额 |
 | 证书失效 | 切换已审核证书并重启验证；本机开发可按第 1 节启用受限回环 HTTP | 临时开放局域网或公网明文 HTTP |
 | 外部地图/ML 失败 | 地图先确认 Server Key、配额和出口限制；路线失败时保留浏览器导航及本地距离，ML 启用朴素预测降级 | 阻断基础充电流程；把 Server Key 下发客户端 |
+| 摄像头不可用 | 确认 Qt Multimedia 模块、操作系统摄像头权限、设备占用状态和视频输入枚举结果；继续提供本地选图 | 忽略摄像头错误、循环重启设备或阻塞 UI |
+| 设备模拟器频繁重连 | 确认平台是否监听、检查封顶退避记录、设备 ID 重复和回环端口占用 | 关闭退避、开启无上限循环或将未鉴权 `ws://` 监听到非回环地址 |
 
 ## 6. 数据清理
 
