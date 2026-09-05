@@ -5,7 +5,7 @@
 | 用途 | 定义 SQLite 物理模型、约束、事务和迁移方式 |
 | 需求来源 | SRS 的 `BR-*`、`UC-D-*` 及相关用例 |
 | 接口契约 | [REST / WebSocket 接口](database-api.md) |
-| 版本 | 1.2 |
+| 版本 | 1.3 |
 
 本文不重复业务流程、错误码、性能指标或数据保留期限。业务语义以 [SRS](01-requirements-specification.md) 为准，公开字段与错误响应以接口文档为准。
 
@@ -83,6 +83,7 @@
 | `model_version` | 模型产物校验和、特征版本、固定种子、模型/基线评估指标及合格状态 |
 | `load_prediction` | 分站点、模型和目标时间唯一的预测结果及陈旧标记 |
 | `station_hourly_metric` | 连续补零的可重建小时聚合、快慢充单量及繁忙设备秒数 |
+| `dashboard_state` | 大屏快照数据版本的单行状态，供增量快照与 `dashboard.refresh` 判断 |
 
 ## 4. 关系与数据真相
 
@@ -155,7 +156,7 @@ WHERE charger_id IS NOT NULL
 
 - 每个连接启用 `foreign_keys=ON`、`journal_mode=WAL`、`busy_timeout` 和 `trusted_schema=OFF`。
 - 写事务按数据竞争风险选择 `BEGIN IMMEDIATE`，并发重试必须有次数和退避上限。
-- 初始化持有进程间锁；迁移按序号只追加不修改（当前为 v1 初始用户充电、v2 管理控制面、v3 设备重启态、v4 演示管理员标记、v5 管理查询索引、v6 Dashboard/ML 数据），并在 `schema_version` 保存校验和。
+- 初始化持有进程间锁；迁移按序号只追加不修改（当前为 v1 初始用户充电、v2 管理控制面、v3 设备重启态、v4 演示管理员标记、v5 管理查询索引、v6 Dashboard/ML 数据、v7 订单分析索引），并在 `schema_version` 的 `checksum` 列保存版本名称标签（如 `ncs-v7-order-analytics`），迁移执行时与代码内常量比对，不一致即拒绝写入。
 - 演示种子与结构迁移同批次幂等执行（`INSERT OR IGNORE`），重复执行不产生重复数据；当前内置 3 个演示站点（含 1 个故障桩）、2 个区域价格版本和 1 个演示管理员。SRS `UC-D-02` 的 5 站点/48 桩/90 天完整历史种子按里程碑另行实施。
 - 充电进度由时间与快照计算，只在状态变化、恢复检查点和结算时持久化。
 - `outbox_event` 的待投递记录不得清理；已投递记录保留 7 天，死信记录保留 30 天后由维护任务删除，避免事件表无界增长。
@@ -164,7 +165,7 @@ WHERE charger_id IS NOT NULL
 
 ## 8. 数据库验证
 
-- 空目录初始化、重复初始化和顺序升级（v1→v6）；
+- 空目录初始化、重复初始化和顺序升级（如 v5→v7，保留业务数据）；
 - 外键、`CHECK`、唯一索引和迁移校验和；
 - 同一用户或设备的并发分配唯一性；
 - 结算、充值和取消的幂等重试与整体回滚；
@@ -179,3 +180,4 @@ WHERE charger_id IS NOT NULL
 | --- | --- | --- |
 | 1.1 | 2026-09-02 | 初版物理模型 |
 | 1.2 | 2026-09-03 | 与实现对齐：身份表更名 `user_account`/`admin_account`，审计表更名 `ops_log`，充值表更名 `recharge_order`；补充 `user_avatar`、`flow_queue`、`business_sequence`；会话/验证码明确为内存态不落库（SRS `UC-D-01` 同步）；移除 `app_config`、`auth_session`、`sms_code`、`charger_status_history`、`settlement_attempt`（设备状态证据由 `ops_log`/`device_command`/`flow_event`/`outbox_event` 承担，结算重试由状态 80 + 版本 + 幂等记录承担）；更新种子范围、迁移版本与验证清单 |
+| 1.3 | 2026-09-05 | 与实现对齐：表清单补充 `dashboard_state`；迁移版本更新到 v7 并澄清 `checksum` 列保存的是版本名称标签；验证清单同步顺序升级与并发唯一性的既有测试口径 |

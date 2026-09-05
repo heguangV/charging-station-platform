@@ -195,6 +195,22 @@ target_link_libraries(ncs_sqlite_repository_tests PRIVATE
 )
 add_test(NAME ncs_sqlite_repository COMMAND ncs_sqlite_repository_tests)
 
+add_executable(ncs_sqlite_migration_concurrency_tests
+    sqlite_migration_concurrency_test.cpp
+)
+
+set_target_properties(ncs_sqlite_migration_concurrency_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+target_link_libraries(ncs_sqlite_migration_concurrency_tests PRIVATE
+    ncs::core_application
+    ncs::infrastructure_sqlite
+)
+add_test(NAME ncs_sqlite_migration_concurrency COMMAND ncs_sqlite_migration_concurrency_tests)
+
 add_executable(ncs_station_service_tests
     station_service_test.cpp
 )

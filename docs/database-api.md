@@ -1198,6 +1198,8 @@ Token 通过握手 `Authorization: Bearer <token>` 传递，不放入 URL。允�
 
 状态值：0 闲置、1 在用、2 故障、3 停用、4 重启中。
 
+投递时若设备记录已不可查（如随后被清理），事件会省略 `chargerCode` 与 `stationId` 字段；客户端不得假设这两个字段必然存在，设备以 `chargerId` 为准。
+
 **`order.settled`**（对应用户与全部管理员，不含完整小票）：
 
 ```json
