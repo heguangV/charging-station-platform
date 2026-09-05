@@ -122,9 +122,13 @@ void checkpoint(const std::string& path)
     if (sqlite3_open_v2(path.c_str(), &database, SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK)
         throw std::runtime_error("test database open failed");
     char* error = nullptr;
-    sqlite3_exec(database, "PRAGMA wal_checkpoint(TRUNCATE)", nullptr, nullptr, &error);
+    const int result =
+        sqlite3_exec(database, "PRAGMA wal_checkpoint(TRUNCATE)", nullptr, nullptr, &error);
+    const std::string message = error ? error : "wal_checkpoint failed";
     sqlite3_free(error);
     sqlite3_close(database);
+    if (result != SQLITE_OK)
+        throw std::runtime_error(message);
 }
 
 // NFR-R-02: a damaged database must surface an explicit, non-empty error

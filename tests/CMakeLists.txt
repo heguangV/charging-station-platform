@@ -226,6 +226,7 @@ target_link_libraries(ncs_sqlite_corruption_tests PRIVATE
     ncs::infrastructure_sqlite
 )
 add_test(NAME ncs_sqlite_corruption COMMAND ncs_sqlite_corruption_tests)
+set_tests_properties(ncs_sqlite_corruption PROPERTIES LABELS "unit;database")
 
 add_executable(ncs_station_service_tests
     station_service_test.cpp
