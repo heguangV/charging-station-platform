@@ -226,6 +226,7 @@ target_link_libraries(ncs_sqlite_seed_tests PRIVATE
     ncs::infrastructure_sqlite
 )
 add_test(NAME ncs_sqlite_seed COMMAND ncs_sqlite_seed_tests)
+set_tests_properties(ncs_sqlite_seed PROPERTIES LABELS "unit;database;seed")
 
 add_executable(ncs_station_service_tests
     station_service_test.cpp

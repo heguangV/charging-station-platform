@@ -12,11 +12,16 @@ namespace ncs::infrastructure::sqlite
 // history (300 owners, ~9000 orders, ~900 recharges) anchored at `anchorAt`.
 //
 // Must be called inside the transaction already opened by the caller; the v8
-// schema_version row is committed as part of the seed. A run always unwinds
-// the scope of any earlier marker-less run first (INSERT OR IGNORE / guarded
-// UPDATEs keep the rest idempotent), so a database that lost its v8 marker
-// re-seeds cleanly without duplicating rows and without touching v1-v7
-// business data written outside the seed scope.
+// schema_version row is committed as part of the seed. Pre-existing accounts
+// that collide with the fixed seed identity set (sim_owner_001..300 or phones
+// 13800001001..300) abort the seed with an explicit conflict error — the
+// caller rolls the transaction back and the database keeps its v1-v7 data.
+// The marker and the seed rows are committed in one transaction, so a
+// marker-less database that still carries seed rows is externally tampered
+// state; it aborts with the same conflict error instead of being silently
+// repaired (recover from a backup). Stations, chargers and tariffs outside
+// that conflict check are INSERT OR IGNORE / guarded UPDATEs, so re-runs
+// reuse existing rows instead of duplicating them.
 //
 // Throws std::runtime_error on failure; the caller rolls the transaction back.
 void applyFullDemoSeed(sqlite3* database, std::int64_t anchorAt);

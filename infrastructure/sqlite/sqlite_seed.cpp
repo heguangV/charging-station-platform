@@ -381,43 +381,42 @@ void reconcileFleet(sqlite3* database, std::vector<ChargerRef> pools[kSiteCount]
     }
 }
 
-// Unwinds a previous marker-less seed run (e.g. after a physical rollback to v5
-// in the migration tests) so a re-run never collides; v1 data is preserved.
-void unwindSeedScope(sqlite3* database)
+// Fails loudly when a pre-existing account collides with the fixed seed
+// identity set (usernames sim_owner_001..300, phones 13800001001..300): the
+// seed inserts users with plain INSERT, so a collision would otherwise abort
+// mid-seed with an opaque constraint message and no recovery hint. Matching is
+// exact — look-alike usernames and other phone prefixes are left untouched.
+void validateSeedConflicts(sqlite3* database)
 {
-    const char* sql =
-        "DELETE FROM flow_event WHERE flow_no IN (SELECT flow_no FROM charging_flow WHERE "
-        "user_id IN (SELECT id FROM user_account WHERE username LIKE 'sim_owner_%'));"
-        "DELETE FROM charging_order WHERE user_id IN (SELECT id FROM user_account WHERE "
-        "username LIKE 'sim_owner_%');"
-        "DELETE FROM charging_flow WHERE user_id IN (SELECT id FROM user_account WHERE "
-        "username LIKE 'sim_owner_%');"
-        "DELETE FROM wallet_transaction WHERE user_id IN (SELECT id FROM user_account WHERE "
-        "username LIKE 'sim_owner_%');"
-        "DELETE FROM recharge_order WHERE user_id IN (SELECT id FROM user_account WHERE "
-        "username LIKE 'sim_owner_%');"
-        "DELETE FROM wallet_account WHERE user_id IN (SELECT id FROM user_account WHERE "
-        "username LIKE 'sim_owner_%');"
-        "DELETE FROM user_account WHERE username LIKE 'sim_owner_%';"
-        "DELETE FROM charger WHERE station_id IN (SELECT id FROM station WHERE code IN "
-        "('CYGY','BJN','SJS','TZYH')) OR code IN ('ZGC-DC-04','ZGC-DC-05','ZGC-DC-06',"
-        "'ZGC-AC-03','ZGC-AC-04');"
-        "UPDATE charger SET total_count=0,total_minutes=0 WHERE station_id IN (SELECT id FROM "
-        "station WHERE code IN ('ZGC','CYGY','BJN','SJS','TZYH'));"
-        "DELETE FROM station WHERE code IN ('CYGY','BJN','SJS','TZYH');"
-        "DELETE FROM region_tariff WHERE adcode IN ('110106','110107','110112');";
-    char* error = nullptr;
-    if (sqlite3_exec(database, sql, nullptr, nullptr, &error) != SQLITE_OK)
+    Stmt find(database, "SELECT username,phone FROM user_account WHERE username=?1 OR phone=?2 "
+                        "LIMIT 1");
+    for (int owner = 0; owner < kOwnerCount; ++owner)
     {
-        const std::string message = error ? error : "seed unwind failed";
-        sqlite3_free(error);
-        throw std::runtime_error(message);
+        char username[24];
+        char phone[16];
+        std::snprintf(username, sizeof(username), "sim_owner_%03d", owner + 1);
+        std::snprintf(phone, sizeof(phone), "1380000%04d", 1001 + owner);
+        find.reset();
+        find.bind(1, username);
+        find.bind(2, phone);
+        if (find.step())
+        {
+            if (find.text(0) == username)
+                throw std::runtime_error("UC-D-02 seed conflict: user_account '" +
+                                         std::string(username) +
+                                         "' already exists; resolve the conflicting account "
+                                         "before upgrading to schema v8");
+            throw std::runtime_error("UC-D-02 seed conflict: phone '" + std::string(phone) +
+                                     "' of user '" + find.text(0) +
+                                     "' collides with the seed phone set; resolve the "
+                                     "conflicting account before upgrading to schema v8");
+        }
     }
 }
 
 void applyFullDemoSeed(sqlite3* database, const int64_t anchorAt)
 {
-    unwindSeedScope(database);
+    validateSeedConflicts(database);
     const int64_t anchorDayStart = anchorAt / kDaySeconds * kDaySeconds;
     const int64_t day0Start = anchorDayStart - int64_t(kHistoryDays) * kDaySeconds;
     const int64_t day0EpochDay = day0Start / kDaySeconds;

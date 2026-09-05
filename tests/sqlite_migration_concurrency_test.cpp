@@ -156,7 +156,11 @@ int main()
             upgradeBalance = repository.wallet(upgradeUserId).balanceCent;
         }
         // Roll the physical schema back to the v5 layout while keeping the
-        // v1-v5 version rows, so the next open must run v6 then v7.
+        // v1-v5 version rows, so the next open must run v6, v7 and v8. The
+        // v8 seed rows are residue of this rollback, and the re-run's exact
+        // identity check would flag them as conflicts — remove them with
+        // test-local SQL so the fixture is an honest pre-v8 database
+        // (production has no cleanup path; it aborts and asks for a backup).
         executeSql(upgradeDatabase.path(), "DELETE FROM schema_version WHERE version>=6");
         executeSql(upgradeDatabase.path(), "DROP INDEX IF EXISTS ux_ml_task_one_running_type");
         executeSql(upgradeDatabase.path(), "DROP TABLE IF EXISTS load_prediction");
@@ -165,6 +169,26 @@ int main()
         executeSql(upgradeDatabase.path(), "DROP TABLE IF EXISTS dashboard_state");
         executeSql(upgradeDatabase.path(), "DROP INDEX IF EXISTS ix_order_status_settled");
         executeSql(upgradeDatabase.path(), "DROP INDEX IF EXISTS ix_order_status_started");
+        executeSql(upgradeDatabase.path(),
+                   "DELETE FROM flow_event WHERE flow_no IN (SELECT flow_no FROM charging_flow "
+                   "WHERE user_id IN (SELECT id FROM user_account WHERE username LIKE "
+                   "'sim_owner_%'));"
+                   "DELETE FROM charging_order WHERE user_id IN (SELECT id FROM user_account "
+                   "WHERE username LIKE 'sim_owner_%');"
+                   "DELETE FROM charging_flow WHERE user_id IN (SELECT id FROM user_account "
+                   "WHERE username LIKE 'sim_owner_%');"
+                   "DELETE FROM wallet_transaction WHERE user_id IN (SELECT id FROM user_account "
+                   "WHERE username LIKE 'sim_owner_%');"
+                   "DELETE FROM recharge_order WHERE user_id IN (SELECT id FROM user_account "
+                   "WHERE username LIKE 'sim_owner_%');"
+                   "DELETE FROM wallet_account WHERE user_id IN (SELECT id FROM user_account "
+                   "WHERE username LIKE 'sim_owner_%');"
+                   "DELETE FROM user_account WHERE username LIKE 'sim_owner_%';"
+                   "DELETE FROM charger WHERE station_id IN (SELECT id FROM station WHERE code IN "
+                   "('CYGY','BJN','SJS','TZYH')) OR code IN ('ZGC-DC-04','ZGC-DC-05','ZGC-DC-06',"
+                   "'ZGC-AC-03','ZGC-AC-04');"
+                   "DELETE FROM station WHERE code IN ('CYGY','BJN','SJS','TZYH');"
+                   "DELETE FROM region_tariff WHERE adcode IN ('110106','110107','110112');");
         {
             SqliteRepository repository(upgradeDatabase.path());
             tests.check(queryInteger(upgradeDatabase.path(),
