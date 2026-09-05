@@ -127,14 +127,14 @@ QWidget* UserMainWindow::createLoginPage()
                 notify(QStringLiteral("请输入正确的 11 位手机号"), true);
                 return;
             }
-            QString message;
-            if (!service_.login(phoneEdit_->text(), codeEdit_->text(), &message))
-            {
-                notify(message, true);
-                return;
-            }
             if (!userApi_)
             {
+                QString message;
+                if (!service_.login(phoneEdit_->text(), codeEdit_->text(), &message))
+                {
+                    notify(message, true);
+                    return;
+                }
                 notify(message);
                 showHome();
                 return;
@@ -144,7 +144,7 @@ QWidget* UserMainWindow::createLoginPage()
             login->setEnabled(false);
             userApi_->loginSms(
                 phone, smsCode, QStringLiteral("ncs-user-desktop"),
-                [this, login, message](ApiReply reply)
+                [this, login, phone, smsCode](ApiReply reply)
                 {
                     login->setEnabled(true);
                     if (reply.ok())
@@ -165,6 +165,12 @@ QWidget* UserMainWindow::createLoginPage()
                     if (reply.code != QStringLiteral("NetworkError"))
                     {
                         notify(reply.message, true);
+                        return;
+                    }
+                    QString message;
+                    if (!service_.login(phone, smsCode, &message))
+                    {
+                        notify(message, true);
                         return;
                     }
                     onlineSession_ = false;
