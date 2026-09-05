@@ -152,8 +152,8 @@ int main()
                     "fresh database is migrated, writable and in WAL mode");
         tests.check(repository.findAdminByUsername("admin").has_value() &&
                         queryInteger(database.path(), "SELECT MAX(version) FROM schema_version") ==
-                            7,
-                    "dashboard/ML migration and development account exist");
+                            8,
+                    "demo-seed migration, development account and full history exist");
 
         UserAccount account;
         account.username = "persistent_user";

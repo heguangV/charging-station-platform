@@ -1,4 +1,5 @@
 #include "infrastructure/sqlite/sqlite_repository.h"
+#include "infrastructure/sqlite/sqlite_seed.h"
 
 #include "core/application/security_crypto.h"
 
@@ -25,8 +26,8 @@ namespace
 
 using namespace ncs::core::application;
 
-constexpr int kLatestSchemaVersion = 7;
-constexpr const char* kLatestSchemaChecksum = "ncs-v7-order-analytics";
+constexpr int kLatestSchemaVersion = 8;
+constexpr const char* kLatestSchemaChecksum = "ncs-v8-full-demo-seed";
 
 class Connection final
 {
@@ -957,6 +958,54 @@ CREATE INDEX IF NOT EXISTS ix_order_status_started
 INSERT INTO schema_version VALUES(7,'order-analytics-indexes','ncs-v7-order-analytics',strftime('%s','now'));
 COMMIT;
 )SQL");
+    }
+
+    Statement demoSeedMigration(connection.get(), "SELECT 1 FROM schema_version WHERE version=8");
+    if (!demoSeedMigration.row())
+    {
+        connection.execute("BEGIN IMMEDIATE");
+        try
+        {
+            const std::int64_t anchorAt = std::chrono::duration_cast<std::chrono::seconds>(
+                                              std::chrono::system_clock::now().time_since_epoch())
+                                              .count();
+            applyFullDemoSeed(connection.get(), anchorAt);
+            connection.execute("COMMIT");
+        }
+        catch (...)
+        {
+            try
+            {
+                connection.execute("ROLLBACK");
+            }
+            catch (...)
+            {
+            }
+            throw;
+        }
+    }
+    else
+    {
+        // The v1 migration body above executes unconditionally on every open,
+        // so it can re-insert legacy device rows that a previous v8 seed run
+        // removed at freed ids; re-apply the removal policy after v8 has run.
+        connection.execute("BEGIN IMMEDIATE");
+        try
+        {
+            removeLegacyStations(connection.get());
+            connection.execute("COMMIT");
+        }
+        catch (...)
+        {
+            try
+            {
+                connection.execute("ROLLBACK");
+            }
+            catch (...)
+            {
+            }
+            throw;
+        }
     }
 }
 

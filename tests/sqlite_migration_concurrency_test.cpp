@@ -168,13 +168,13 @@ int main()
         {
             SqliteRepository repository(upgradeDatabase.path());
             tests.check(queryInteger(upgradeDatabase.path(),
-                                     "SELECT MAX(version) FROM schema_version") == 7 &&
+                                     "SELECT MAX(version) FROM schema_version") == 8 &&
                             queryInteger(upgradeDatabase.path(),
                                          "SELECT COUNT(*) FROM dashboard_state") == 1 &&
                             repository.findById(upgradeUserId).has_value() &&
                             repository.wallet(upgradeUserId).balanceCent == upgradeBalance &&
                             repository.findAdminByUsername("admin").has_value(),
-                        "reopening a v5 database re-applies v6 and v7 in order and keeps "
+                        "reopening a v5 database re-applies v6, v7 and v8 in order and keeps "
                         "committed data");
         }
     }
