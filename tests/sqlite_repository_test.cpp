@@ -613,6 +613,8 @@ int main()
             ("INSERT INTO ops_log(actor_admin_id,action,target_type,target_id,reason,at) VALUES(" +
              std::to_string(adminId) + ",'RETENTION','test','old-181','RETENTION'," +
              std::to_string(now - 181 * day - 1) + "),(" + std::to_string(adminId) +
+             ",'RETENTION','test','edge-180','RETENTION'," + std::to_string(now - 180 * day) +
+             "),(" + std::to_string(adminId) +
              ",'RETENTION','test','old-179','RETENTION'," + std::to_string(now - 179 * day) +
              ");"
              "INSERT INTO device_command(command_no,charger_id,charger_code,status,reason,actor_id,"
@@ -620,6 +622,10 @@ int main()
              "('CMD-OLD-DONE',1,'ZGC-DC-01','SUCCEEDED','RETENTION','test'," +
              std::to_string(now - 200 * day) + "," + std::to_string(now - 200 * day) + "," +
              std::to_string(now - 181 * day) +
+             ",''),"
+             "('CMD-EDGE-DONE',1,'ZGC-DC-01','SUCCEEDED','RETENTION','test'," +
+             std::to_string(now - 200 * day) + "," + std::to_string(now - 200 * day) + "," +
+             std::to_string(now - 180 * day) +
              ",''),"
              "('CMD-NEW-DONE',1,'ZGC-DC-01','SUCCEEDED','RETENTION','test'," +
              std::to_string(now - 200 * day) + "," + std::to_string(now - 200 * day) + "," +
@@ -671,16 +677,21 @@ int main()
         tests.check(queryInteger(database.path(),
                                  "SELECT COUNT(*) FROM ops_log WHERE target_id='old-179'") == 1 &&
                         queryInteger(database.path(),
+                                     "SELECT COUNT(*) FROM ops_log WHERE target_id='edge-180'") ==
+                            1 &&
+                        queryInteger(database.path(),
                                      "SELECT COUNT(*) FROM ops_log WHERE target_id='old-181'") ==
                             0 &&
                         queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
                                                       "command_no='CMD-NEW-DONE'") == 1 &&
                         queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
+                                                      "command_no='CMD-EDGE-DONE'") == 1 &&
+                        queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
                                                       "command_no='CMD-OLD-RUN'") == 1 &&
                         queryInteger(database.path(), "SELECT COUNT(*) FROM device_command WHERE "
                                                       "command_no='CMD-OLD-DONE'") == 0,
                     "180-day retention prunes aged completed audit and command rows and keeps "
-                    "pending and recent rows");
+                    "pending, recent and exactly-180-day rows (the bound is strict <)");
         tests.check(
             queryInteger(database.path(), "SELECT COUNT(*) FROM load_prediction") == 1 &&
                 queryInteger(database.path(), "SELECT COUNT(*) FROM model_version") == 2 &&
