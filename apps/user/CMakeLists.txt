@@ -34,4 +34,9 @@ target_link_libraries(ncs_user
         Qt6::Network
 )
 
+if(TARGET Qt6::WebEngineWidgets)
+    target_link_libraries(ncs_user PRIVATE Qt6::WebEngineWidgets)
+    target_compile_definitions(ncs_user PRIVATE NCS_HAS_WEBENGINE=1)
+endif()
+
 ncs_set_project_warnings(ncs_user)

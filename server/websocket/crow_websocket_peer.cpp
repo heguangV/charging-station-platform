@@ -2,9 +2,10 @@
 
 #include <crow/websocket.h>
 
-namespace ncs::server::websocket {
+namespace ncs::server::websocket
+{
 
-CrowWebSocketPeer::CrowWebSocketPeer(crow::websocket::connection *connection)
+CrowWebSocketPeer::CrowWebSocketPeer(crow::websocket::connection* connection)
     : connection_(connection)
 {
 }
@@ -12,7 +13,8 @@ CrowWebSocketPeer::CrowWebSocketPeer(crow::websocket::connection *connection)
 void CrowWebSocketPeer::sendText(std::string frame)
 {
     std::lock_guard lock(mutex_);
-    if (connection_) {
+    if (connection_)
+    {
         connection_->send_text(std::move(frame));
     }
 }
@@ -20,15 +22,10 @@ void CrowWebSocketPeer::sendText(std::string frame)
 void CrowWebSocketPeer::close(const std::uint16_t code, std::string reason)
 {
     std::lock_guard lock(mutex_);
-    if (connection_) {
+    if (connection_)
+    {
         connection_->close(std::move(reason), code);
     }
-}
-
-void CrowWebSocketPeer::detach(const crow::websocket::connection *connection)
-{
-    std::lock_guard lock(mutex_);
-    if (connection_ == connection) connection_ = nullptr;
 }
 
 } // namespace ncs::server::websocket

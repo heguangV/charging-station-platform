@@ -13,12 +13,15 @@
 使用后端地址配置后，可在不启动业务窗口的情况下验证验证码路由：
 
 ```bash
+NCS_ENVIRONMENT=development NCS_LISTEN_ADDRESS=127.0.0.1 \
+NCS_ALLOW_INSECURE_HTTP=true ./build/dev/ncs_server
+
 NCS_SERVER_HOST=127.0.0.1 NCS_SERVER_PORT=8443 NCS_ALLOW_INSECURE_HTTP=true \
   ./build/dev/apps/user/ncs_user --api-request-code 13800138000
 ```
 
-该命令调用 `POST /api/v1/user/auth/sms/code`，请求体包含 `phone` 与 `purpose=LOGIN`。成功退出码为 0；失败输出服务端 `userMessage` 并以 4 退出。
+第一条命令只会在 `development` + 数字回环地址下启用服务端 HTTP；其他环境或地址会拒绝启动并保持失败关闭。第二条命令调用 `POST /api/v1/user/auth/sms/code`，请求体包含 `phone` 与 `purpose=LOGIN`。成功退出码为 0；失败输出服务端 `userMessage` 并以 4 退出。该模式仅用于同机开发联调，不得用于测试、验收、生产、局域网或公网。
 
 ## 当前状态
 
-用户端窗口默认使用 `MockUserClientService`，保证服务端不可用时仍可演示完整流程。`UserApi` 已与团队当前契约对齐，但异步 REST Service/ViewModel 尚未注入现有同步 Mock 页面；该适配应作为下一独立任务完成，不能通过阻塞等待网络回复来替换 Mock。自签名 TLS 不调用 `ignoreSslErrors()` 绕过校验；开发环境应使用受信任的开发 CA，或显式使用本地 HTTP 开关，最终 HTTPS 方案由服务端证书链统一决定。
+用户端窗口仍以 `MockUserClientService` 承载尚未迁移的充电、钱包和订单页面，保证服务端不可用时可进入明确标识的本机降级模式。验证码登录和导航路线已经异步接入 `UserApi`：取得会话后，导航页优先调用 `/stations/{stationId}/route`，显示腾讯路线摘要，并在 Qt WebEngine 与 JS Key 可用时绘制路线；只有在线会话、腾讯路线或内嵌地图不可用时才保留浏览器/直线距离降级。其余同步 Mock 页面应在后续任务通过异步 Service/ViewModel 迁移，不得在 UI 线程阻塞等待网络回复。自签名 TLS 不调用 `ignoreSslErrors()` 绕过校验；开发环境应使用受信任的开发 CA，或显式使用本地 HTTP 开关，最终 HTTPS 方案由服务端证书链统一决定。

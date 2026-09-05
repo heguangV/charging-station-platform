@@ -77,14 +77,16 @@ int main(int argc, char* argv[])
         QSslConfiguration::setDefaultConfiguration(sslConfiguration);
     }
 
+    QUrl baseUrl;
+    baseUrl.setScheme(config.value().allowInsecureHttp() ? QStringLiteral("http")
+                                                         : QStringLiteral("https"));
+    baseUrl.setHost(config.value().serverHost());
+    baseUrl.setPort(config.value().serverPort());
+    auto* apiClient = new ncs::user::ApiClient(baseUrl, &app);
+    auto* userApi = new ncs::user::UserApi(*apiClient);
+
     if (parser.isSet(QStringLiteral("api-request-code")))
     {
-        QUrl baseUrl;
-        baseUrl.setScheme(config.value().allowInsecureHttp() ? QStringLiteral("http") : QStringLiteral("https"));
-        baseUrl.setHost(config.value().serverHost());
-        baseUrl.setPort(config.value().serverPort());
-        auto* apiClient = new ncs::user::ApiClient(baseUrl, &app);
-        auto* userApi = new ncs::user::UserApi(*apiClient);
         userApi->requestSmsCode(parser.value(QStringLiteral("api-request-code")),
                                  [&app](ncs::user::ApiReply reply) {
             qInfo().noquote() << (reply.ok() ? QStringLiteral("REST 验证码请求成功")
@@ -96,12 +98,6 @@ int main(int argc, char* argv[])
         return result;
     }
 
-    QUrl baseUrl;
-    baseUrl.setScheme(config.value().allowInsecureHttp() ? QStringLiteral("http") : QStringLiteral("https"));
-    baseUrl.setHost(config.value().serverHost());
-    baseUrl.setPort(config.value().serverPort());
-    ncs::user::ApiClient apiClient(baseUrl, &app);
-    ncs::user::UserApi userApi(apiClient);
     ncs::user::MockUserClientService mockService;
     const bool mockMode = parser.isSet(QStringLiteral("mock-scenario"));
     QString scenarioMessage;
@@ -112,8 +108,9 @@ int main(int argc, char* argv[])
         return 4;
     }
     if (mockMode) qInfo().noquote() << scenarioMessage;
-    ncs::user::UserMainWindow window(mockService, mockMode ? nullptr : &apiClient,
-                                     mockMode ? nullptr : &userApi);
+    ncs::user::UserMainWindow window(mockService, mockMode ? nullptr : userApi,
+                                     config.value().tencentMapWebKey(),
+                                     config.value().tencentMapJsOrigin());
     window.show();
     if (parser.isSet(QStringLiteral("smoke-test")))
     {

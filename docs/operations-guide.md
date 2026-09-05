@@ -11,7 +11,9 @@
 
 要求 CMake 3.24+、Ninja、GCC 11+ 和 Qt 6.2.x。复制 `.env.example` 为本机 `.env`，设置文件权限为仅当前用户可读写。配置文件依次由命令行 `--config`、`NCS_ENV_FILE`、当前目录 `.env`、程序目录 `.env` 选择；进程环境变量再覆盖文件中的同名配置。
 
-正式环境必须满足：`NCS_ENV=production`、`NCS_ALLOW_INSECURE_HTTP=false`，并配置可读的证书和私钥路径。日志和安全输出不得包含配置值中的密钥、令牌、验证码或个人信息。
+正式环境的服务端必须满足：`NCS_ENVIRONMENT=production`、`NCS_ALLOW_INSECURE_HTTP=false`，并配置可读的证书和私钥路径。客户端使用 `NCS_ENV=production` 并同样保持 `NCS_ALLOW_INSECURE_HTTP=false`。日志和安全输出不得包含配置值中的密钥、令牌、验证码或个人信息。
+
+本机开发联调可在两个进程中显式设置 `NCS_ALLOW_INSECURE_HTTP=true`。服务端还必须使用 `NCS_ENVIRONMENT=development` 和 `NCS_LISTEN_ADDRESS=127.0.0.1`（或 `::1`）；客户端必须使用 `NCS_ENV=development` 和相同的数字回环地址。服务端启动日志必须出现明文开发模式 WARNING；证书文件在此模式下不读取。完成联调后取消该变量即可恢复默认 HTTPS。
 
 ## 2. 构建与启动顺序
 
@@ -66,8 +68,8 @@ QT_QPA_PLATFORM=offscreen ./build/dev/apps/admin/ncs_admin --smoke-test
 | schema 版本不匹配 | 保持只读/未就绪，核对迁移清单 | 修改已执行迁移 |
 | 锁超时 | 记录请求 ID，检查长事务与工作线程 | 在事件循环中重试 SQL |
 | 结算中断 | 按幂等键和恢复检查点重放 | 人工直接改余额 |
-| 证书失效 | 切换已审核证书并重启验证 | 临时开放公网明文 HTTP |
-| 外部地图/ML 失败 | 启用本地距离或朴素预测降级 | 阻断基础充电流程 |
+| 证书失效 | 切换已审核证书并重启验证；本机开发可按第 1 节启用受限回环 HTTP | 临时开放局域网或公网明文 HTTP |
+| 外部地图/ML 失败 | 地图先确认 Server Key、配额和出口限制；路线失败时保留浏览器导航及本地距离，ML 启用朴素预测降级 | 阻断基础充电流程；把 Server Key 下发客户端 |
 
 ## 6. 数据清理
 

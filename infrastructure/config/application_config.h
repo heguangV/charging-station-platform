@@ -61,9 +61,9 @@ class ApplicationConfig final
     {
         return tencentMapWebKey_;
     }
-    const QString& tencentMapServiceKey() const noexcept
+    const QString& tencentMapJsOrigin() const noexcept
     {
-        return tencentMapServiceKey_;
+        return tencentMapJsOrigin_;
     }
 
     QStringList safeSummary() const;
@@ -81,7 +81,7 @@ class ApplicationConfig final
     bool simulatedSmsEnabled_ = false;
     bool dashboardSnapshotEnabled_ = true;
     QString tencentMapWebKey_;
-    QString tencentMapServiceKey_;
+    QString tencentMapJsOrigin_;
 };
 
 } // namespace ncs::infrastructure

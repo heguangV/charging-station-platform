@@ -71,9 +71,11 @@ QFrame* metricCard(const QString& title, QLabel*& value, const QString& initialV
 }
 } // namespace
 
-UserMainWindow::UserMainWindow(UserClientService& service, ApiClient* apiClient, UserApi* userApi,
-                               QWidget* parent)
-    : QMainWindow(parent), service_(service), apiClient_(apiClient), userApi_(userApi)
+UserMainWindow::UserMainWindow(UserClientService& service, UserApi* userApi, QString tencentMapJsKey,
+                               QString tencentMapJsOrigin, QWidget* parent)
+    : QMainWindow(parent), service_(service), userApi_(userApi),
+      tencentMapJsKey_(std::move(tencentMapJsKey)),
+      tencentMapJsOrigin_(std::move(tencentMapJsOrigin))
 {
     setWindowTitle(QStringLiteral("NCS 充电"));
     setFixedSize(420, 760);

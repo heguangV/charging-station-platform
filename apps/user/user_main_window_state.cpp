@@ -30,6 +30,7 @@ constexpr int kChargePage = 3;
 
 void UserMainWindow::showLogin()
 {
+    onlineSession_ = false;
     phoneEdit_->clear();
     codeEdit_->clear();
     bottomNavigation_->hide();

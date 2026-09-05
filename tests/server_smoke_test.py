@@ -12,9 +12,13 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
+
+REQUEST_TIMEOUT_SECONDS = 15 if os.name == "nt" else 2
+EVENT_TIMEOUT_SECONDS = 15 if os.name == "nt" else 5
 
 
 def free_port() -> int:
@@ -27,7 +31,8 @@ def request(port: int, path: str, headers=None, method="GET", body=None):
     context = ssl.create_default_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
-    connection = http.client.HTTPSConnection("127.0.0.1", port, context=context, timeout=2)
+    connection = http.client.HTTPSConnection(
+        "127.0.0.1", port, context=context, timeout=REQUEST_TIMEOUT_SECONDS)
     connection.request(method, path, body=body, headers=headers or {})
     response = connection.getresponse()
     body = response.read()
@@ -41,7 +46,7 @@ def oversized_headers_only(port: int):
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     connection = http.client.HTTPSConnection(
-        "127.0.0.1", port, context=context, timeout=2)
+        "127.0.0.1", port, context=context, timeout=REQUEST_TIMEOUT_SECONDS)
     connection.putrequest("POST", "/api/v1/user/auth/register")
     connection.putheader("Content-Type", "application/json")
     connection.putheader("Content-Length", str(8 * 1024 * 1024 + 1))
@@ -89,6 +94,23 @@ def chunked_overflow(port: int) -> bytes:
     return received
 
 
+def stop_server(process: subprocess.Popen, timeout: int) -> bool:
+    """Stop a test server and report whether Windows required forced termination."""
+    forced_windows_stop = False
+    if process.poll() is None:
+        if os.name == "nt":
+            forced_windows_stop = True
+            process.terminate()
+        else:
+            process.send_signal(signal.SIGTERM)
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2)
+    return forced_windows_stop
+
+
 class WsClient:
     """Minimal RFC 6455 client on top of the standard library: TLS handshake,
     masked client frames, unmasked server frames, application-level ping/pong
@@ -96,7 +118,8 @@ class WsClient:
 
     GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-    def __init__(self, port: int, token: str | None):
+    def __init__(self, port: int, token: str | None,
+                 background_reader: bool = True):
         raw = socket.create_connection(("127.0.0.1", port), timeout=5)
         context = ssl.create_default_context()
         context.check_hostname = False
@@ -140,10 +163,40 @@ class WsClient:
         self.close_code = None
         self.close_reason = b""
         self.received = []
+        self._lock = threading.Lock()
+        self._socket_lock = threading.Lock()
+        self._background_reader = self.status == 101 and background_reader
+        # A real client reads its socket continuously. The background reader
+        # answers application pings immediately so the server's pong timeout
+        # cannot expire while the test drives the other connections: the
+        # phases before the heartbeat check take over a minute on slow
+        # Windows CI runners, longer than the server's 60 s pong timeout.
+        if self._background_reader:
+            threading.Thread(target=self._read_forever, daemon=True).start()
+
+    def _read_forever(self):
+        # Python's SSLSocket must not be read and written concurrently. The
+        # one-second read timeout bounds how long a writer can wait for the
+        # shared socket lock.
+        try:
+            while True:
+                with self._lock:
+                    if self.closed:
+                        return
+                try:
+                    with self._socket_lock:
+                        self._socket.settimeout(1.0)
+                        opcode, payload = self._recv_frame()
+                except socket.timeout:
+                    continue
+                if not self._handle_frame(opcode, payload):
+                    return
+        except (OSError, ValueError):
+            with self._lock:
+                self.closed = True
 
     def _read_exact(self, count: int) -> bytes:
         while len(self._buffer) < count:
-            self._socket.settimeout(8)
             part = self._socket.recv(65536)
             if not part:
                 raise ConnectionError("connection closed while reading")
@@ -162,7 +215,8 @@ class WsClient:
             header = bytes([0x80 | opcode, 0x80 | 126]) + length.to_bytes(2, "big")
         else:
             header = bytes([0x80 | opcode, 0x80 | 127]) + length.to_bytes(8, "big")
-        self._socket.sendall(header + mask + masked)
+        with self._socket_lock:
+            self._socket.sendall(header + mask + masked)
 
     def send_text(self, payload: str):
         self._send_frame(0x1, payload.encode())
@@ -186,51 +240,99 @@ class WsClient:
             payload = self._read_exact(length)
         return opcode, payload
 
-    def recv_events(self, timeout: float):
-        """Collect text frames until `timeout` seconds pass with no new frame.
-        Application pings are answered automatically; a server close frame
-        sets closed/close_code/close_reason."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            self._socket.settimeout(max(0.1, deadline - time.monotonic()))
-            try:
-                opcode, payload = self._recv_frame()
-            except TimeoutError:
-                break
-            except OSError:
-                break
-            if opcode == 0x1:
-                event = json.loads(payload)
-                if event.get("type") == "ping":
-                    self.send_pong()
+    def _handle_frame(self, opcode: int, payload: bytes) -> bool:
+        if opcode == 0x1:
+            event = json.loads(payload)
+            if event.get("type") == "ping":
+                self.send_pong()
+            with self._lock:
                 self.received.append(event)
-            elif opcode == 0x8:
+        elif opcode == 0x8:
+            with self._lock:
                 self.closed = True
                 if len(payload) >= 2:
                     self.close_code = int.from_bytes(payload[:2], "big")
                     self.close_reason = payload[2:]
-                break
-            elif opcode == 0x9:
-                self._send_frame(0xA, payload)
-            # opcode 0xA (pong) and 0x2 (binary) are ignored
-        return list(self.received)
+            return False
+        elif opcode == 0x9:
+            self._send_frame(0xA, payload)
+        # opcode 0xA (pong) and 0x2 (binary) are ignored
+        return True
+
+    def recv_events(self, timeout: float):
+        """Block until `timeout` seconds elapse or the connection closes,
+        then return every frame collected so far."""
+        deadline = time.monotonic() + timeout
+        if not self._background_reader:
+            while time.monotonic() < deadline:
+                with self._lock:
+                    if self.closed:
+                        break
+                try:
+                    with self._socket_lock:
+                        self._socket.settimeout(
+                            max(0.1, deadline - time.monotonic()))
+                        opcode, payload = self._recv_frame()
+                except (socket.timeout, OSError):
+                    break
+                if not self._handle_frame(opcode, payload):
+                    break
+            with self._lock:
+                return list(self.received)
+
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self.closed:
+                    break
+            time.sleep(0.05)
+        with self._lock:
+            return list(self.received)
 
     def wait_for(self, predicate, timeout: float, consume: bool = True):
-        """Poll recv_events until `predicate` matches any received event."""
+        """Poll the background reader's collected events until `predicate`
+        matches any received event."""
+        return self.wait_for_count(predicate, 1, timeout, consume)
+
+    def wait_for_count(self, predicate, expected_count: int, timeout: float,
+                       consume: bool = True):
+        """Wait until at least `expected_count` matching events arrive.
+
+        Returning as soon as the first match arrives is not sufficient when a
+        test drives multiple asynchronous updates: on slower runners, later
+        events may still be in flight. Return partial matches on timeout so a
+        failed assertion can report what was actually received.
+        """
+        if expected_count < 1:
+            raise ValueError("expected_count must be positive")
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            self.recv_events(min(2.0, deadline - time.monotonic()))
-            matches = [event for event in self.received if predicate(event)]
-            if matches:
-                return matches
-        return []
+        while True:
+            with self._lock:
+                matches = [event for event in self.received if predicate(event)]
+                if len(matches) >= expected_count:
+                    if consume:
+                        self.received = [event for event in self.received
+                                         if not predicate(event)]
+                    return matches
+                if self.closed or time.monotonic() >= deadline:
+                    return matches
+            time.sleep(0.05)
 
     def events_of_type(self, event_type: str):
-        return [event for event in self.received if event.get("type") == event_type]
+        with self._lock:
+            return [event for event in self.received if event.get("type") == event_type]
 
     def close(self):
-        self._send_frame(0x8, b"")
-        self._socket.close()
+        with self._lock:
+            already_closed = self.closed
+        if not already_closed:
+            try:
+                self._send_frame(0x8, b"")
+            except OSError:
+                pass
+        with self._lock:
+            self.closed = True
+        with self._socket_lock:
+            self._socket.close()
 
 
 def main() -> int:
@@ -251,6 +353,10 @@ def main() -> int:
         dashboard_snapshot = root / "dashboard.json"
         model_path = root / "models" / "load_rf.pkl"
         worker_script = Path(__file__).resolve().parent.parent / "ml" / "worker.py"
+        server_stdout = root / "server-stdout.log"
+        server_stderr = root / "server-stderr.log"
+        restarted_stdout = root / "server-restarted-stdout.log"
+        restarted_stderr = root / "server-restarted-stderr.log"
         subprocess.run(
             [
                 "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
@@ -286,11 +392,13 @@ def main() -> int:
             ]
 
         port = free_port()
+        # Do not pipe the server's stderr without draining it: the server logs
+        # to stderr, and a full pipe buffer (4 KiB on Windows) would block the
+        # request-handling thread and deadlock the whole server.
         process = subprocess.Popen(
             server_arguments(port),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            stdout=open(server_stdout, "w", encoding="utf-8", errors="replace"),
+            stderr=open(server_stderr, "w", encoding="utf-8", errors="replace"),
         )
         try:
             live = None
@@ -304,7 +412,7 @@ def main() -> int:
                 except (ConnectionError, OSError, ssl.SSLError):
                     time.sleep(0.05)
             if live is None:
-                stderr = process.stderr.read() if process.poll() is not None else ""
+                stderr = server_stderr.read_text(encoding="utf-8", errors="replace")
                 raise AssertionError(f"server did not become live: {stderr}")
 
             status, headers, body = live
@@ -450,7 +558,7 @@ def main() -> int:
             flow_events = ws_user.wait_for(
                 lambda event: event.get("type") == "flow.updated"
                 and event["data"].get("flowNo") == flow["flowNo"],
-                5.0)
+                EVENT_TIMEOUT_SECONDS)
             assert flow_events, "flow.updated did not reach the creator"
             assert flow_events[0]["sequence"] > ready_events[0]["sequence"]
 
@@ -478,7 +586,8 @@ def main() -> int:
             assert start_status == 200 and started["status"] == 40
 
             progress_events = ws_user.wait_for(
-                lambda event: event.get("type") == "charge.progress", 5.0)
+                lambda event: event.get("type") == "charge.progress",
+                EVENT_TIMEOUT_SECONDS)
             assert progress_events, "charge.progress did not reach the creator"
             progress_data = progress_events[0]["data"]
             assert progress_data["flowNo"] == flow["flowNo"]
@@ -546,7 +655,8 @@ def main() -> int:
             ), (settle_status, receipt)
 
             settled_events = ws_user.wait_for(
-                lambda event: event.get("type") == "order.settled", 5.0)
+                lambda event: event.get("type") == "order.settled",
+                EVENT_TIMEOUT_SECONDS)
             assert settled_events, "order.settled did not reach the creator"
             settled_data = settled_events[0]["data"]
             assert settled_data["orderNo"] == receipt["orderNo"]
@@ -556,13 +666,13 @@ def main() -> int:
             admin_settled = ws_admin.wait_for(
                 lambda event: event.get("type") == "order.settled"
                 and event["data"].get("orderNo") == receipt["orderNo"],
-                5.0)
+                EVENT_TIMEOUT_SECONDS)
             assert admin_settled, "order.settled did not reach the administrator"
             admin_release = ws_admin.wait_for(
                 lambda event: event.get("type") == "charger.statusChanged"
                 and event["data"].get("fromStatus") == 1
                 and event["data"].get("toStatus") == 0,
-                5.0)
+                EVENT_TIMEOUT_SECONDS)
             assert admin_release, "charger release did not reach the administrator"
 
             # The administrator changes a free charger to faulty and back.
@@ -591,11 +701,11 @@ def main() -> int:
                 )
                 assert change_status == 200, change_status
                 free_charger["version"] += 1
-            admin_charger_changes = ws_admin.wait_for(
+            admin_charger_changes = ws_admin.wait_for_count(
                 lambda event: event.get("type") == "charger.statusChanged"
                 and event["data"].get("chargerId") == free_charger["id"],
-                5.0)
-            assert len(admin_charger_changes) >= 2
+                2, EVENT_TIMEOUT_SECONDS)
+            assert len(admin_charger_changes) >= 2, admin_charger_changes
             assert any(event["data"]["toStatus"] == 2 for event in admin_charger_changes)
             assert any(event["data"]["toStatus"] == 0 for event in admin_charger_changes)
 
@@ -659,10 +769,16 @@ def main() -> int:
             # admin token reuses the admin session whose assertions are done;
             # this replaces ws_admin (closed 1001) without disturbing the
             # user-B heartbeat checks below.
-            ws_oversized = WsClient(port, admin_token)
+            ws_oversized = WsClient(port, admin_token, background_reader=False)
             assert ws_oversized.status == 101
             ws_oversized.recv_events(2.0)
-            ws_oversized.send_text("x" * (70 * 1024))
+            try:
+                ws_oversized.send_text("x" * (70 * 1024))
+            except (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError):
+                # The server may reject and close the oversized frame before
+                # the client finishes writing it. The close-code assertion
+                # below still verifies that this was the expected 1009 close.
+                pass
             ws_oversized.recv_events(3.0)
             assert ws_oversized.closed and ws_oversized.close_code == 1009, (
                 ws_oversized.closed, ws_oversized.close_code)
@@ -683,24 +799,37 @@ def main() -> int:
             dashboard_logout_retry, _, _ = request(
                 port, "/api/v1/dashboard/auth/logout", dashboard_headers, "POST")
             assert dashboard_logout == 200 and dashboard_logout_retry == 200
-        finally:
-            if process.poll() is None:
-                process.send_signal(signal.SIGTERM)
+        except BaseException:
+            # Surface server-side diagnostics (errors, structured logs) before
+            # the temporary directory is cleaned up.
+            stop_server(process, 5)
+            print("--- server stderr begin ---", file=sys.stderr)
+            print(server_stderr.read_text(encoding="utf-8", errors="replace"),
+                  file=sys.stderr)
+            print("--- server stderr end ---", file=sys.stderr)
             try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=2)
-        if process.returncode != 0:
-            print(process.stderr.read(), file=sys.stderr)
+                log_files = sorted(logs.iterdir()) if logs.is_dir() else []
+                newest = [path for path in log_files if path.name.endswith(".log")]
+                for path in newest[-2:]:
+                    print(f"--- {path.name} begin ---", file=sys.stderr)
+                    print(path.read_text(encoding="utf-8", errors="replace")[-8000:],
+                          file=sys.stderr)
+                    print(f"--- {path.name} end ---", file=sys.stderr)
+            except OSError:
+                pass
+            raise
+        finally:
+            forced_windows_stop = stop_server(process, 5)
+        if process.returncode != 0 and not forced_windows_stop:
+            print(server_stderr.read_text(encoding="utf-8", errors="replace"),
+                  file=sys.stderr)
             return 1
 
         restart_port = free_port()
         restarted = subprocess.Popen(
             server_arguments(restart_port),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            stdout=open(restarted_stdout, "w", encoding="utf-8", errors="replace"),
+            stderr=open(restarted_stderr, "w", encoding="utf-8", errors="replace"),
         )
         try:
             deadline = time.monotonic() + 10
@@ -767,16 +896,16 @@ def main() -> int:
                 persisted_receipt_status == 200
                 and json.loads(persisted_receipt_body)["data"]["orderNo"] == receipt["orderNo"]
             )
+        except BaseException:
+            stop_server(restarted, 5)
+            print(restarted_stderr.read_text(encoding="utf-8", errors="replace"),
+                  file=sys.stderr)
+            raise
         finally:
-            if restarted.poll() is None:
-                restarted.send_signal(signal.SIGTERM)
-            try:
-                restarted.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                restarted.kill()
-                restarted.wait(timeout=2)
-        if restarted.returncode != 0:
-            print(restarted.stderr.read(), file=sys.stderr)
+            forced_windows_stop = stop_server(restarted, 5)
+        if restarted.returncode != 0 and not forced_windows_stop:
+            print(restarted_stderr.read_text(encoding="utf-8", errors="replace"),
+                  file=sys.stderr)
             return 1
     return 0
 

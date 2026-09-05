@@ -151,7 +151,7 @@ QWidget* UserMainWindow::createProfilePage()
         if (userApi_)
         {
             userApi_->logout([this](ApiReply reply) {
-                apiClient_->setAccessToken({});
+                userApi_->setAccessToken({});
                 notify(reply.ok() ? QStringLiteral("已退出登录") : reply.message, !reply.ok());
                 showLogin();
             });
@@ -192,7 +192,7 @@ QWidget* UserMainWindow::createProfilePage()
                     notify(deleteReply.message, true);
                     return;
                 }
-                apiClient_->setAccessToken({});
+                userApi_->setAccessToken({});
                 notify(QStringLiteral("账户已注销"));
                 showLogin();
             });

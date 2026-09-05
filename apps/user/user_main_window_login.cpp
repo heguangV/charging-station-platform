@@ -162,7 +162,8 @@ QWidget* UserMainWindow::createLoginPage()
                                        notify(QStringLiteral("登录响应缺少会话信息"), true);
                                        return;
                                    }
-                                   apiClient_->setAccessToken(token);
+                                   userApi_->setAccessToken(token);
+                                   onlineSession_ = true;
                                    notify(QStringLiteral("登录成功"));
                                    restoreActiveFlow();
                                });
