@@ -14,27 +14,32 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <random>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
-#include <unistd.h>
-
 namespace
 {
 
-std::int64_t processId()
+std::string uniqueDatabaseName()
 {
-    return static_cast<std::int64_t>(::getpid());
+    // No getpid(): a random seed plus the steady-clock nanosecond counter
+    // stays unique across processes and compiles on MSVC (the Windows CI
+    // job builds and runs this benchmark).
+    const auto random = std::random_device{}();
+    const auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           std::chrono::steady_clock::now().time_since_epoch())
+                           .count();
+    return "ncs-revenue-bench-" + std::to_string(random) + "-" + std::to_string(nanos) + ".db";
 }
 
 class TemporaryDatabase final
 {
   public:
     TemporaryDatabase()
-        : path_(std::filesystem::temp_directory_path() /
-                ("ncs-revenue-bench-" + std::to_string(processId()) + ".db"))
+        : path_(std::filesystem::temp_directory_path() / uniqueDatabaseName())
     {
         cleanup();
     }
