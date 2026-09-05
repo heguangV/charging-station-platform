@@ -57,8 +57,18 @@
 | 项目 | 依据 | 产物 | 验证 | 状态 |
 | --- | --- | --- | --- | --- |
 | 大屏服务端 | UC-W-02、UC-W-04 | Dashboard 路由、分析快照、30 秒原子导出 `dashboard.json` | `ncs_dashboard_ml_routes` | 完成 |
-| 大屏前端 | UC-W-01~UC-W-04 | `apps/dashboard` 仅样例快照 | — | 未开始 |
+| 大屏前端 | UC-W-01~UC-W-04 | `apps/dashboard` Vue 大屏（ECharts 按需图表、登录/会话、受权数据与恢复） | 四分辨率 UI、非空 DTO、XSS 与单位回归（见下方大屏前端接入状态） | 部分完成：设备占比口径与受权快照接口待后端接入 |
 | ML 管线 | UC-M-01~UC-M-04 | `ml/`（训练/预测/worker）+ 子进程任务管理 | `ncs_ml_process_manager`、`ncs_periodic_scheduler`、`ncs_dashboard_ml_routes` | 部分完成：任务互斥与超时已验证；30/90 天保留由 `ncs_sqlite_repository` 保留清理块验证；训练/评估质量未验证 |
+
+### 大屏前端接入状态
+
+本节仅记录 `apps/dashboard/` 前端产物，不变更后端条目状态。详细证据见 [PR7 前端修复记录](dashboard-pr7-fixes.md)。
+
+| 项目 | 依据 | 产物 | 验证 | 状态 |
+| --- | --- | --- | --- | --- |
+| 大屏布局与图表 | UC-W-01、UC-W-03 | Vue 大屏、ECharts 按需图表、空态和安全 tooltip | 四分辨率 UI、非空 DTO、XSS 和单位回归 | 部分完成：设备数量占比与累计统计口径待后端接入 |
+| 受权数据与恢复 | UC-W-02 | 整数单位 DTO、受权 summary、当前会话内存过期提示 | 空数据、错误、恢复、契约测试 | 部分完成：受权文件快照接口及非公开导出目录待后端提供 |
+| 登录与会话 | UC-W-04 | 登录/退出、401/403 清空、请求取消、8 小时/30 分钟期限 | 单元/浏览器/CTest | 部分完成：Crow 页面鉴权和即时撤销通知待协作验收 |
 
 ## 阶段八：新增增强任务（未开始）
 

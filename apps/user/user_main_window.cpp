@@ -1,26 +1,33 @@
 #include "user_main_window.h"
 
+#include "net/api_client.h"
+#include "net/user_api.h"
 #include "ui/bottom_navigation.h"
 #include "ui/charge_soc_gauge.h"
 #include "ui/charger_table.h"
 #include "ui/station_card.h"
 #include "ui/station_list_widget.h"
 
+#include <QDateTime>
 #include <QFormLayout>
 #include <QFrame>
+#include <QGraphicsOpacityEffect>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPauseAnimation>
+#include <QPropertyAnimation>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSequentialAnimationGroup>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QtMath>
-
-#include <utility>
 
 namespace ncs::user
 {
@@ -73,12 +80,19 @@ UserMainWindow::UserMainWindow(UserClientService& service, UserApi* userApi,
     setWindowTitle(QStringLiteral("NCS 充电"));
     setFixedSize(420, 760);
     auto* root = new QWidget(this);
+    root->setObjectName(QStringLiteral("appRoot"));
     auto* layout = new QVBoxLayout(root);
     layout->setContentsMargins(18, 14, 18, 14);
     layout->setSpacing(10);
-    notice_ = label(QStringLiteral("演示数据模式：服务端尚未接入"), 12);
-    notify(notice_->text());
-    layout->addWidget(notice_);
+    notice_ = label({}, 13);
+    notice_->setParent(root);
+    notice_->setFixedWidth(330);
+    notice_->setAlignment(Qt::AlignCenter);
+    notice_->setWordWrap(true);
+    noticeOpacity_ = new QGraphicsOpacityEffect(notice_);
+    noticeOpacity_->setOpacity(0.0);
+    notice_->setGraphicsEffect(noticeOpacity_);
+    notice_->hide();
     pages_ = new QStackedWidget(root);
     pages_->addWidget(createLoginPage());
     pages_->addWidget(createHomePage());
@@ -93,6 +107,20 @@ UserMainWindow::UserMainWindow(UserClientService& service, UserApi* userApi,
     bottomNavigation_->hide();
     layout->addWidget(bottomNavigation_);
     setCentralWidget(root);
+    noticeAnimation_ = new QSequentialAnimationGroup(this);
+    auto* fadeIn = new QPropertyAnimation(noticeOpacity_, "opacity", noticeAnimation_);
+    fadeIn->setDuration(180);
+    fadeIn->setStartValue(0.0);
+    fadeIn->setEndValue(1.0);
+    noticePause_ = new QPauseAnimation(noticeAnimation_);
+    auto* fadeOut = new QPropertyAnimation(noticeOpacity_, "opacity", noticeAnimation_);
+    fadeOut->setDuration(260);
+    fadeOut->setStartValue(1.0);
+    fadeOut->setEndValue(0.0);
+    noticeAnimation_->addAnimation(fadeIn);
+    noticeAnimation_->addAnimation(noticePause_);
+    noticeAnimation_->addAnimation(fadeOut);
+    connect(noticeAnimation_, &QSequentialAnimationGroup::finished, notice_, &QLabel::hide);
     connect(bottomNavigation_, &BottomNavigation::homeRequested, this, &UserMainWindow::showHome);
     connect(bottomNavigation_, &BottomNavigation::profileRequested, this,
             &UserMainWindow::showProfile);
@@ -113,7 +141,8 @@ UserMainWindow::UserMainWindow(UserClientService& service, UserApi* userApi,
                         codeButton_->setText(QStringLiteral("获取验证码"));
                     }
                 }
-                service_.tick();
+                if (!userApi_)
+                    service_.tick();
                 refreshCharge();
             });
     timer_->start(1000);
@@ -145,34 +174,66 @@ QWidget* UserMainWindow::createHomePage()
     auto* page = new QWidget;
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 8, 0, 0);
-    auto* heading = new QHBoxLayout;
-    heading->addWidget(label(QStringLiteral("附近充电站"), 23));
-    auto* profile =
-        button(QStringLiteral("我的"),
-               QStringLiteral(
-                   "QPushButton{color:#0F766E;border:0;background:transparent;font-size:14px;}"));
-    heading->addStretch();
-    heading->addWidget(profile);
-    layout->addLayout(heading);
-    auto* recommendation = new QFrame;
-    recommendation->setStyleSheet(QStringLiteral("QFrame{background:#0F766E;border-radius:18px;}"));
-    auto* recommendationLayout = new QVBoxLayout(recommendation);
-    recommendationLayout->setContentsMargins(18, 16, 18, 16);
-    auto* recommendationTitle = label(QStringLiteral("当前位置 · 中关村"), 13);
-    recommendationTitle->setStyleSheet(QStringLiteral("color:#C9F4EC;font-size:13px;"));
-    auto* recommendationText = label(QStringLiteral("附近有 10 个可用充电桩"), 21);
-    recommendationText->setStyleSheet(
-        QStringLiteral("color:white;font-size:21px;font-weight:700;"));
-    auto* recommendationMeta = label(QStringLiteral("已为你优先排列距离近、空闲多的电站"), 12);
-    recommendationMeta->setStyleSheet(QStringLiteral("color:#B9E8DF;font-size:12px;"));
-    recommendationLayout->addWidget(recommendationTitle);
-    recommendationLayout->addWidget(recommendationText);
-    recommendationLayout->addWidget(recommendationMeta);
-    layout->addWidget(recommendation);
-    stationList_ = new StationListWidget(service_.stations());
+    layout->addWidget(label(QStringLiteral("附近充电站"), 23));
+    stationList_ =
+        new StationListWidget(userApi_ ? QVector<StationSummary>{} : service_.stations());
     layout->addWidget(stationList_, 1);
-    connect(stationList_, &StationListWidget::stationSelected, this, &UserMainWindow::showDetail);
-    connect(profile, &QPushButton::clicked, this, &UserMainWindow::showProfile);
+    if (userApi_)
+    {
+        connect(
+            stationList_, &StationListWidget::loadRequested, this,
+            [this](qint64 latitudeE6, qint64 longitudeE6, const QString& locationKeyword)
+            {
+                userApi_->stations(
+                    latitudeE6, longitudeE6, locationKeyword,
+                    [this](ApiReply reply)
+                    {
+                        if (!reply.ok())
+                        {
+                            stationList_->showError(reply.message);
+                            return;
+                        }
+                        QVector<StationSummary> stations;
+                        for (const QJsonValue& value :
+                             reply.data.toObject().value(QStringLiteral("items")).toArray())
+                        {
+                            const QJsonObject item = value.toObject();
+                            StationSummary station;
+                            station.id = item.value(QStringLiteral("id")).toInt();
+                            station.name = item.value(QStringLiteral("name")).toString();
+                            station.address = item.value(QStringLiteral("address")).toString();
+                            station.priceCentPerKwh =
+                                item.value(QStringLiteral("totalPriceCentPerKwh")).toInt();
+                            station.idleCount = item.value(QStringLiteral("idleCount")).toInt();
+                            station.totalCount = item.value(QStringLiteral("totalCount")).toInt();
+                            station.latitude =
+                                item.value(QStringLiteral("latitudeE6")).toDouble() / 1000000.0;
+                            station.longitude =
+                                item.value(QStringLiteral("longitudeE6")).toDouble() / 1000000.0;
+                            const qint64 meter =
+                                item.value(QStringLiteral("distanceMeter")).toInteger();
+                            station.distance = meter < 1000
+                                                   ? QStringLiteral("%1 m").arg(meter)
+                                                   : QStringLiteral("%1 km").arg(
+                                                         QString::number(meter / 1000.0, 'f', 1));
+                            if (station.id > 0 && !station.name.isEmpty())
+                                stations.append(std::move(station));
+                        }
+                        stationsById_.clear();
+                        for (const StationSummary& station : stations)
+                            stationsById_.insert(station.id, station);
+                        stationList_->setStations(std::move(stations));
+                    });
+            });
+        stationList_->setRemoteSource(true);
+    }
+    connect(stationList_, &StationListWidget::stationSelected, this,
+            [this](const StationSummary& station)
+            {
+                stationsById_.insert(station.id, station);
+                selectedStationDistance_ = station.distance;
+                showDetail(station.id);
+            });
     return page;
 }
 
@@ -181,20 +242,30 @@ QWidget* UserMainWindow::createDetailPage()
     auto* page = new QWidget;
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 8, 0, 0);
+    layout->setSpacing(10);
     auto* back = button(QStringLiteral("‹ 返回附近电站"),
                         QStringLiteral("QPushButton{color:#0F766E;border:0;background:transparent;"
-                                       "text-align:left;font-size:14px;}"));
+                                       "text-align:left;font-size:14px;padding:0;}"));
+    back->setFixedHeight(32);
     layout->addWidget(back);
     detailTitle_ = label({}, 22);
+    detailTitle_->setStyleSheet(QStringLiteral("font-size:22px;color:#25324A;font-weight:700;"));
     detailMeta_ = label({}, 13);
+    detailMeta_->setStyleSheet(QStringLiteral("font-size:13px;color:#667085;line-height:1.5;"));
     layout->addWidget(detailTitle_);
     layout->addWidget(detailMeta_);
+    auto* chargerHeading = label(QStringLiteral("选择可用电桩"), 16);
+    chargerHeading->setStyleSheet(
+        QStringLiteral("font-size:16px;color:#25324A;font-weight:700;padding-top:4px;"));
+    layout->addWidget(chargerHeading);
+    auto* chargerHint = label(QStringLiteral("空闲电桩可预约；充电中和故障电桩不可选择"), 12);
+    chargerHint->setStyleSheet(QStringLiteral("font-size:12px;color:#667085;"));
+    layout->addWidget(chargerHint);
     chargerTable_ = new ChargerTable;
     layout->addWidget(chargerTable_);
-    auto* navigate = button(QStringLiteral("一键导航"),
-                            QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;"
-                                           "border-radius:10px;font-size:15px;font-weight:600;}"));
-    auto* reserve = button(QStringLiteral("选桩并预约"));
+    auto* navigate = button(QStringLiteral("一键导航"));
+    navigate->setObjectName(QStringLiteral("secondaryButton"));
+    auto* reserve = button(QStringLiteral("预约所选电桩"));
     layout->addWidget(navigate);
     layout->addWidget(reserve);
     layout->addStretch();
@@ -203,6 +274,11 @@ QWidget* UserMainWindow::createDetailPage()
     connect(reserve, &QPushButton::clicked, this,
             [this]
             {
+                if (userApi_)
+                {
+                    beginFlowRequest();
+                    return;
+                }
                 if (service_.hasUnfinishedOrder())
                 {
                     QMessageBox::information(this, QStringLiteral("未完成订单"),
@@ -242,7 +318,7 @@ QWidget* UserMainWindow::createChargePage()
                                                "12px;background:#E8F8EF;color:#087443;border-"
                                                "radius:12px;font-size:15px;font-weight:600;"));
     layout->addWidget(chargeState_);
-    reservationCountdown_ = label(QStringLiteral("请在预约后 15:00 内开始充电"), 13);
+    reservationCountdown_ = label(QStringLiteral("预约保留中"), 13);
     reservationCountdown_->setStyleSheet(QStringLiteral("color:#B54708;font-size:13px;"));
     layout->addWidget(reservationCountdown_);
     auto* metrics = new QWidget;
@@ -276,13 +352,42 @@ QWidget* UserMainWindow::createChargePage()
     connect(startButton_, &QPushButton::clicked, this,
             [this]
             {
+                if (userApi_)
+                {
+                    userApi_->startFlow(
+                        activeFlowNo_, activeFlowVersion_,
+                        [this](ApiReply reply)
+                        {
+                            if (!reply.ok())
+                            {
+                                notify(reply.message, true);
+                                return;
+                            }
+                            const QJsonObject value = reply.data.toObject();
+                            activeFlowVersion_ =
+                                value.value(QStringLiteral("version")).toVariant().toLongLong();
+                            activeFlowStatus_ = value.value(QStringLiteral("status")).toInt();
+                            chargingStarted_ = true;
+                            chargeState_->setText(
+                                QStringLiteral("充电中 · %1 · %2 kW")
+                                    .arg(selectedChargerCode_)
+                                    .arg(value.value(QStringLiteral("powerWatt")).toInt() / 1000));
+                            reservationCountdown_->hide();
+                            startButton_->setEnabled(false);
+                            cancelButton_->setEnabled(false);
+                            settleButton_->setEnabled(true);
+                            notify(QStringLiteral("已开始充电"));
+                            refreshCharge();
+                        });
+                    return;
+                }
                 QString message;
                 if (service_.start(&message))
                 {
                     chargingStarted_ = true;
                     chargeState_->setText(
                         QStringLiteral("充电中 · %1 · 60 kW").arg(selectedChargerCode_));
-                    reservationCountdown_->setText(QStringLiteral("充电数据每秒刷新"));
+                    reservationCountdown_->hide();
                     startButton_->setEnabled(false);
                     cancelButton_->setEnabled(false);
                     settleButton_->setEnabled(true);
@@ -296,6 +401,27 @@ QWidget* UserMainWindow::createChargePage()
     connect(cancelButton_, &QPushButton::clicked, this,
             [this]
             {
+                if (userApi_)
+                {
+                    userApi_->cancelFlow(activeFlowNo_, activeFlowVersion_,
+                                         QStringLiteral("USER_CANCELLED"),
+                                         [this](ApiReply reply)
+                                         {
+                                             if (!reply.ok())
+                                             {
+                                                 notify(reply.message, true);
+                                                 return;
+                                             }
+                                             activeFlowNo_.clear();
+                                             activeFlowVersion_ = 0;
+                                             activeFlowStatus_ = 0;
+                                             selectedChargerCode_.clear();
+                                             chargingStarted_ = false;
+                                             notify(QStringLiteral("预约已取消"));
+                                             showDetail(selectedStationId_);
+                                         });
+                    return;
+                }
                 QString message;
                 if (service_.cancelReservation(&message))
                 {
@@ -319,6 +445,45 @@ QWidget* UserMainWindow::createChargePage()
                                       QStringLiteral("结束充电后将立即从余额扣款，是否继续？")) !=
                 QMessageBox::Yes)
             {
+                return;
+            }
+            if (userApi_)
+            {
+                userApi_->settleFlow(
+                    activeFlowNo_, activeFlowVersion_, QStringLiteral("USER_FINISHED"),
+                    [this](ApiReply reply)
+                    {
+                        if (!reply.ok())
+                        {
+                            notify(reply.message, true);
+                            return;
+                        }
+                        const QJsonObject receipt = reply.data.toObject();
+                        const int minutes =
+                            receipt.value(QStringLiteral("durationSec")).toInt() / 60;
+                        receiptText_->setText(
+                            QStringLiteral("支付成功\n\n订单号  %1\n电站  %2\n充电桩  "
+                                           "%3\n\n充电时长  %4 分钟\n累计电量  %5 kWh\n本次扣款  "
+                                           "%6\n扣款后余额  %7\n\n感谢使用 NCS 充电服务")
+                                .arg(receipt.value(QStringLiteral("orderNo")).toString(),
+                                     receipt.value(QStringLiteral("stationName")).toString(),
+                                     receipt.value(QStringLiteral("chargerCode")).toString(),
+                                     QString::number(minutes),
+                                     QString::number(
+                                         receipt.value(QStringLiteral("energyMwh")).toInteger() /
+                                             1000000.0,
+                                         'f', 3),
+                                     money(receipt.value(QStringLiteral("paidCent")).toInt()),
+                                     money(receipt.value(QStringLiteral("balanceAfterCent"))
+                                               .toInt())));
+                        activeFlowNo_.clear();
+                        activeFlowVersion_ = 0;
+                        activeFlowStatus_ = 0;
+                        chargingStarted_ = false;
+                        settleButton_->setEnabled(false);
+                        notify(QStringLiteral("结算完成"));
+                        pages_->setCurrentIndex(kReceiptPage);
+                    });
                 return;
             }
             QString message;

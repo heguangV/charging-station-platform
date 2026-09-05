@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 
 REQUEST_TIMEOUT_SECONDS = 15 if os.name == "nt" else 2
+EVENT_TIMEOUT_SECONDS = 15 if os.name == "nt" else 5
 
 
 def free_port() -> int:
@@ -117,7 +118,8 @@ class WsClient:
 
     GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-    def __init__(self, port: int, token: str | None):
+    def __init__(self, port: int, token: str | None,
+                 background_reader: bool = True):
         raw = socket.create_connection(("127.0.0.1", port), timeout=5)
         context = ssl.create_default_context()
         context.check_hostname = False
@@ -282,17 +284,31 @@ class WsClient:
     def wait_for(self, predicate, timeout: float, consume: bool = True):
         """Poll the background reader's collected events until `predicate`
         matches any received event."""
+        return self.wait_for_count(predicate, 1, timeout, consume)
+
+    def wait_for_count(self, predicate, expected_count: int, timeout: float,
+                       consume: bool = True):
+        """Wait until at least `expected_count` matching events arrive.
+
+        Returning as soon as the first match arrives is not sufficient when a
+        test drives multiple asynchronous updates: on slower runners, later
+        events may still be in flight. Return partial matches on timeout so a
+        failed assertion can report what was actually received.
+        """
+        if expected_count < 1:
+            raise ValueError("expected_count must be positive")
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        while True:
             with self._lock:
                 matches = [event for event in self.received if predicate(event)]
-                if matches:
+                if len(matches) >= expected_count:
                     if consume:
                         self.received = [event for event in self.received
                                          if not predicate(event)]
                     return matches
+                if self.closed or time.monotonic() >= deadline:
+                    return matches
             time.sleep(0.05)
-        return []
 
     def events_of_type(self, event_type: str):
         with self._lock:
@@ -581,7 +597,7 @@ def main() -> int:
             flow_events = ws_user.wait_for(
                 lambda event: event.get("type") == "flow.updated"
                 and event["data"].get("flowNo") == flow["flowNo"],
-                5.0)
+                EVENT_TIMEOUT_SECONDS)
             assert flow_events, "flow.updated did not reach the creator"
             assert flow_events[0]["sequence"] > ready_events[0]["sequence"]
 
@@ -609,7 +625,8 @@ def main() -> int:
             assert start_status == 200 and started["status"] == 40
 
             progress_events = ws_user.wait_for(
-                lambda event: event.get("type") == "charge.progress", 5.0)
+                lambda event: event.get("type") == "charge.progress",
+                EVENT_TIMEOUT_SECONDS)
             assert progress_events, "charge.progress did not reach the creator"
             progress_data = progress_events[0]["data"]
             assert progress_data["flowNo"] == flow["flowNo"]
@@ -677,7 +694,8 @@ def main() -> int:
             ), (settle_status, receipt)
 
             settled_events = ws_user.wait_for(
-                lambda event: event.get("type") == "order.settled", 5.0)
+                lambda event: event.get("type") == "order.settled",
+                EVENT_TIMEOUT_SECONDS)
             assert settled_events, "order.settled did not reach the creator"
             settled_data = settled_events[0]["data"]
             assert settled_data["orderNo"] == receipt["orderNo"]
@@ -687,13 +705,13 @@ def main() -> int:
             admin_settled = ws_admin.wait_for(
                 lambda event: event.get("type") == "order.settled"
                 and event["data"].get("orderNo") == receipt["orderNo"],
-                5.0)
+                EVENT_TIMEOUT_SECONDS)
             assert admin_settled, "order.settled did not reach the administrator"
             admin_release = ws_admin.wait_for(
                 lambda event: event.get("type") == "charger.statusChanged"
                 and event["data"].get("fromStatus") == 1
                 and event["data"].get("toStatus") == 0,
-                5.0)
+                EVENT_TIMEOUT_SECONDS)
             assert admin_release, "charger release did not reach the administrator"
 
             # The administrator changes a free charger to faulty and back.
@@ -722,11 +740,11 @@ def main() -> int:
                 )
                 assert change_status == 200, change_status
                 free_charger["version"] += 1
-            admin_charger_changes = ws_admin.wait_for(
+            admin_charger_changes = ws_admin.wait_for_count(
                 lambda event: event.get("type") == "charger.statusChanged"
                 and event["data"].get("chargerId") == free_charger["id"],
-                5.0)
-            assert len(admin_charger_changes) >= 2
+                2, EVENT_TIMEOUT_SECONDS)
+            assert len(admin_charger_changes) >= 2, admin_charger_changes
             assert any(event["data"]["toStatus"] == 2 for event in admin_charger_changes)
             assert any(event["data"]["toStatus"] == 0 for event in admin_charger_changes)
 

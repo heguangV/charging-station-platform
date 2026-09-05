@@ -4,7 +4,7 @@
 
 #include <QFrame>
 
-class QPushButton;
+class QMouseEvent;
 
 namespace ncs::user
 {
@@ -18,6 +18,12 @@ class StationCard final : public QFrame
 
   signals:
     void selected(int stationId);
+
+  protected:
+    void mouseReleaseEvent(QMouseEvent* event) override;
+
+  private:
+    int stationId_ = 0;
 };
 
 } // namespace ncs::user
