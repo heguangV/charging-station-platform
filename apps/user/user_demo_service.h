@@ -15,6 +15,8 @@ struct StationSummary
     int idleCount = 0;
     int totalCount = 0;
     QString distance;
+    double latitude = 0.0;
+    double longitude = 0.0;
 };
 
 struct ChargerSummary
@@ -24,6 +26,8 @@ struct ChargerSummary
     int powerKw = 0;
     QString status;
     int totalCount = 0;
+    qint64 id = 0;
+    int typeValue = 0;
 };
 
 struct ChargeProgress
@@ -88,6 +92,7 @@ class UserClientService
 class MockUserClientService final : public UserClientService
 {
   public:
+    bool configureScenario(const QString& name, QString* userMessage);
     bool login(const QString& phone, const QString& code, QString* userMessage) override;
     QString developmentCode() const override;
     QString nickname() const override;
@@ -112,6 +117,8 @@ class MockUserClientService final : public UserClientService
     bool recharge(int amountCent, QString* userMessage) override;
 
   private:
+    void resetScenario();
+    void expireReservation();
     QString phone_;
     QString nickname_;
     QString avatarPath_;
@@ -124,6 +131,7 @@ class MockUserClientService final : public UserClientService
     int elapsedSeconds_ = 0;
     QString activeOrderNo_;
     QVector<OrderSummary> orders_;
+    bool noAvailableChargers_ = false;
 };
 
 } // namespace ncs::user
