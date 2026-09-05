@@ -84,8 +84,7 @@ std::string localServerUrl(const ncs::server::runtime::ServerConfig& config)
 // password is the value of NCS_ADMIN_BOOTSTRAP_KEY, which is never echoed;
 // the created account carries must_change_password=1 so the first login has
 // to change it. Succeeds only while no non-demo OWNER exists.
-int runBootstrapOwner(const ncs::server::runtime::ServerConfig& config,
-                      const std::string& username)
+int runBootstrapOwner(const ncs::server::runtime::ServerConfig& config, const std::string& username)
 {
     if (!ncs::core::application::AdminAccountService::validUsername(username))
     {

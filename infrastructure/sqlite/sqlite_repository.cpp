@@ -3820,8 +3820,8 @@ SqliteRepository::bootstrapOwnerAccount(const std::string_view username,
                 created.id = 0;
                 return;
             }
-            Statement usernameTaken(
-                transactionContext.database, "SELECT 1 FROM admin_account WHERE username=?");
+            Statement usernameTaken(transactionContext.database,
+                                    "SELECT 1 FROM admin_account WHERE username=?");
             usernameTaken.bind(1, username);
             if (usernameTaken.row())
                 throw std::runtime_error("bootstrap owner username already exists");
