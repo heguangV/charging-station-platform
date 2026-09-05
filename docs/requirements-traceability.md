@@ -23,9 +23,9 @@
 
 | 项目 | 依据 | 产物 | 验证 | 状态 |
 | --- | --- | --- | --- | --- |
-| 数据库实现 | UC-D-01、UC-D-03 | `infrastructure/sqlite`（28 表、v1-v7 迁移、WAL、`BEGIN IMMEDIATE`、在线备份） | `ncs_sqlite_repository`：初始化、v5→v7 顺序升级保数据、线程级并发唯一性、幂等重放、整体回滚、重启恢复、备份隔离验证与保留清理 | 完成 |
+| 数据库实现 | UC-D-01、UC-D-03 | `infrastructure/sqlite`（28 表、v1-v8 迁移、WAL、`BEGIN IMMEDIATE`、在线备份） | `ncs_sqlite_repository`：初始化、v5→v8 顺序升级保数据、线程级并发唯一性、幂等重放、整体回滚、重启恢复、备份隔离验证、180/90/30/365 天保留清理与损坏库错误路径 | 完成 |
 | 领域服务 | BR-01~BR-12 | `core/application`（充电流程、钱包、身份、幂等、价格、管理员服务） | `ncs_charge_flow_service`、`ncs_security_services`、`ncs_idempotency_service` 等逐条断言 BR 约束 | 完成 |
-| 完整演示种子 | UC-D-02 | 当前仅 3 个演示站点、2 个价格版本、1 个演示管理员 | — | 未开始：5 站点/48 桩/90 天历史按里程碑实施 |
+| 完整演示种子 | UC-D-02 | v8 迁移：5 固定站点、48 桩（6 故障）、5 行政区电价、300 用户、90 天约 9000 单/约 900 充值（固定随机种子 `20260901`） | `ncs_sqlite_seed`：五站/设备/电价/历史分布逐条断言、重开幂等、v1→v8 升级与遗留站清理 | 完成 |
 
 ## 阶段三：服务端通信（完成）
 
@@ -58,7 +58,7 @@
 | --- | --- | --- | --- | --- |
 | 大屏服务端 | UC-W-02、UC-W-04 | Dashboard 路由、分析快照、30 秒原子导出 `dashboard.json` | `ncs_dashboard_ml_routes` | 完成 |
 | 大屏前端 | UC-W-01~UC-W-04 | `apps/dashboard` 仅样例快照 | — | 未开始 |
-| ML 管线 | UC-M-01~UC-M-04 | `ml/`（训练/预测/worker）+ 子进程任务管理 | `ncs_ml_process_manager`、`ncs_periodic_scheduler`、`ncs_dashboard_ml_routes` | 部分完成：任务互斥与超时已验证；训练/评估质量与 30/90 天保留未验证 |
+| ML 管线 | UC-M-01~UC-M-04 | `ml/`（训练/预测/worker）+ 子进程任务管理 | `ncs_ml_process_manager`、`ncs_periodic_scheduler`、`ncs_dashboard_ml_routes` | 部分完成：任务互斥与超时已验证；30/90 天保留由 `ncs_sqlite_repository` 保留清理块验证；训练/评估质量未验证 |
 
 ## 阶段八：新增增强任务（未开始）
 
@@ -73,13 +73,14 @@
 | --- | --- | --- |
 | NFR-C-03、NFR-C-04、NFR-M-02、NFR-M-03、NFR-S-02~S-05、NFR-R-01、NFR-R-03 | 完成 | 编译选项与并发基元、分层 grep 无 SQL、458 处参数绑定、手机号脱敏、会话终端数、WS 无敏感数据、启动恢复、备份与 7 天/4 周保留均有测试 |
 | NFR-M-01 | 部分完成 | `scripts/check.sh` 行数门禁带存量例外清单，大文件待拆分 |
-| NFR-M-04 | 部分完成 | 结构化日志与脱敏已测；180 天审计保留未实现 |
+| NFR-M-04 | 完成 | 结构化日志与脱敏已测；ops_log/device_command 180 天、outbox 7/30 天保留清理已实现并逐边界测试（含外键完整性门禁） |
 | NFR-S-01 | 部分完成 | PBKDF2-HMAC-SHA256（600k 次迭代、版本化摘要）代替规格首选 Argon2id，偏差已在安全基线记录 |
-| NFR-R-02 | 部分完成 | 打开失败、锁等待有处理与测试；损坏库错误路径未测 |
+| NFR-R-02 | 完成 | 打开失败、锁等待有处理与测试；损坏库三类错误路径（非 SQLite 文件、页 1 数据区破坏、截断）均断言明确报错（`ncs_sqlite_corruption`） |
 | NFR-U-01、NFR-U-02、NFR-C-01、NFR-C-02、NFR-D-01 | 部分完成 | 提示/窗口尺寸/跨平台/路径重定位有实现，缺系统性验收；Windows CI 修复中 |
-| NFR-P-01~P-05、NFR-D-02 | 未开始 | 无性能、容量、吞吐与严格单机部署验收 |
+| NFR-P-02、NFR-P-04、NFR-P-05 | 完成 | 营收 30 天聚合微基准（`ncs_sqlite_revenue_bench`：中位 11.8ms、最差 14.3ms）；3000 账号/100 在线/50 排队/48 充电与 20rps 持续/50rps 峰值/100 WS 全量压测证据（`tests/performance/evidence/`，8/8 阈值通过） |
+| NFR-P-01、NFR-P-03、NFR-D-02 | 未开始 | 客户端页面刷新 CPU 与严格单机部署未验收 |
 
 ## 维护规则
 
 - 状态变化先更新需求矩阵，再同步本表；标"完成"必须同时给出产物与验证证据。
-- 当前已知验收欠账：用户端真实联调、管理端 UI、大屏前端、UC-D-02 完整种子、NFR-P 性能测试、180 天审计保留、SQLite 损坏库错误路径测试。
+- 当前已知验收欠账：用户端真实联调、管理端 UI、大屏前端、NFR-P-01/P-03 客户端页面性能、NFR-D-02 严格单机部署验收。
