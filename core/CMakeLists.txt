@@ -1,3 +1,6 @@
+add_subdirectory(domain)
+add_subdirectory(application)
+
 add_library(ncs_core STATIC
     src/error.cpp
 )
