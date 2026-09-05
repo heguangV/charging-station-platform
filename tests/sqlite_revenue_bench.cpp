@@ -39,8 +39,8 @@ class TemporaryDatabase final
 {
   public:
     TemporaryDatabase()
-        : path_(std::filesystem::temp_directory_path() / uniqueDatabaseName())
     {
+        path_ = (std::filesystem::temp_directory_path() / uniqueDatabaseName()).string();
         cleanup();
     }
 
