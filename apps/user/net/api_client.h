@@ -22,7 +22,29 @@ struct ApiReply
     QString message;
     int httpStatus = 0;
 
-    bool ok() const { return httpStatus >= 200 && httpStatus < 300 && code.isEmpty(); }
+    bool ok() const
+    {
+        return httpStatus >= 200 && httpStatus < 300 && code.isEmpty();
+    }
+};
+
+struct BinaryApiReply
+{
+    QByteArray body;
+    QByteArray contentType;
+    QByteArray etag;
+    QString code;
+    QString message;
+    int httpStatus = 0;
+
+    bool ok() const
+    {
+        return httpStatus >= 200 && httpStatus < 300 && code.isEmpty();
+    }
+    bool notModified() const
+    {
+        return httpStatus == 304;
+    }
 };
 
 class ApiClient final : public QObject
@@ -30,11 +52,14 @@ class ApiClient final : public QObject
     Q_OBJECT
   public:
     using Handler = std::function<void(ApiReply)>;
+    using BinaryHandler = std::function<void(BinaryApiReply)>;
 
     explicit ApiClient(QUrl baseUrl, QObject* parent = nullptr);
     void setAccessToken(const QString& token);
     QString accessToken() const;
     void get(const QString& path, const QUrlQuery& query, Handler handler);
+    void getBinary(const QString& path, const QHash<QByteArray, QByteArray>& headers,
+                   BinaryHandler handler);
     void postJson(const QString& path, const QJsonObject& body, Handler handler,
                   const QHash<QByteArray, QByteArray>& headers = {});
     void putJson(const QString& path, const QJsonObject& body, Handler handler);
@@ -44,11 +69,17 @@ class ApiClient final : public QObject
     static ApiReply parseEnvelope(int httpStatus, const QByteArray& payload,
                                   QNetworkReply::NetworkError transportError,
                                   const QString& transportMessage);
+    static BinaryApiReply parseBinaryReply(int httpStatus, const QByteArray& payload,
+                                           const QByteArray& contentType, const QByteArray& etag,
+                                           QNetworkReply::NetworkError transportError,
+                                           const QString& transportMessage);
     static bool isRetryableTransportError(QNetworkReply::NetworkError error);
 
   private:
     struct PendingRequest;
+    struct PendingBinaryRequest;
     void send(const std::shared_ptr<PendingRequest>& pending);
+    void sendBinary(const std::shared_ptr<PendingBinaryRequest>& pending);
     void enqueue(const QByteArray& method, const QString& path, const QByteArray& body,
                  QHash<QByteArray, QByteArray> headers, Handler handler,
                  QHttpMultiPart* multipart = nullptr);

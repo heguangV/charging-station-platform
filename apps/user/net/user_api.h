@@ -4,8 +4,6 @@
 
 #include <optional>
 
-class QFile;
-
 namespace ncs::user
 {
 
@@ -23,7 +21,9 @@ class UserApi final
     void logout(ApiClient::Handler done);
     void currentProfile(ApiClient::Handler done);
     void updateProfile(const QString& nickname, qint64 version, ApiClient::Handler done);
-    void uploadAvatar(QFile* image, const QString& fileName, ApiClient::Handler done);
+    void currentAvatar(const QByteArray& etag, ApiClient::BinaryHandler done);
+    void uploadAvatar(const QByteArray& image, const QString& fileName,
+                      const QByteArray& contentType, ApiClient::Handler done);
     void recharge(qint64 amountCent, ApiClient::Handler done);
     void orders(int page, int pageSize, ApiClient::Handler done);
     void stations(qint64 latitudeE6, qint64 longitudeE6, const QString& keyword,
