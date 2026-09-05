@@ -3780,4 +3780,184 @@ void SqliteRepository::pruneBackups()
     }
 }
 
+// UC-A-09 管理员账号管理: newest-first listing plus create / status /
+// password mutations. Every mutation bumps the resource version, writes its
+// audit event in the same transaction and is idempotent under retry except
+// that a concurrent write wins the compare-and-swap.
+
+AdminAccountPage SqliteRepository::adminAccounts(const AdminAccountQuery& query)
+{
+    return useDatabase(
+        this, databasePath_,
+        [&](sqlite3* database)
+        {
+            Statement count(database, "SELECT COUNT(*) FROM admin_account");
+            AdminAccountPage page;
+            page.page = query.page;
+            page.pageSize = query.pageSize;
+            if (count.row())
+                page.total = static_cast<int>(count.integer(0));
+            Statement select(database,
+                             "SELECT id,username,password_hash,status,must_change_password,version "
+                             "FROM admin_account ORDER BY id DESC LIMIT ? OFFSET ?");
+            select.bind(1, query.pageSize);
+            select.bind(2, static_cast<std::int64_t>(query.page - 1) * query.pageSize);
+            while (select.row())
+                page.items.push_back(readAdmin(database, select));
+            return page;
+        });
+}
+
+AdminAccountWriteResult SqliteRepository::createAdminAccount(const std::int64_t actorAdminId,
+                                                             const std::string_view username,
+                                                             const std::string_view passwordHash,
+                                                             const std::string_view reason,
+                                                             const std::int64_t at,
+                                                             AdminAccount& created)
+{
+    try
+    {
+        withTransaction(
+            [&]
+            {
+                Statement insert(transactionContext.database,
+                                 "INSERT INTO admin_account(username,password_hash,status,"
+                                 "must_change_password,is_demo,version) VALUES(?,?,1,1,0,1)");
+                insert.bind(1, username);
+                insert.bind(2, passwordHash);
+                insert.execute();
+                created.id = sqlite3_last_insert_rowid(transactionContext.database);
+                created.username = std::string(username);
+                created.passwordHash = std::string(passwordHash);
+                created.status = 1;
+                created.roles = {Role::Operator};
+                created.mustChangePassword = true;
+                created.version = 1;
+                Statement role(transactionContext.database,
+                               "INSERT INTO admin_role(admin_id,role) VALUES(?,?)");
+                role.bind(1, created.id);
+                role.bind(2, "OPERATOR");
+                role.execute();
+                addAuditEvent(AuditEvent{actorAdminId, "ADMIN_CREATED", "ADMIN",
+                                         std::to_string(created.id), std::string(reason), at});
+            });
+        return AdminAccountWriteResult::Success;
+    }
+    catch (const std::exception&)
+    {
+        if (findAdminByUsername(username))
+            return AdminAccountWriteResult::UsernameExists;
+        throw;
+    }
+}
+
+std::optional<AdminAccount>
+SqliteRepository::bootstrapOwnerAccount(const std::string_view username,
+                                        const std::string_view passwordHash, const std::int64_t at)
+{
+    AdminAccount created;
+    withTransaction(
+        [&]
+        {
+            // A demo OWNER (is_demo=1, disabled in production) never blocks the
+            // bootstrap; only a real, non-demo OWNER makes it one-shot.
+            Statement existing(transactionContext.database,
+                               "SELECT 1 FROM admin_account a JOIN admin_role r ON "
+                               "r.admin_id=a.id WHERE r.role='OWNER' AND a.is_demo=0");
+            if (existing.row())
+            {
+                created.id = 0;
+                return;
+            }
+            Statement usernameTaken(transactionContext.database,
+                                    "SELECT 1 FROM admin_account WHERE username=?");
+            usernameTaken.bind(1, username);
+            if (usernameTaken.row())
+                throw std::runtime_error("bootstrap owner username already exists");
+            Statement insert(transactionContext.database,
+                             "INSERT INTO admin_account(username,password_hash,status,"
+                             "must_change_password,is_demo,version) VALUES(?,?,1,1,0,1)");
+            insert.bind(1, username);
+            insert.bind(2, passwordHash);
+            insert.execute();
+            created.id = sqlite3_last_insert_rowid(transactionContext.database);
+            created.username = std::string(username);
+            created.passwordHash = std::string(passwordHash);
+            created.status = 1;
+            created.roles = {Role::Owner};
+            created.mustChangePassword = true;
+            created.version = 1;
+            Statement role(transactionContext.database,
+                           "INSERT INTO admin_role(admin_id,role) VALUES(?,?)");
+            role.bind(1, created.id);
+            role.bind(2, "OWNER");
+            role.execute();
+            addAuditEvent(AuditEvent{created.id, "ADMIN_CREATED", "ADMIN",
+                                     std::to_string(created.id), "bootstrap-owner", at});
+        });
+    return created.id == 0 ? std::nullopt : std::optional<AdminAccount>(std::move(created));
+}
+
+AdminAccountWriteResult SqliteRepository::updateAdminAccountStatus(
+    const std::int64_t actorAdminId, const std::int64_t adminId, const int status,
+    const std::string_view reason, const std::int64_t expectedVersion, const std::int64_t at,
+    AdminAccount& updated)
+{
+    AdminAccountWriteResult result = AdminAccountWriteResult::NotFound;
+    withTransaction(
+        [&]
+        {
+            Statement update(transactionContext.database,
+                             "UPDATE admin_account SET status=?,version=version+1 "
+                             "WHERE id=? AND version=?");
+            update.bind(1, status);
+            update.bind(2, adminId);
+            update.bind(3, expectedVersion);
+            update.execute();
+            if (sqlite3_changes(transactionContext.database) == 0)
+            {
+                const auto current = findAdminById(adminId);
+                result = current ? AdminAccountWriteResult::VersionConflict
+                                 : AdminAccountWriteResult::NotFound;
+                return;
+            }
+            updated = *findAdminById(adminId);
+            addAuditEvent(AuditEvent{actorAdminId, status == 0 ? "ADMIN_DISABLED" : "ADMIN_ENABLED",
+                                     "ADMIN", std::to_string(adminId), std::string(reason), at});
+            result = AdminAccountWriteResult::Success;
+        });
+    return result;
+}
+
+AdminAccountWriteResult SqliteRepository::changeAdminAccountPassword(
+    const std::int64_t actorAdminId, const std::int64_t adminId,
+    const std::string_view expectedCurrentHash, const std::string_view newPasswordHash,
+    const std::int64_t at, AdminAccount& updated)
+{
+    AdminAccountWriteResult result = AdminAccountWriteResult::NotFound;
+    withTransaction(
+        [&]
+        {
+            Statement update(transactionContext.database,
+                             "UPDATE admin_account SET password_hash=?,must_change_password=0,"
+                             "version=version+1 WHERE id=? AND password_hash=?");
+            update.bind(1, newPasswordHash);
+            update.bind(2, adminId);
+            update.bind(3, expectedCurrentHash);
+            update.execute();
+            if (sqlite3_changes(transactionContext.database) == 0)
+            {
+                const auto current = findAdminById(adminId);
+                result = !current ? AdminAccountWriteResult::NotFound
+                                  : AdminAccountWriteResult::HashMismatch;
+                return;
+            }
+            updated = *findAdminById(adminId);
+            addAuditEvent(AuditEvent{
+                actorAdminId, "ADMIN_PASSWORD_CHANGED", "ADMIN", std::to_string(adminId), {}, at});
+            result = AdminAccountWriteResult::Success;
+        });
+    return result;
+}
+
 } // namespace ncs::infrastructure::sqlite

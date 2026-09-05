@@ -1,5 +1,6 @@
 #include <crow.h>
 
+#include "core/application/admin_account_service.h"
 #include "core/application/admin_auth_service.h"
 #include "core/application/admin_ops_service.h"
 #include "core/application/admin_repository.h"
@@ -11,6 +12,7 @@
 #include "core/application/charging_repository.h"
 #include "core/application/event_hub.h"
 #include "core/application/idempotency_service.h"
+#include "core/application/security_crypto.h"
 #include "core/application/station_service.h"
 #include "core/application/wallet_service.h"
 #include "infrastructure/files/model_artifact_store.h"
@@ -40,6 +42,7 @@
 
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <memory>
@@ -77,6 +80,50 @@ std::string localServerUrl(const ncs::server::runtime::ServerConfig& config)
            std::to_string(config.port);
 }
 
+// UC-A-09 one-shot first-OWNER bootstrap (--bootstrap-owner). The initial
+// password is the value of NCS_ADMIN_BOOTSTRAP_KEY, which is never echoed;
+// the created account carries must_change_password=1 so the first login has
+// to change it. Succeeds only while no non-demo OWNER exists.
+int runBootstrapOwner(const ncs::server::runtime::ServerConfig& config, const std::string& username)
+{
+    if (!ncs::core::application::AdminAccountService::validUsername(username))
+    {
+        std::cerr << "ncs_server bootstrap error: username must be 3-32 ASCII alphanumeric "
+                     "characters or underscores\n";
+        return 1;
+    }
+    const char* key = std::getenv("NCS_ADMIN_BOOTSTRAP_KEY");
+    if (!key || !*key)
+    {
+        std::cerr << "ncs_server bootstrap error: NCS_ADMIN_BOOTSTRAP_KEY is not set; export the "
+                     "one-shot initial password before running\n";
+        return 1;
+    }
+    const std::string password(key);
+    if (password.size() < 10 || password.size() > 128)
+    {
+        std::cerr << "ncs_server bootstrap error: NCS_ADMIN_BOOTSTRAP_KEY must be 10-128 "
+                     "characters\n";
+        return 1;
+    }
+    const auto at = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count();
+    ncs::infrastructure::sqlite::SqliteRepository repository(config.databasePath);
+    repository.ensureDevelopmentAdmin(config.demoCredentialsEnabled());
+    const auto created = repository.bootstrapOwnerAccount(
+        username, ncs::core::application::PasswordHasher().hash(password), at);
+    if (!created)
+    {
+        std::cerr << "ncs_server bootstrap error: a non-demo OWNER already exists; the "
+                     "bootstrap is one-shot\n";
+        return 1;
+    }
+    std::cout << "OWNER account '" << created->username << "' created (id=" << created->id
+              << "); the first login must change the initial password\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -95,6 +142,10 @@ int main(int argc, char* argv[])
         {
             std::cout << "ncs_server " << ncs::server::runtime::startupVersion() << '\n';
             return 0;
+        }
+        if (startup.action == ncs::server::runtime::StartupAction::BootstrapOwner)
+        {
+            return runBootstrapOwner(startup.config, startup.bootstrapOwnerUsername);
         }
 
         logger = std::make_unique<StructuredLogger>(StructuredLogger::Options{
@@ -179,6 +230,7 @@ int main(int argc, char* argv[])
         chargeFlowService.runMaintenance(std::chrono::system_clock::now());
         ncs::server::websocket::ChargeProgressPusher progressPusher(chargeFlowService, hub);
         ncs::core::application::AdminAuthService adminAuthService(repository, sessions);
+        ncs::core::application::AdminAccountService adminAccountService(repository, sessions);
         ncs::core::application::AdminUserService adminUserService(repository, chargeFlowService,
                                                                   sessions);
         ncs::core::application::AdminStationService adminStationService(
@@ -232,7 +284,7 @@ int main(int argc, char* argv[])
             startup.config.demoCredentialsEnabled());
         ncs::server::controller::AdminRoutes adminRoutes(
             apiRoutes, adminAuthService, adminUserService, adminStationService, adminOpsService,
-            sessions, blockingExecutor, idempotency);
+            sessions, blockingExecutor, idempotency, adminAccountService);
         ncs::server::controller::DashboardRoutes dashboardRoutes(
             apiRoutes, adminAuthService, dashboardService, sessions, blockingExecutor,
             startup.config.dashboardSnapshotPath, hub);

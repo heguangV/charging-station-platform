@@ -49,6 +49,7 @@
 | 项目 | 依据 | 产物 | 验证 | 状态 |
 | --- | --- | --- | --- | --- |
 | 管理服务端 | UC-A-01~UC-A-08 | `server/controller` 管理路由（站点/设备/价格/用户/流程/统计/备份/ML）、登录锁定与二次验证 | `ncs_admin_routes` | 完成 |
+| 管理服务端（管理员账号） | UC-A-09 | 管理员账号列表、创建（OPERATOR）、启用/停用、本人改密，及首个 OWNER 一次性引导（`--bootstrap-owner` + `NCS_ADMIN_BOOTSTRAP_KEY`） | `ncs_admin_account_routes`、`ncs_sqlite_admin_accounts` | 后端部分完成（管理端界面未实现） |
 | 管理端界面 | UC-A-01~UC-A-08 | `apps/admin` 占位骨架 | `ncs_admin_smoke`（仅启动） | 未开始 |
 
 ## 阶段六：大屏与机器学习（部分完成）

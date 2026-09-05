@@ -725,7 +725,7 @@ Idempotency-Key: <uuid>
 
 订单、钱包、欠费、钱包流水、设备释放、设备累计值、流程状态和通知 outbox 必须在同一事务完成。重复请求返回同一小票。
 
-## 6. 管理员认证与用户管理（`/api/v1/admin`）
+## 6. 管理员认证、账号与用户管理（`/api/v1/admin`）
 
 ### 6.1 POST `/auth/login` — 管理员登录
 
@@ -776,6 +776,72 @@ Idempotency-Key: <uuid>
 ### 6.7 GET `/users/{userId}/orders` — 用户订单历史
 
 参数与用户端订单列表相同。管理员访问必须写审计日志。
+
+管理员账号管理（SRS `UC-A-09`）使用统一 `AdminAccount` 响应体，只返回 `id`、`username`、`roles`、`status`、`mustChangePassword` 和 `version`，不返回密码、口令哈希或演示密钥：
+
+```json
+{
+  "id": 2,
+  "username": "ops_wang",
+  "roles": ["OPERATOR"],
+  "status": 1,
+  "mustChangePassword": true,
+  "version": 1
+}
+```
+
+账号名只接受 3～32 位字母、数字或下划线并全局唯一；口令只接受 10～128 位，服务端按 NFR-S-01 保存专用哈希。登录锁定沿用 SRS `UC-A-01`：账号或密码错误统一提示且不区分原因，任一账号连续失败 5 次锁定 30 秒，各账号独立计数。演示账号 `admin/123456` 的登录与开发种子行为不受影响。
+
+### 6.8 GET `/accounts` — 管理员账号列表
+
+需要 `OWNER` 权限。参数：`page`、`pageSize`。返回 `items`、`total`、`page`、`pageSize`；演示账号与真实账号一并列出，但本接口不区分演示来源，也不提供账号删除能力。
+
+### 6.9 POST `/accounts` — 创建管理员账号
+
+需要 `OWNER` 权限、重新验证和 `Idempotency-Key`。新建账号角色固定为运营管理员 `OPERATOR`（不授予 `OWNER`/`VIEWER`），状态正常、非演示账号、`mustChangePassword=true`。
+
+请求：
+
+```json
+{
+  "username": "ops_wang",
+  "password": "ncs-Initial-2026",
+  "reason": "新入职运营专员"
+}
+```
+
+- `username`：3～32 位，仅限字母、数字和下划线，全局唯一；
+- `password`：10～128 位，仅用于首次登录，服务端只保存专用哈希；
+- `reason`：2～200 个可见字符，写入审计原因。
+
+响应 HTTP 201 返回 `AdminAccount`。账号名重复返回 `ALREADY_EXISTS`；字段不合规返回 `VALIDATION_FAILED`；权限不足返回 `FORBIDDEN`；超过 15 分钟未重新验证返回 `REAUTH_REQUIRED`。审计动作 `ADMIN_CREATED`（targetType `ADMIN`，targetId 为新建账号 id）。
+
+### 6.10 PUT `/accounts/{adminId}/status` — 停用或启用管理员
+
+需要 `OWNER` 权限、重新验证和 `Idempotency-Key`。请求：
+
+```json
+{
+  "status": 0,
+  "reason": "该管理员离岗",
+  "version": 3
+}
+```
+
+`status`：0 停用、1 启用；`reason` 必填，2～200 个可见字符。停用立即撤销该账号全部会话并阻止登录；启用恢复登录且口令保持不变；OWNER 不得停用本人账号。账号不存在返回 `NOT_FOUND`；`version` 过期返回 `VERSION_CONFLICT`；停用自己或字段不合规返回 `VALIDATION_FAILED`。审计动作 `ADMIN_DISABLED` / `ADMIN_ENABLED`。
+
+### 6.11 PUT `/me/password` — 修改本人密码
+
+需要管理员（`OPERATOR`/`OWNER`）登录，无需 `Idempotency-Key`。请求：
+
+```json
+{
+  "currentPassword": "example-old-password",
+  "newPassword": "example-new-password-2026"
+}
+```
+
+`newPassword` 10～128 位。校验当前密码成功后更新口令、清除 `mustChangePassword` 并返回最新 `AdminAccount`；当前密码错误返回 `UNAUTHORIZED`。成功后当前会话保持，该管理员其他终端会话立即失效。审计动作 `ADMIN_PASSWORD_CHANGED`（targetType `ADMIN`）。
 
 ## 7. 管理员站点、设备与价格（`/api/v1/admin`）
 

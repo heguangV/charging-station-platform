@@ -56,6 +56,21 @@ ctest --test-dir build/device-link-sim --output-on-failure
 
 上述模拟器命令只在 `tools/device_link_sim/CMakeLists.txt` 实现后可用；规划期不得将命令输出作为构建证据。
 
+### 1.3 首个 OWNER 引导（一次性离线引导）
+
+生产库初始没有任何非演示 OWNER，须先引导一个才能使用管理端（UC-A-09 扩展流）。`--bootstrap-owner` 是一次性离线启动模式，不监听网络；仅当库中不存在 `is_demo=0` 且角色为 OWNER 的管理员时生效：
+
+```bash
+export NCS_ADMIN_BOOTSTRAP_KEY='<10-128 位一次性初始密码>'
+ncs_server --database-path data/charge_platform.db --bootstrap-owner <账号名>
+```
+
+- 初始密码取自环境变量 `NCS_ADMIN_BOOTSTRAP_KEY`（10-128 位），不回显、不写日志；用毕应立即注销该变量。
+- 账号名须为 3-32 位 ASCII 字母、数字或下划线。
+- 创建的账号：角色 OWNER、非演示账号、状态启用、`must_change_password=1`——首次登录管理端会提示修改密码，改密成功后旧密码立即失效。
+- 账号创建与 `ADMIN_CREATED` 审计在同一事务提交；任一校验失败（密钥缺失或长度不符、账号名非法、用户名已存在、已存在非演示 OWNER）时退出码为 1 且数据库不变。
+- 引导成功后正常启动 `ncs_server`，用该账号登录即可。
+
 ## 2. 构建与启动顺序
 
 ```bash

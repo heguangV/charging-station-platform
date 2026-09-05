@@ -15,6 +15,24 @@ target_link_libraries(ncs_admin_routes_tests PRIVATE
 )
 add_test(NAME ncs_admin_routes COMMAND ncs_admin_routes_tests)
 
+add_executable(ncs_admin_account_routes_tests
+    admin_account_routes_test.cpp
+)
+
+set_target_properties(ncs_admin_account_routes_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+target_link_libraries(ncs_admin_account_routes_tests PRIVATE
+    ncs::server_controller
+    Qt6::Core
+    Qt6::Gui
+)
+add_test(NAME ncs_admin_account_routes COMMAND ncs_admin_account_routes_tests)
+set_tests_properties(ncs_admin_account_routes PROPERTIES LABELS "contract")
+
 add_executable(ncs_server_config_tests
     server_config_test.cpp
 )
@@ -194,6 +212,23 @@ target_link_libraries(ncs_sqlite_repository_tests PRIVATE
     ncs::infrastructure_sqlite
 )
 add_test(NAME ncs_sqlite_repository COMMAND ncs_sqlite_repository_tests)
+
+add_executable(ncs_sqlite_admin_accounts_tests
+    sqlite_admin_accounts_test.cpp
+)
+
+set_target_properties(ncs_sqlite_admin_accounts_tests PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+target_link_libraries(ncs_sqlite_admin_accounts_tests PRIVATE
+    ncs::core_application
+    ncs::infrastructure_sqlite
+)
+add_test(NAME ncs_sqlite_admin_accounts COMMAND ncs_sqlite_admin_accounts_tests)
+set_tests_properties(ncs_sqlite_admin_accounts PROPERTIES LABELS "database")
 
 add_executable(ncs_sqlite_migration_concurrency_tests
     sqlite_migration_concurrency_test.cpp
