@@ -8,12 +8,14 @@
       </div>
     </div>
     <div class="card-body" ref="chartRef"></div>
+    <div v-if="!store.summary?.revenue30d.length" class="chart-empty">{{ store.isLoading ? '加载中…' : store.error && !store.summary ? '数据加载失败' : '暂无数据' }}</div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from '../charts'
+import { kwh, escapeHtml, dateLabel } from '../format'
 import { useDashboardStore } from '../stores/dashboardStore'
 import type { DailyRevenueItem } from '../types/dashboard'
 
@@ -31,9 +33,9 @@ const updateChart = () => {
   if (!chartInstance) return
 
   const list: DailyRevenueItem[] = store.summary?.revenue30d || []
-  const dates = list.map(item => item.date)
+  const dates = list.map(item => dateLabel(item.bucketAt))
   const revenues = list.map(item => Math.round((item.revenueCent / 100) * 100) / 100)
-  const energies = list.map(item => item.energyKwh)
+  const energies = list.map(item => kwh(item.energyMwh))
 
   const option: echarts.EChartsOption = {
     backgroundColor: 'transparent',
@@ -57,10 +59,10 @@ const updateChart = () => {
         if (!params || !params.length) return ''
         const idx = params[0].dataIndex
         const raw = list[idx]
-        return `<b>${raw.date}</b><br/>
+        return `<b>${escapeHtml(dateLabel(raw.bucketAt))}</b><br/>
                 当日营收: <span style="color:#ffc107;font-weight:bold">¥${(raw.revenueCent / 100).toFixed(2)}</span><br/>
-                充电总量: <span style="color:#00d2ff;font-weight:bold">${raw.energyKwh.toLocaleString()} kWh</span><br/>
-                充电车次: ${raw.chargeCount} 次`
+                充电总量: <span style="color:#00d2ff;font-weight:bold">${kwh(raw.energyMwh).toLocaleString()} kWh</span><br/>
+                充电车次: ${raw.orderCount} 次`
       }
     },
     xAxis: {
@@ -88,7 +90,7 @@ const updateChart = () => {
         axisLabel: {
           color: '#8da4c4',
           fontSize: 11,
-          formatter: (val: number) => `¥${(val / 1000).toFixed(1)}k`
+          formatter: (val: number) => val >= 1000 ? `¥${(val / 1000).toFixed(1)}k` : `¥${val}`
         }
       },
       {
@@ -99,7 +101,7 @@ const updateChart = () => {
         axisLabel: {
           color: '#8da4c4',
           fontSize: 11,
-          formatter: (val: number) => `${(val / 1000).toFixed(1)}k`
+          formatter: (val: number) => val >= 1000 ? `${(val / 1000).toFixed(1)}k` : `${val}`
         }
       }
     ],
@@ -148,7 +150,7 @@ const updateChart = () => {
     ]
   }
 
-  chartInstance.setOption(option)
+  chartInstance.setOption(option, true)
 }
 
 watch(

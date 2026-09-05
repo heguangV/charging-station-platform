@@ -2,19 +2,26 @@
   <div class="tech-card load-prediction-card">
     <div class="card-header">
       <span><i class="card-title-decor"></i>未来 24 小时负荷预测 (AI 模型)</span>
-      <span class="card-tag alert-tag"><i class="dot"></i>含高峰预警</span>
+      <select v-if="stationIds.length" v-model="selectedStation" aria-label="预测电站"><option v-for="id in stationIds" :key="id" :value="id">电站 {{ id }}</option></select>
     </div>
     <div class="card-body" ref="chartRef"></div>
+    <div v-if="!store.summary?.prediction24h.length" class="chart-empty">{{ store.isLoading ? '加载中…' : store.error && !store.summary ? '数据加载失败' : '暂无数据' }}</div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
-import * as echarts from 'echarts'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import * as echarts from '../charts'
+import { kwh, timeLabel, escapeHtml } from '../format'
 import { useDashboardStore } from '../stores/dashboardStore'
 import type { Prediction24hItem } from '../types/dashboard'
 
 const store = useDashboardStore()
+const selectedStation = ref<number | null>(null)
+const stationIds = computed(() => [...new Set(store.summary?.prediction24h.map(item => item.stationId) ?? [])])
+watch(stationIds, ids => {
+  if (!ids.includes(selectedStation.value!)) selectedStation.value = ids[0] ?? null
+}, { immediate: true })
 const chartRef = ref<HTMLDivElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
 
@@ -27,17 +34,17 @@ const initChart = () => {
 const updateChart = () => {
   if (!chartInstance) return
 
-  const list: Prediction24hItem[] = store.summary?.prediction24h || []
-  const hours = list.map(item => item.hourLabel)
-  const energies = list.map(item => item.predictedEnergy)
-  const freeChargers = list.map(item => item.predictedFreeChargers)
+  const list: Prediction24hItem[] = (store.summary?.prediction24h || []).filter(item => item.stationId === selectedStation.value).sort((a, b) => a.targetAt - b.targetAt)
+  const hours = list.map(item => timeLabel(item.targetAt))
+  const energies = list.map(item => kwh(item.predictedEnergyMwh))
+  const freeChargers = list.map(item => item.predictedFreeCount)
 
   const peakMarks = list
-    .filter(item => item.isPeak === 1)
+    .filter(item => item.isPeak)
     .map(item => ({
       name: '高峰',
-      xAxis: item.hourLabel,
-      yAxis: item.predictedEnergy,
+      xAxis: timeLabel(item.targetAt),
+      yAxis: kwh(item.predictedEnergyMwh),
       value: '高峰',
       itemStyle: { color: '#ff3d71' }
     }))
@@ -46,7 +53,7 @@ const updateChart = () => {
     backgroundColor: 'transparent',
     grid: {
       top: '18%',
-      left: '3%',
+      left: '8%',
       right: '8%',
       bottom: '8%',
       containLabel: true
@@ -61,9 +68,9 @@ const updateChart = () => {
         if (!params || !params.length) return ''
         const idx = params[0].dataIndex
         const raw = list[idx]
-        return `时间: <b>${raw.hourLabel}</b><br/>
-                预测充电量: <span style="color:#00f0ff;font-weight:bold">${raw.predictedEnergy} kWh</span><br/>
-                预测空闲桩: <span style="color:#00e676;font-weight:bold">${raw.predictedFreeChargers} 台</span><br/>
+        return `${raw.stale ? '预测已过期<br/>' : ''}时间: <b>${escapeHtml(timeLabel(raw.targetAt))}</b><br/>
+                预测充电量: <span style="color:#00f0ff;font-weight:bold">${kwh(raw.predictedEnergyMwh)} kWh</span><br/>
+                预测空闲桩: <span style="color:#00e676;font-weight:bold">${raw.predictedFreeCount} 台</span><br/>
                 负荷预警: <span style="color:${raw.isPeak ? '#ff3d71' : '#00e676'};font-weight:bold">${raw.isPeak ? '⚠️ 用电高峰' : '✅ 平稳区间'}</span>`
       }
     },
@@ -88,7 +95,7 @@ const updateChart = () => {
     yAxis: [
       {
         type: 'value',
-        name: '预测负荷 (kWh)',
+        name: '电量(kWh)',
         nameTextStyle: { color: '#00f0ff', fontSize: 10 },
         splitLine: {
           lineStyle: {
@@ -145,11 +152,11 @@ const updateChart = () => {
     ]
   }
 
-  chartInstance.setOption(option)
+  chartInstance.setOption(option, true)
 }
 
 watch(
-  () => store.summary,
+  () => [store.summary, selectedStation.value],
   () => {
     updateChart()
   },

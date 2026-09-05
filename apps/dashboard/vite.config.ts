@@ -4,6 +4,8 @@ import { resolve } from 'path'
 
 export default defineConfig({
   plugins: [vue()],
+  // Runtime exports must never be served or copied into the static build.
+  publicDir: false,
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src')
@@ -27,7 +29,7 @@ export default defineConfig({
       output: {
         manualChunks: {
           'vendor-vue': ['vue', 'pinia'],
-          'vendor-echarts': ['echarts']
+          'vendor-echarts': ['echarts/core']
         }
       }
     }

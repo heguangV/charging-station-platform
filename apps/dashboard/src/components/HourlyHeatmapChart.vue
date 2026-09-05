@@ -1,16 +1,18 @@
 <template>
   <div class="tech-card hourly-heatmap-card">
     <div class="card-header">
-      <span><i class="card-title-decor"></i>24小时充电负荷时段分布</span>
-      <span class="card-tag">日内负荷率</span>
+      <span><i class="card-title-decor"></i>近30日充电时段分布</span>
+      <span class="card-tag">UTC 时段 · kWh</span>
     </div>
     <div class="card-body" ref="chartRef"></div>
+    <div v-if="!store.summary?.hourlyHeatmap.some(item => item.energyMwh > 0)" class="chart-empty">{{ store.isLoading ? '加载中…' : store.error && !store.summary ? '数据加载失败' : '暂无数据' }}</div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from '../charts'
+import { kwh } from '../format'
 import { useDashboardStore } from '../stores/dashboardStore'
 import type { HourlyHeatmapItem } from '../types/dashboard'
 
@@ -29,7 +31,7 @@ const updateChart = () => {
 
   const heatmap: HourlyHeatmapItem[] = store.summary?.hourlyHeatmap || []
   const hours = Array.from({ length: 24 }, (_, i) => `${i}:00`)
-  const values = heatmap.map(item => item.loadPercent)
+  const values = Array.from({ length: 24 }, (_, hour) => kwh(heatmap.filter(item => item.hour === hour).reduce((sum, item) => sum + item.energyMwh, 0)))
 
   const option: echarts.EChartsOption = {
     backgroundColor: 'transparent',
@@ -49,18 +51,7 @@ const updateChart = () => {
       formatter: (params: any) => {
         const p = params[0]
         const val = p.value
-        let statusText = '平谷期'
-        let color = '#00e676'
-        if (val >= 80) {
-          statusText = '尖峰高负荷'
-          color = '#ff3d71'
-        } else if (val >= 60) {
-          statusText = '繁忙高峰'
-          color = '#ffab00'
-        }
-        return `时段: <b>${p.name}</b><br/>
-                负荷率: <b>${val}%</b><br/>
-                状态: <span style="color:${color};font-weight:bold">${statusText}</span>`
+        return `时段: ${p.dataIndex}:00 UTC<br/>充电量: ${Number(val).toLocaleString()} kWh`
       }
     },
     xAxis: {
@@ -76,7 +67,6 @@ const updateChart = () => {
     },
     yAxis: {
       type: 'value',
-      max: 100,
       splitLine: {
         lineStyle: {
           color: 'rgba(43, 88, 160, 0.2)',
@@ -86,20 +76,20 @@ const updateChart = () => {
       axisLabel: {
         color: '#8da4c4',
         fontSize: 10,
-        formatter: '{value}%'
+        formatter: '{value}'
       }
     },
     visualMap: {
       show: false,
       min: 0,
-      max: 100,
+      max: Math.max(1, ...values),
       inRange: {
         color: ['#00e676', '#00d2ff', '#ffab00', '#ff3d71']
       }
     },
     series: [
       {
-        name: '负荷率',
+        name: '充电量',
         type: 'bar',
         barWidth: 8,
         data: values,
@@ -110,7 +100,7 @@ const updateChart = () => {
     ]
   }
 
-  chartInstance.setOption(option)
+  chartInstance.setOption(option, true)
 }
 
 watch(

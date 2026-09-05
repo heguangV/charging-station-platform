@@ -1,16 +1,18 @@
 <template>
   <div class="tech-card station-rank-card">
     <div class="card-header">
-      <span><i class="card-title-decor"></i>电站充电量排行 TOP 5</span>
+      <span><i class="card-title-decor"></i>近30日电站充电量 TOP 5</span>
       <span class="card-tag">单位: kWh</span>
     </div>
     <div class="card-body" ref="chartRef"></div>
+    <div v-if="!store.summary?.stationRanking.length" class="chart-empty">{{ store.isLoading ? '加载中…' : store.error && !store.summary ? '数据加载失败' : '暂无数据' }}</div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from '../charts'
+import { kwh, escapeHtml } from '../format'
 import { useDashboardStore } from '../stores/dashboardStore'
 import type { StationRankingItem } from '../types/dashboard'
 
@@ -27,18 +29,12 @@ const initChart = () => {
 const updateChart = () => {
   if (!chartInstance) return
 
-  const ranking: StationRankingItem[] = store.summary?.stationRanking || [
-    { stationId: 1, stationName: '朝阳科技园超级站', chargeCount: 1420, energyKwh: 21300.5, revenueCent: 3195000 },
-    { stationId: 2, stationName: '海淀中关村智能站', chargeCount: 1180, energyKwh: 17700.0, revenueCent: 2655000 },
-    { stationId: 3, stationName: '丰台金融港快充中心', chargeCount: 890, energyKwh: 13350.2, revenueCent: 2002500 },
-    { stationId: 4, stationName: '大兴亦庄能源站', chargeCount: 520, energyKwh: 7800.0, revenueCent: 1170000 },
-    { stationId: 5, stationName: '昌平回龙观示范站', chargeCount: 258, energyKwh: 3870.1, revenueCent: 833700 }
-  ]
+  const ranking: StationRankingItem[] = store.summary?.stationRanking || []
 
   // 横向柱图从下至上渲染，因此先 reverse
-  const sorted = [...ranking].reverse()
+  const sorted = [...ranking].sort((a, b) => b.energyMwh - a.energyMwh).slice(0, 5).reverse()
   const names = sorted.map(item => item.stationName)
-  const values = sorted.map(item => item.energyKwh)
+  const values = sorted.map(item => kwh(item.energyMwh))
 
   const option: echarts.EChartsOption = {
     backgroundColor: 'transparent',
@@ -58,9 +54,9 @@ const updateChart = () => {
       formatter: (params: any) => {
         const p = params[0]
         const raw = sorted[p.dataIndex]
-        return `<b>${raw.stationName}</b><br/>
-                总充电量: <b>${raw.energyKwh.toLocaleString()} kWh</b><br/>
-                充电次数: ${raw.chargeCount} 次<br/>
+        return `<b>${escapeHtml(raw.stationName)}</b><br/>
+                总充电量: <b>${kwh(raw.energyMwh).toLocaleString()} kWh</b><br/>
+                充电次数: ${raw.orderCount} 次<br/>
                 累计营收: ¥${(raw.revenueCent / 100).toLocaleString()}`
       }
     },
@@ -115,13 +111,13 @@ const updateChart = () => {
           color: '#00f0ff',
           fontSize: 11,
           fontFamily: 'monospace',
-          formatter: (p: any) => `${(p.value / 1000).toFixed(1)}k`
+          formatter: (p: any) => p.value >= 1000 ? `${(p.value / 1000).toFixed(1)}k` : `${p.value}`
         }
       }
     ]
   }
 
-  chartInstance.setOption(option)
+  chartInstance.setOption(option, true)
 }
 
 watch(

@@ -2,15 +2,16 @@
   <div class="tech-card charger-status-card">
     <div class="card-header">
       <span><i class="card-title-decor"></i>电桩实时运行状态分布</span>
-      <span class="card-tag">总数: {{ store.totalChargers }} 台</span>
+      <span class="card-tag">总数: {{ store.summary ? store.totalChargers : '--' }} 台</span>
     </div>
     <div class="card-body" ref="chartRef"></div>
+    <div v-if="!store.totalChargers" class="chart-empty">{{ store.isLoading ? '加载中…' : store.error && !store.summary ? '数据加载失败' : '暂无数据' }}</div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from '../charts'
 import { useDashboardStore } from '../stores/dashboardStore'
 
 const store = useDashboardStore()
@@ -27,10 +28,10 @@ const updateChart = () => {
   if (!chartInstance) return
 
   const status = store.summary?.chargerStatus || {
-    idle: 32,
-    inUse: 18,
-    fault: 3,
-    restarting: 1,
+    idle: 0,
+    inUse: 0,
+    fault: 0,
+    restarting: 0,
     disabled: 0
   }
 
@@ -66,6 +67,8 @@ const updateChart = () => {
       {
         name: '电桩状态',
         type: 'pie',
+        stillShowZeroSum: false,
+        showEmptyCircle: false,
         radius: ['45%', '72%'],
         center: ['40%', '50%'],
         avoidLabelOverlap: false,
@@ -96,7 +99,7 @@ const updateChart = () => {
     ]
   }
 
-  chartInstance.setOption(option)
+  chartInstance.setOption(option, true)
 }
 
 watch(

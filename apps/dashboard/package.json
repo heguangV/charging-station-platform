@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:ui": "playwright test"
   },
   "dependencies": {
     "echarts": "^5.5.0",
@@ -19,6 +21,13 @@
     "@vitejs/plugin-vue": "^5.0.4",
     "typescript": "^5.4.3",
     "vite": "^5.2.2",
-    "vue-tsc": "^2.0.7"
+    "vue-tsc": "^2.0.7",
+    "vitest": "^2.1.9",
+    "@playwright/test": "^1.55.0"
+  },
+  "packageManager": "pnpm@10.15.1",
+  "engines": {
+    "node": ">=22.12.0 <27",
+    "pnpm": ">=10 <11"
   }
 }

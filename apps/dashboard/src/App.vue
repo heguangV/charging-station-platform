@@ -1,6 +1,7 @@
 <template>
   <div class="scale-wrapper" :style="wrapperStyle">
-    <div class="dashboard-root">
+    <LoginPanel v-if="!store.token" />
+    <div v-else class="dashboard-root">
       <OfflineAlert />
       <HeaderBar />
 
@@ -45,6 +46,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useDashboardStore } from './stores/dashboardStore'
+import LoginPanel from './components/LoginPanel.vue'
 import HeaderBar from './components/HeaderBar.vue'
 import OfflineAlert from './components/OfflineAlert.vue'
 import MetricCards from './components/MetricCards.vue'
@@ -73,7 +75,7 @@ const updateScale = () => {
 const wrapperStyle = computed(() => ({
   width: `${TARGET_WIDTH}px`,
   height: `${TARGET_HEIGHT}px`,
-  transform: `scale(${scale.value})`,
+  transform: `translate(-50%, -50%) scale(${scale.value})`,
   transformOrigin: 'center center'
 }))
 
@@ -81,17 +83,22 @@ onMounted(() => {
   updateScale()
   window.addEventListener('resize', updateScale)
   // 启动 30 秒轮询调度 (UC-W-02)
-  store.startAutoRefresh(30000)
+  for (const event of ['pointerdown', 'keydown', 'pointermove']) window.addEventListener(event, store.recordActivity)
+  document.addEventListener('visibilitychange', store.checkSession)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', updateScale)
-  store.stopAutoRefresh()
+  store.clearSession()
+  for (const event of ['pointerdown', 'keydown', 'pointermove']) window.removeEventListener(event, store.recordActivity)
+  document.removeEventListener('visibilitychange', store.checkSession)
 })
 </script>
 
 <style scoped>
 .scale-wrapper {
+  left: 50%;
+  top: 50%;
   position: absolute;
   overflow: hidden;
   transition: transform 0.15s ease-out;
@@ -112,11 +119,13 @@ onUnmounted(() => {
   display: flex;
   gap: 16px;
   padding: 16px 20px 20px 20px;
-  height: calc(1080px - 84px);
+  min-height: 0;
   overflow: hidden;
 }
 
 .column {
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;

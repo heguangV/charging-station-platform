@@ -7,14 +7,14 @@
         </svg>
       </div>
       <div class="metric-info">
-        <div class="metric-label">累计充电次数</div>
+        <div class="metric-label">近30日充电次数</div>
         <div class="metric-value">
-          {{ formatNumber(store.summary?.totalChargeCount || 4268) }}
+          {{ formatNumber(store.summary?.totalChargeCount) }}
           <span class="metric-unit">次</span>
         </div>
         <div class="metric-sub">
           <span>覆盖电站</span>
-          <span class="highlight">{{ store.summary?.stationCount || 5 }} 座</span>
+          <span class="highlight">{{ store.summary?.stationCount ?? '--' }} 座</span>
         </div>
       </div>
     </div>
@@ -28,14 +28,14 @@
         </svg>
       </div>
       <div class="metric-info">
-        <div class="metric-label">累计总营收</div>
+        <div class="metric-label">近30日总营收</div>
         <div class="metric-value text-gold">
-          {{ formatCurrency(store.totalRevenueYuan) }}
+          {{ store.summary ? formatCurrency(store.totalRevenueYuan) : '--' }}
           <span class="metric-unit">元</span>
         </div>
         <div class="metric-sub">
           <span>平均单价</span>
-          <span class="highlight">1.50 元/度</span>
+          <span class="highlight">--</span>
         </div>
       </div>
     </div>
@@ -51,12 +51,12 @@
       <div class="metric-info">
         <div class="metric-label">在线电桩数</div>
         <div class="metric-value text-green">
-          {{ store.onlineChargers }}
-          <span class="metric-unit">/ {{ store.totalChargers }} 台</span>
+          {{ store.summary ? store.onlineChargers : '--' }}
+          <span class="metric-unit">/ {{ store.summary ? store.totalChargers : '--' }} 台</span>
         </div>
         <div class="metric-sub">
           <span>设备在线率</span>
-          <span class="highlight">{{ onlineRate }}%</span>
+          <span class="highlight">{{ onlineRate }}</span>
         </div>
       </div>
     </div>
@@ -73,12 +73,12 @@
       <div class="metric-info">
         <div class="metric-label">注册车主用户</div>
         <div class="metric-value text-purple">
-          {{ formatNumber(store.summary?.registeredUserCount || 1280) }}
+          {{ formatNumber(store.summary?.registeredUserCount) }}
           <span class="metric-unit">人</span>
         </div>
         <div class="metric-sub">
           <span>账户活跃度</span>
-          <span class="highlight">94.2%</span>
+          <span class="highlight">--</span>
         </div>
       </div>
     </div>
@@ -92,12 +92,12 @@ import { useDashboardStore } from '../stores/dashboardStore'
 const store = useDashboardStore()
 
 const onlineRate = computed(() => {
-  if (!store.totalChargers) return '0.0'
-  return ((store.onlineChargers / store.totalChargers) * 100).toFixed(1)
+  if (!store.totalChargers) return '--'
+  return ((store.onlineChargers / store.totalChargers) * 100).toFixed(1) + '%'
 })
 
-const formatNumber = (num: number) => {
-  return num.toLocaleString()
+const formatNumber = (num: number | undefined) => {
+  return num?.toLocaleString() ?? '--'
 }
 
 const formatCurrency = (amount: number) => {
@@ -111,7 +111,7 @@ const formatCurrency = (amount: number) => {
 <style scoped>
 .metrics-container {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   width: 100%;
 }

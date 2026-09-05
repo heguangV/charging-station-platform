@@ -3,7 +3,7 @@
     <div class="header-left">
       <div class="status-badge" :class="{ 'is-fallback': store.isFallback }">
         <span class="pulse-dot"></span>
-        <span class="status-text">{{ store.isFallback ? '离线快照模式' : '实时在线' }}</span>
+        <span class="status-text">{{ !store.summary ? (store.isLoading ? '加载中' : '数据不可用') : store.isFallback ? '离线快照模式' : '实时在线' }}</span>
       </div>
       <div class="meta-item">
         <span class="meta-label">数据截止:</span>
@@ -11,7 +11,7 @@
       </div>
       <div class="meta-item">
         <span class="meta-label">数据版本:</span>
-        <span class="meta-value">v{{ store.summary?.dataVersion || '1.0' }}</span>
+        <span class="meta-value">v{{ store.summary?.dataVersion ?? '--' }}</span>
       </div>
     </div>
 
@@ -22,6 +22,7 @@
     </div>
 
     <div class="header-right">
+      <button class="action-btn" title="退出登录" @click="store.logout">退出</button>
       <div class="clock-display">
         <span class="clock-date">{{ currentDateStr }}</span>
         <span class="clock-time">{{ currentTimeStr }}</span>

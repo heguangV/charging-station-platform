@@ -74,13 +74,15 @@ html, body {
 }
 
 .card-header {
-  height: 40px;
+  min-height: 40px;
+  flex-wrap: wrap;
+  gap: 4px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 16px;
   border-bottom: 1px solid rgba(43, 88, 160, 0.25);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--primary-color);
   letter-spacing: 1px;
@@ -101,3 +103,5 @@ html, body {
   height: calc(100% - 40px);
   position: relative;
 }
+
+.chart-empty { position: absolute; inset: 40px 0 0; display: grid; place-items: center; color: var(--text-secondary); pointer-events: none; }

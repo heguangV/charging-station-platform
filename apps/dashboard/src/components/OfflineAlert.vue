@@ -9,7 +9,7 @@
         </svg>
         <span class="banner-text">
           <b>容灾降级提示：</b>
-          {{ store.error ? `网络连接异常（${store.error}），已自动载入最近离线快照` : '当前展示离线降级快照数据，系统正持续尝试重连 Crow 后端服务...' }}
+          {{ store.summary ? '当前展示最近成功快照，数据可能过期；正在尝试恢复。' : '数据加载失败，尚无可用快照，请重试。' }}
         </span>
       </div>
       <button class="retry-btn" @click="store.loadData" :disabled="store.isLoading">
