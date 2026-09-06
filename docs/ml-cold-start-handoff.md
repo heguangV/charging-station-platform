@@ -27,20 +27,23 @@ python3 ml/train.py --train \
   --features ml/data/synthetic/features_24d.json \
   --model ml/models/load_rf.pkl
 
-# 3) 离线 predict 只有在 <model>.pkl.json 存在时才加载真模型（否则静默走基线），
-#    该文件在服务端链路里由训练任务登记 model_version 时生成，离线手动补一枚：
+# 3) 离线 predict 只有在 <model>.pkl.json 存在时才加载真模型（否则静默走 BASELINE 且无警告）。
+#    注意：该 sidecar 不会被服务端生成——服务端把版本号登记在数据库 model_version 表，
+#    artifact store 只写 <modelVersionNo>.pkl；手工补 sidecar 仅用于本地验证，
+#    服务端重训替换 .pkl 后需删除或更新它，否则预测会顶着旧版本号对上新模型。
 python3 - <<'EOF'
 import json, pathlib
 pathlib.Path("ml/models").mkdir(parents=True, exist_ok=True)
 pathlib.Path("ml/models/load_rf.pkl.json").write_text(json.dumps({
     "modelVersionNo": "MV-SIM-0001",
-    "note": "offline synthetic-history training; mirrors server model_version registration",
+    "note": "hand-made sidecar for offline validation only; delete/update after any retrain",
 }), encoding="utf-8")
 EOF
 python3 ml/predict.py --predict \
   --features ml/data/synthetic/features_24d.json \
   --model ml/models/load_rf.pkl
-#    期望输出 "modelVersionNo": "MV-SIM-0001"（而非 "BASELINE"）且 items 共 9 条（3 站 × 1/6/24h）
+#    期望输出 "modelVersionNo": "MV-SIM-0001" 且 items 共 9 条（3 站 × 1/6/24h）；
+#    若输出 "BASELINE" 即 sidecar 未生效（静默降级，无任何提示），回头检查本步
 ```
 
 ## 参考验收结果（2026-09-05，种子 20260901）
@@ -62,4 +65,4 @@ python3 ml/predict.py --predict \
 
 ## 与服务端正式链路的关系
 
-本 PR 只提供**离线冷启动路径**。服务端 TRAIN 任务全链路（管理端点 → `ml/worker.py` → 内部 REST 取数 → 聚合器 `station_hourly_metric` → 结果登记 `model_version` 表）不经过这些手工步骤，届时以真实/灌入的 `charging_order` 数据为准。建议后续独立 PR 处理：`.gitignore` 增补 `ml/models/`（当前缺失，存在误提交 7.8MB pkl 的风险）；`ml/README.md` 中"UC-M 尚未实现"的表述已过时。
+本 PR 只提供**离线冷启动路径**。服务端 TRAIN 任务全链路（管理端点 → `ml/worker.py` → 内部 REST 取数 → 聚合器 `station_hourly_metric` → 结果登记 `model_version` 表）不经过这些手工步骤，也不会在模型目录写 `*.pkl.json` sidecar（版本号存于数据库而非文件，手工 sidecar 仅本地验证用）。届时以真实/灌入的 `charging_order` 数据为准。建议后续独立 PR 处理：`.gitignore` 增补 `ml/models/`（当前缺失，存在误提交 7.8MB pkl 的风险）；`ml/README.md` 中"UC-M 尚未实现"的表述已过时。
