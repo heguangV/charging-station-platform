@@ -54,7 +54,7 @@ QWidget* UserMainWindow::createNavigationPage()
     layout->setContentsMargins(0, 8, 0, 0);
     layout->setSpacing(12);
     auto* title = new QLabel(QStringLiteral("路线导航"));
-    title->setStyleSheet(QStringLiteral("font-size:23px;color:#25324A;"));
+    title->setStyleSheet(QStringLiteral("font-size:23px;color:#243F30;"));
     auto* heading = new QHBoxLayout;
     heading->addWidget(title);
     auto* routeHelp = new QToolButton;
@@ -62,7 +62,7 @@ QWidget* UserMainWindow::createNavigationPage()
     routeHelp->setToolTip(
         QStringLiteral("路线会在系统浏览器中打开；地图服务暂不可用时仍可使用该方式继续导航。"));
     routeHelp->setStyleSheet(QStringLiteral(
-        "QToolButton{color:#0F766E;border:0;background:transparent;font-size:17px;padding:2px;}"));
+        "QToolButton{color:#23794E;border:0;background:transparent;font-size:17px;padding:2px;}"));
     heading->addWidget(routeHelp);
     heading->addStretch();
     layout->addLayout(heading);
@@ -87,7 +87,7 @@ QWidget* UserMainWindow::createNavigationPage()
     layout->addWidget(navigationSummary_);
     navigationBrowserButton_ = button(QStringLiteral("地图不可用时在浏览器继续导航"));
     auto* back = button(QStringLiteral("返回电站详情"),
-                        QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;"
+                        QStringLiteral("QPushButton{background:#E4F0DC;color:#23794E;border:0;"
                                        "border-radius:10px;font-size:15px;font-weight:600;}"));
     layout->addWidget(navigationBrowserButton_);
     layout->addWidget(back);
@@ -258,7 +258,7 @@ try {
  const route=__ROUTE__;
  const points=route.map(p=>new TMap.LatLng(p.latitudeE6/1e6,p.longitudeE6/1e6));
  const map=new TMap.Map(document.getElementById('map'),{center:points[0],zoom:12});
- new TMap.MultiPolyline({map:map,styles:{route:new TMap.PolylineStyle({color:'#0F766E',width:7,borderWidth:2,borderColor:'#ffffff',lineCap:'round'})},geometries:[{id:'route',styleId:'route',paths:points}]});
+ new TMap.MultiPolyline({map:map,styles:{route:new TMap.PolylineStyle({color:'#23794E',width:7,borderWidth:2,borderColor:'#ffffff',lineCap:'round'})},geometries:[{id:'route',styleId:'route',paths:points}]});
  new TMap.MultiMarker({map:map,geometries:[{id:'origin',position:points[0]},{id:'destination',position:points[points.length-1]}]});
  const bounds=new TMap.LatLngBounds(); points.forEach(p=>bounds.extend(p)); map.fitBounds(bounds,{padding:48});
 } catch(e) { fail(); }

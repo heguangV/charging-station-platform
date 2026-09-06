@@ -46,13 +46,13 @@ const updateChart = () => {
       xAxis: timeLabel(item.targetAt),
       yAxis: kwh(item.predictedEnergyMwh),
       value: '高峰',
-      itemStyle: { color: '#ff3d71' }
+      itemStyle: { color: '#c85d50' }
     }))
 
   const option: echarts.EChartsOption = {
     backgroundColor: 'transparent',
     grid: {
-      top: '18%',
+      top: 58,
       left: '8%',
       right: '8%',
       bottom: '8%',
@@ -60,57 +60,59 @@ const updateChart = () => {
     },
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'line', lineStyle: { color: 'rgba(0, 210, 255, 0.4)' } },
-      backgroundColor: 'rgba(11, 17, 30, 0.92)',
-      borderColor: '#00d2ff',
-      textStyle: { color: '#ffffff' },
+      axisPointer: { type: 'line', lineStyle: { color: 'rgba(46, 149, 98, 0.4)' } },
+      backgroundColor: 'rgba(255, 255, 255, 0.98)',
+      borderColor: '#287e54',
+      textStyle: { color: '#294937' },
       formatter: (params: any) => {
         if (!params || !params.length) return ''
         const idx = params[0].dataIndex
         const raw = list[idx]
         return `${raw.stale ? '预测已过期<br/>' : ''}时间: <b>${escapeHtml(timeLabel(raw.targetAt))}</b><br/>
-                预测充电量: <span style="color:#00f0ff;font-weight:bold">${kwh(raw.predictedEnergyMwh)} kWh</span><br/>
-                预测空闲桩: <span style="color:#00e676;font-weight:bold">${raw.predictedFreeCount} 台</span><br/>
-                负荷预警: <span style="color:${raw.isPeak ? '#ff3d71' : '#00e676'};font-weight:bold">${raw.isPeak ? '⚠️ 用电高峰' : '✅ 平稳区间'}</span>`
+                预测充电量: <span style="color:#25794e;font-weight:bold">${kwh(raw.predictedEnergyMwh)} kWh</span><br/>
+                预测空闲桩: <span style="color:#32945e;font-weight:bold">${raw.predictedFreeCount} 台</span><br/>
+                负荷预警: <span style="color:${raw.isPeak ? '#c85d50' : '#32945e'};font-weight:bold">${raw.isPeak ? '⚠️ 用电高峰' : '✅ 平稳区间'}</span>`
       }
     },
     legend: {
-      top: '2%',
-      right: '4%',
-      textStyle: { color: '#8da4c4', fontSize: 11 },
+      top: 10,
+      left: 'center',
+      textStyle: { color: '#53616d', fontSize: 12 },
       itemWidth: 10,
       itemHeight: 10
     },
     xAxis: {
       type: 'category',
       data: hours,
-      axisLine: { lineStyle: { color: 'rgba(43, 88, 160, 0.45)' } },
+      axisLine: { lineStyle: { color: 'rgba(128, 153, 132, 0.45)' } },
       axisTick: { alignWithLabel: true },
       axisLabel: {
-        color: '#8da4c4',
-        fontSize: 10,
-        interval: 3
+        color: '#53616d',
+        fontSize: 12,
+        interval: 3,
+        hideOverlap: true,
+        formatter: (value: string) => value.split(' ').pop() || value
       }
     },
     yAxis: [
       {
         type: 'value',
         name: '电量(kWh)',
-        nameTextStyle: { color: '#00f0ff', fontSize: 10 },
+        nameTextStyle: { color: '#25794e', fontSize: 12, align: 'left' },
         splitLine: {
           lineStyle: {
-            color: 'rgba(43, 88, 160, 0.2)',
+            color: 'rgba(128, 153, 132, 0.2)',
             type: 'dashed'
           }
         },
-        axisLabel: { color: '#8da4c4', fontSize: 10 }
+        axisLabel: { color: '#53616d', fontSize: 12 }
       },
       {
         type: 'value',
         name: '空闲桩 (台)',
-        nameTextStyle: { color: '#00e676', fontSize: 10 },
+        nameTextStyle: { color: '#96721b', fontSize: 12, align: 'right' },
         splitLine: { show: false },
-        axisLabel: { color: '#8da4c4', fontSize: 10 }
+        axisLabel: { color: '#53616d', fontSize: 12 }
       }
     ],
     series: [
@@ -121,21 +123,22 @@ const updateChart = () => {
         data: energies,
         yAxisIndex: 0,
         showSymbol: false,
-        lineStyle: { width: 2.5, color: '#00f0ff' },
-        itemStyle: { color: '#00f0ff' },
+        lineStyle: { width: 2.5, color: '#25794e' },
+        itemStyle: { color: '#25794e' },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(0, 240, 255, 0.25)' },
-            { offset: 1, color: 'rgba(0, 240, 255, 0.01)' }
+            { offset: 0, color: 'rgba(46, 149, 98, 0.25)' },
+            { offset: 1, color: 'rgba(46, 149, 98, 0.01)' }
           ])
         },
         markPoint: {
-          symbol: 'pin',
-          symbolSize: 32,
+          symbol: 'circle',
+          symbolSize: 8,
           data: peakMarks,
           label: {
+            show: false,
             fontSize: 9,
-            color: '#ffffff'
+            color: '#294937'
           }
         }
       },
@@ -146,8 +149,8 @@ const updateChart = () => {
         data: freeChargers,
         yAxisIndex: 1,
         showSymbol: false,
-        lineStyle: { width: 2, color: '#00e676', type: 'dashed' },
-        itemStyle: { color: '#00e676' }
+        lineStyle: { width: 2, color: '#b39230', type: 'dashed' },
+        itemStyle: { color: '#b39230' }
       }
     ]
   }
@@ -167,13 +170,15 @@ const handleResize = () => {
   chartInstance?.resize()
 }
 
+const resizeObserver = new ResizeObserver(handleResize)
+
 onMounted(() => {
   initChart()
-  window.addEventListener('resize', handleResize)
+  if (chartRef.value) resizeObserver.observe(chartRef.value)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
+  resizeObserver.disconnect()
   chartInstance?.dispose()
 })
 </script>
@@ -189,15 +194,15 @@ onUnmounted(() => {
   align-items: center;
   gap: 5px;
   font-size: 11px;
-  color: #ff3d71;
+  color: #c85d50;
 }
 
 .alert-tag .dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #ff3d71;
-  box-shadow: 0 0 6px #ff3d71;
+  background: #c85d50;
+  box-shadow: 0 0 6px #c85d50;
   animation: blink 1.5s infinite;
 }
 

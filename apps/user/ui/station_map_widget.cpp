@@ -59,7 +59,7 @@ void StationMapWidget::paintEvent(QPaintEvent*)
     painter.drawLine(QPointF(width() * 0.18, 14), QPointF(width() * 0.72, height() - 14));
     if (stations_.isEmpty())
     {
-        painter.setPen(QColor(QStringLiteral("#667085")));
+        painter.setPen(QColor(QStringLiteral("#607362")));
         painter.drawText(rect(), Qt::AlignCenter,
                          QStringLiteral("暂无可展示的电站\n请返回列表刷新"));
         return;
@@ -68,14 +68,14 @@ void StationMapWidget::paintEvent(QPaintEvent*)
     {
         const QPointF point = pointFor(station);
         painter.setPen(Qt::NoPen);
-        painter.setBrush(station.idleCount > 0 ? QColor(QStringLiteral("#0F766E"))
+        painter.setBrush(station.idleCount > 0 ? QColor(QStringLiteral("#23794E"))
                                                : QColor(QStringLiteral("#98A2B3")));
         painter.drawEllipse(point, 11, 11);
         painter.setPen(Qt::white);
         painter.setFont(QFont(QString(), 9, QFont::Bold));
         painter.drawText(QRectF(point.x() - 10, point.y() - 8, 20, 16), Qt::AlignCenter,
                          QString::number(station.idleCount));
-        painter.setPen(QColor(QStringLiteral("#25324A")));
+        painter.setPen(QColor(QStringLiteral("#243F30")));
         painter.setFont(QFont(QString(), 10));
         painter.drawText(QPointF(point.x() + 14, point.y() + 4), station.name.left(12));
     }

@@ -50,57 +50,58 @@ const updateChart = () => {
       trigger: 'axis',
       axisPointer: {
         type: 'cross',
-        crossStyle: { color: 'rgba(0, 210, 255, 0.4)' }
+        crossStyle: { color: 'rgba(46, 149, 98, 0.4)' }
       },
-      backgroundColor: 'rgba(11, 17, 30, 0.92)',
-      borderColor: '#00d2ff',
-      textStyle: { color: '#ffffff' },
+      backgroundColor: 'rgba(255, 255, 255, 0.98)',
+      borderColor: '#287e54',
+      textStyle: { color: '#294937' },
       formatter: (params: any) => {
         if (!params || !params.length) return ''
         const idx = params[0].dataIndex
         const raw = list[idx]
         return `<b>${escapeHtml(dateLabel(raw.bucketAt))}</b><br/>
-                当日营收: <span style="color:#ffc107;font-weight:bold">¥${(raw.revenueCent / 100).toFixed(2)}</span><br/>
-                充电总量: <span style="color:#00d2ff;font-weight:bold">${kwh(raw.energyMwh).toLocaleString()} kWh</span><br/>
+                当日营收: <span style="color:#96721b;font-weight:bold">¥${(raw.revenueCent / 100).toFixed(2)}</span><br/>
+                充电总量: <span style="color:#287e54;font-weight:bold">${kwh(raw.energyMwh).toLocaleString()} kWh</span><br/>
                 充电车次: ${raw.orderCount} 次`
       }
     },
     xAxis: {
       type: 'category',
       data: dates,
-      axisLine: { lineStyle: { color: 'rgba(43, 88, 160, 0.45)' } },
+      axisLine: { lineStyle: { color: 'rgba(128, 153, 132, 0.45)' } },
       axisTick: { alignWithLabel: true },
       axisLabel: {
-        color: '#8da4c4',
-        fontSize: 11,
-        interval: 3
+        color: '#53616d',
+        fontSize: 12,
+        interval: 3,
+        hideOverlap: true
       }
     },
     yAxis: [
       {
         type: 'value',
         name: '营收 (元)',
-        nameTextStyle: { color: '#ffc107', fontSize: 11 },
+        nameTextStyle: { color: '#96721b', fontSize: 12, align: 'left' },
         splitLine: {
           lineStyle: {
-            color: 'rgba(43, 88, 160, 0.2)',
+            color: 'rgba(128, 153, 132, 0.2)',
             type: 'dashed'
           }
         },
         axisLabel: {
-          color: '#8da4c4',
-          fontSize: 11,
+          color: '#53616d',
+          fontSize: 12,
           formatter: (val: number) => val >= 1000 ? `¥${(val / 1000).toFixed(1)}k` : `¥${val}`
         }
       },
       {
         type: 'value',
         name: '电量 (kWh)',
-        nameTextStyle: { color: '#00d2ff', fontSize: 11 },
+        nameTextStyle: { color: '#287e54', fontSize: 12, align: 'right' },
         splitLine: { show: false },
         axisLabel: {
-          color: '#8da4c4',
-          fontSize: 11,
+          color: '#53616d',
+          fontSize: 12,
           formatter: (val: number) => val >= 1000 ? `${(val / 1000).toFixed(1)}k` : `${val}`
         }
       }
@@ -116,13 +117,13 @@ const updateChart = () => {
         symbolSize: 6,
         lineStyle: {
           width: 3,
-          color: '#ffab00'
+          color: '#d2a52e'
         },
-        itemStyle: { color: '#ffab00' },
+        itemStyle: { color: '#d2a52e' },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(255, 171, 0, 0.35)' },
-            { offset: 1, color: 'rgba(255, 171, 0, 0.01)' }
+            { offset: 0, color: 'rgba(210, 165, 46, 0.35)' },
+            { offset: 1, color: 'rgba(210, 165, 46, 0.01)' }
           ])
         }
       },
@@ -136,14 +137,14 @@ const updateChart = () => {
         symbolSize: 6,
         lineStyle: {
           width: 2.5,
-          color: '#00d2ff',
+          color: '#287e54',
           type: 'solid'
         },
-        itemStyle: { color: '#00d2ff' },
+        itemStyle: { color: '#287e54' },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(0, 210, 255, 0.25)' },
-            { offset: 1, color: 'rgba(0, 210, 255, 0.01)' }
+            { offset: 0, color: 'rgba(46, 149, 98, 0.25)' },
+            { offset: 1, color: 'rgba(46, 149, 98, 0.01)' }
           ])
         }
       }
@@ -165,13 +166,15 @@ const handleResize = () => {
   chartInstance?.resize()
 }
 
+const resizeObserver = new ResizeObserver(handleResize)
+
 onMounted(() => {
   initChart()
-  window.addEventListener('resize', handleResize)
+  if (chartRef.value) resizeObserver.observe(chartRef.value)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
+  resizeObserver.disconnect()
   chartInstance?.dispose()
 })
 </script>
@@ -199,15 +202,15 @@ onUnmounted(() => {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #ffab00;
-  box-shadow: 0 0 6px #ffab00;
+  background: #d2a52e;
+  box-shadow: 0 0 6px #d2a52e;
 }
 
 .legend-badge.energy .dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #00d2ff;
-  box-shadow: 0 0 6px #00d2ff;
+  background: #287e54;
+  box-shadow: 0 0 6px #287e54;
 }
 </style>

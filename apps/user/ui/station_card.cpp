@@ -9,7 +9,7 @@ namespace ncs::user
 {
 namespace
 {
-QLabel* text(const QString& value, const int size, const QString& color = QStringLiteral("#25324A"))
+QLabel* text(const QString& value, const int size, const QString& color = QStringLiteral("#243F30"))
 {
     auto* result = new QLabel(value);
     result->setWordWrap(true);
@@ -24,36 +24,36 @@ StationCard::StationCard(const StationSummary& station, QWidget* parent)
     setObjectName(QStringLiteral("card"));
     setCursor(Qt::PointingHandCursor);
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(16, 14, 16, 13);
+    layout->setContentsMargins(16, 16, 16, 16);
     layout->setSpacing(10);
-
     auto* heading = new QHBoxLayout;
-    auto* name = text(station.name, 16);
-    name->setStyleSheet(name->styleSheet() + QStringLiteral("font-weight:600;"));
-    heading->addWidget(name);
-    heading->addStretch();
-    auto* distance = text(station.distance, 12, QStringLiteral("#0F766E"));
-    distance->setStyleSheet(
-        distance->styleSheet() +
-        QStringLiteral("background:#EDF7F4;border-radius:8px;padding:4px 6px;font-weight:600;"));
-    heading->addWidget(distance);
+    heading->setSpacing(8);
+    auto* name = text(station.name, 19, QStringLiteral("#1B2028"));
+    name->setStyleSheet(name->styleSheet() + QStringLiteral("font-weight:700;"));
+    heading->addWidget(name, 1);
+    auto* distance = text(station.distance, 12, QStringLiteral("#555D67"));
+    distance->setWordWrap(false);
+    heading->addWidget(distance, 0, Qt::AlignTop);
     layout->addLayout(heading);
-    layout->addWidget(text(station.address, 12, QStringLiteral("#667085")));
-
+    auto* address = text(station.address, 13, QStringLiteral("#717A86"));
+    layout->addWidget(address);
     auto* details = new QHBoxLayout;
+    details->setSpacing(8);
+    auto* price = new QLabel(QStringLiteral("<span style='font-size:14px'>¥</span>"
+                                            "<span style='font-size:29px;font-weight:700'>%1</span>"
+                                            "<span style='font-size:13px'> / 度</span>")
+                                 .arg(QString::number(station.priceCentPerKwh / 100.0, 'f', 2)));
+    price->setStyleSheet(QStringLiteral("color:#E76B13;background:transparent;"));
+    details->addWidget(price);
+    details->addStretch();
     auto* availability =
-        text(QStringLiteral("%1 / %2 空闲").arg(station.idleCount).arg(station.totalCount), 13,
-             QStringLiteral("#087443"));
+        text(QStringLiteral("空闲 %1 / %2").arg(station.idleCount).arg(station.totalCount), 13,
+             QStringLiteral("#12754E"));
+    availability->setWordWrap(false);
     availability->setStyleSheet(
         availability->styleSheet() +
-        QStringLiteral("background:#E8F8EF;border-radius:8px;padding:5px 8px;font-weight:600;"));
-    details->addWidget(availability);
-    details->addSpacing(2);
-    details->addWidget(text(
-        QStringLiteral("¥%1 / 度").arg(QString::number(station.priceCentPerKwh / 100.0, 'f', 2)),
-        13, QStringLiteral("#475467")));
-    details->addStretch();
-    details->addWidget(text(QStringLiteral("查看电桩  ›"), 12, QStringLiteral("#0F766E")));
+        QStringLiteral("background:#EAF6EE;border-radius:6px;padding:5px 7px;font-weight:700;"));
+    details->addWidget(availability, 0, Qt::AlignVCenter);
     layout->addLayout(details);
 }
 

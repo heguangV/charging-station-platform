@@ -27,6 +27,7 @@ class StationListWidget final : public QWidget
     void refreshAvailability();
 
   signals:
+    void mapRequested();
     void stationSelected(const StationSummary& station);
     void loadRequested(qint64 latitudeE6, qint64 longitudeE6, const QString& locationKeyword);
 

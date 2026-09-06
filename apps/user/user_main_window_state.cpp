@@ -534,7 +534,7 @@ void UserMainWindow::notify(const QString& message, bool error)
         QStringLiteral(
             "padding:10px "
             "14px;border-radius:14px;font-size:13px;font-weight:600;color:%1;background:%2;")
-            .arg(error ? QStringLiteral("#B42318") : QStringLiteral("#0F766E"),
+            .arg(error ? QStringLiteral("#B42318") : QStringLiteral("#23794E"),
                  error ? QStringLiteral("#FFF4F2") : QStringLiteral("#E7F6F2")));
     notice_->setFixedHeight(qMax(44, notice_->sizeHint().height()));
     notice_->move((centralWidget()->width() - notice_->width()) / 2, 18);

@@ -36,27 +36,27 @@ const updateChart = () => {
   }
 
   const chartData = [
-    { value: status.idle || 0, name: '空闲可用', itemStyle: { color: '#00e676' } },
-    { value: status.inUse || 0, name: '充电中', itemStyle: { color: '#ffab00' } },
-    { value: status.fault || 0, name: '设备故障', itemStyle: { color: '#ff3d71' } },
-    { value: (status.restarting || 0) + (status.disabled || 0), name: '维护/重启', itemStyle: { color: '#00d2ff' } }
+    { value: status.idle || 0, name: '空闲可用', itemStyle: { color: '#32945e' } },
+    { value: status.inUse || 0, name: '充电中', itemStyle: { color: '#d2a52e' } },
+    { value: status.fault || 0, name: '设备故障', itemStyle: { color: '#c85d50' } },
+    { value: (status.restarting || 0) + (status.disabled || 0), name: '维护/重启', itemStyle: { color: '#287e54' } }
   ].filter(item => item.value > 0)
 
   const option: echarts.EChartsOption = {
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'item',
-      backgroundColor: 'rgba(11, 17, 30, 0.9)',
-      borderColor: '#00d2ff',
-      textStyle: { color: '#ffffff' },
+      backgroundColor: 'rgba(255, 255, 255, 0.98)',
+      borderColor: '#287e54',
+      textStyle: { color: '#294937' },
       formatter: '{b}: <b>{c} 台</b> ({d}%)'
     },
     legend: {
       orient: 'vertical',
-      right: '6%',
+      right: '4%',
       top: 'center',
       textStyle: {
-        color: '#8da4c4',
+        color: '#587063',
         fontSize: 12
       },
       itemGap: 14,
@@ -69,12 +69,12 @@ const updateChart = () => {
         type: 'pie',
         stillShowZeroSum: false,
         showEmptyCircle: false,
-        radius: ['45%', '72%'],
-        center: ['40%', '50%'],
+        radius: ['42%', '66%'],
+        center: ['32%', '50%'],
         avoidLabelOverlap: false,
         itemStyle: {
           borderRadius: 6,
-          borderColor: '#0b111e',
+          borderColor: '#ffffff',
           borderWidth: 2
         },
         label: {
@@ -85,7 +85,7 @@ const updateChart = () => {
             show: true,
             fontSize: 13,
             fontWeight: 'bold',
-            color: '#ffffff',
+            color: '#294937',
             formatter: '{b}\n{d}%'
           },
           scale: true,
@@ -114,13 +114,15 @@ const handleResize = () => {
   chartInstance?.resize()
 }
 
+const resizeObserver = new ResizeObserver(handleResize)
+
 onMounted(() => {
   initChart()
-  window.addEventListener('resize', handleResize)
+  if (chartRef.value) resizeObserver.observe(chartRef.value)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
+  resizeObserver.disconnect()
   chartInstance?.dispose()
 })
 </script>

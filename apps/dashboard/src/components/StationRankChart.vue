@@ -48,9 +48,9 @@ const updateChart = () => {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      backgroundColor: 'rgba(11, 17, 30, 0.9)',
-      borderColor: '#00d2ff',
-      textStyle: { color: '#ffffff' },
+      backgroundColor: 'rgba(255, 255, 255, 0.98)',
+      borderColor: '#287e54',
+      textStyle: { color: '#294937' },
       formatter: (params: any) => {
         const p = params[0]
         const raw = sorted[p.dataIndex]
@@ -66,23 +66,23 @@ const updateChart = () => {
       axisTick: { show: false },
       splitLine: {
         lineStyle: {
-          color: 'rgba(43, 88, 160, 0.25)',
+          color: 'rgba(128, 153, 132, 0.25)',
           type: 'dashed'
         }
       },
       axisLabel: {
-        color: '#8da4c4',
-        fontSize: 11,
+        color: '#53616d',
+        fontSize: 12,
         formatter: (val: number) => (val >= 1000 ? `${(val / 1000).toFixed(0)}k` : `${val}`)
       }
     },
     yAxis: {
       type: 'category',
       data: names,
-      axisLine: { lineStyle: { color: 'rgba(43, 88, 160, 0.45)' } },
+      axisLine: { lineStyle: { color: 'rgba(128, 153, 132, 0.45)' } },
       axisTick: { show: false },
       axisLabel: {
-        color: '#e6f1ff',
+        color: '#294937',
         fontSize: 12,
         formatter: (name: string) => (name.length > 7 ? name.slice(0, 7) + '..' : name)
       }
@@ -95,21 +95,21 @@ const updateChart = () => {
         barWidth: 14,
         showBackground: true,
         backgroundStyle: {
-          color: 'rgba(255, 255, 255, 0.04)',
+          color: 'rgba(46, 149, 98, 0.06)',
           borderRadius: 7
         },
         itemStyle: {
           borderRadius: 7,
           color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
-            { offset: 0, color: 'rgba(0, 210, 255, 0.2)' },
-            { offset: 1, color: '#00d2ff' }
+            { offset: 0, color: 'rgba(46, 149, 98, 0.2)' },
+            { offset: 1, color: '#287e54' }
           ])
         },
         label: {
           show: true,
           position: 'right',
-          color: '#00f0ff',
-          fontSize: 11,
+          color: '#25794e',
+          fontSize: 12,
           fontFamily: 'monospace',
           formatter: (p: any) => p.value >= 1000 ? `${(p.value / 1000).toFixed(1)}k` : `${p.value}`
         }
@@ -132,13 +132,15 @@ const handleResize = () => {
   chartInstance?.resize()
 }
 
+const resizeObserver = new ResizeObserver(handleResize)
+
 onMounted(() => {
   initChart()
-  window.addEventListener('resize', handleResize)
+  if (chartRef.value) resizeObserver.observe(chartRef.value)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
+  resizeObserver.disconnect()
   chartInstance?.dispose()
 })
 </script>

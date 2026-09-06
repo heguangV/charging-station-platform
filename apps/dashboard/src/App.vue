@@ -1,5 +1,5 @@
 <template>
-  <div class="scale-wrapper" :style="wrapperStyle">
+  <div class="scale-wrapper" >
     <LoginPanel v-if="!store.token" />
     <div v-else class="dashboard-root">
       <OfflineAlert />
@@ -44,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
 import { useDashboardStore } from './stores/dashboardStore'
 import LoginPanel from './components/LoginPanel.vue'
 import HeaderBar from './components/HeaderBar.vue'
@@ -59,36 +59,13 @@ import LoadPredictionChart from './components/LoadPredictionChart.vue'
 
 const store = useDashboardStore()
 
-// 1920 x 1080 基准大屏分辨率等比自适应缩放
-const TARGET_WIDTH = 1920
-const TARGET_HEIGHT = 1080
-const scale = ref(1)
-
-const updateScale = () => {
-  const currentWidth = window.innerWidth
-  const currentHeight = window.innerHeight
-  const scaleX = currentWidth / TARGET_WIDTH
-  const scaleY = currentHeight / TARGET_HEIGHT
-  scale.value = Math.min(scaleX, scaleY)
-}
-
-const wrapperStyle = computed(() => ({
-  width: `${TARGET_WIDTH}px`,
-  height: `${TARGET_HEIGHT}px`,
-  transform: `translate(-50%, -50%) scale(${scale.value})`,
-  transformOrigin: 'center center'
-}))
-
 onMounted(() => {
-  updateScale()
-  window.addEventListener('resize', updateScale)
   // 启动 30 秒轮询调度 (UC-W-02)
   for (const event of ['pointerdown', 'keydown', 'pointermove']) window.addEventListener(event, store.recordActivity)
   document.addEventListener('visibilitychange', store.checkSession)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', updateScale)
   store.clearSession()
   for (const event of ['pointerdown', 'keydown', 'pointermove']) window.removeEventListener(event, store.recordActivity)
   document.removeEventListener('visibilitychange', store.checkSession)
@@ -96,70 +73,16 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.scale-wrapper {
-  left: 50%;
-  top: 50%;
-  position: absolute;
-  overflow: hidden;
-  transition: transform 0.15s ease-out;
-}
+.scale-wrapper { width: 100%; min-height: 100vh; }
+.dashboard-root { height: 100vh; min-height: 740px; display: flex; flex-direction: column; }
+.dashboard-main { flex: 1; display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 4fr) minmax(0, 3fr); gap: 20px; padding: 20px 24px 24px; min-height: 0; }
+.column { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 20px; }
+.card-wrapper { min-height: 0; width: 100%; }
+.flex-1, .flex-grow { flex: 1; }
+.column-right > :nth-child(2) { flex: .65; }
+.column-right > :nth-child(3) { flex: 1.35; }
+@media (max-width: 1500px) { .dashboard-main { gap: 12px; padding: 16px; } .column { gap: 12px; } }
+@media (max-width: 1100px) { .dashboard-root { height: auto; } .dashboard-main { height: auto; grid-template-columns: 1fr 1fr; } .column-center { grid-column: 1 / -1; grid-row: 1; } .flex-1, .flex-grow { flex: auto; height: 320px; } }
+@media (max-width: 640px) { .dashboard-main { grid-template-columns: minmax(0, 1fr); padding: 12px; } .column-center { grid-column: auto; } }
 
-.dashboard-root {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  background: radial-gradient(circle at 50% 15%, #132442 0%, #090f1c 70%, #050812 100%);
-  position: relative;
-  overflow: hidden;
-}
-
-.dashboard-main {
-  flex: 1;
-  display: flex;
-  gap: 16px;
-  padding: 16px 20px 20px 20px;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.column {
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  height: 100%;
-}
-
-.column-left {
-  flex: 3;
-}
-
-.column-center {
-  flex: 4;
-}
-
-.column-right {
-  flex: 3;
-}
-
-.metrics-wrapper {
-  width: 100%;
-}
-
-.card-wrapper {
-  width: 100%;
-  position: relative;
-}
-
-.flex-1 {
-  flex: 1;
-  min-height: 0;
-}
-
-.flex-grow {
-  flex: 1;
-  min-height: 0;
-}
 </style>

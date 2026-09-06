@@ -42,3 +42,8 @@ if(TARGET Qt6::WebEngineWidgets)
 endif()
 
 ncs_set_project_warnings(ncs_user)
+
+qt_add_resources(ncs_user user_visual_assets
+    PREFIX "/ncs"
+    FILES resources/charging-scene.png
+)

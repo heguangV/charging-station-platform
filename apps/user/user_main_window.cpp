@@ -5,6 +5,7 @@
 #include "ui/bottom_navigation.h"
 #include "ui/charge_soc_gauge.h"
 #include "ui/charger_table.h"
+#include "ui/energy_scene.h"
 #include "ui/station_card.h"
 #include "ui/station_list_widget.h"
 #include "ui/station_map_widget.h"
@@ -48,7 +49,9 @@ QLabel* label(const QString& value, int size = 14)
 {
     auto* result = new QLabel(value);
     result->setWordWrap(true);
-    result->setStyleSheet(QStringLiteral("font-size:%1px;color:#25324A;").arg(size));
+    result->setStyleSheet(QStringLiteral("font-size:%1px;color:#243F30;font-weight:%2;")
+                              .arg(size)
+                              .arg(size >= 20 ? 700 : 400));
     return result;
 }
 
@@ -66,9 +69,9 @@ QFrame* metricCard(const QString& title, QLabel*& value, const QString& initialV
     layout->setContentsMargins(14, 12, 14, 12);
     layout->setSpacing(5);
     auto* caption = label(title, 12);
-    caption->setStyleSheet(QStringLiteral("font-size:12px;color:#667085;"));
+    caption->setStyleSheet(QStringLiteral("font-size:12px;color:#607362;"));
     value = label(initialValue, 20);
-    value->setStyleSheet(QStringLiteral("font-size:20px;color:#1D2939;font-weight:700;"));
+    value->setStyleSheet(QStringLiteral("font-size:20px;color:#243F30;font-weight:700;"));
     layout->addWidget(caption);
     layout->addWidget(value);
     return result;
@@ -86,7 +89,7 @@ UserMainWindow::UserMainWindow(UserClientService& service, UserApi* userApi,
     auto* root = new QWidget(this);
     root->setObjectName(QStringLiteral("appRoot"));
     auto* layout = new QVBoxLayout(root);
-    layout->setContentsMargins(18, 14, 18, 14);
+    layout->setContentsMargins(16, 12, 16, 12);
     layout->setSpacing(10);
     notice_ = label({}, 13);
     notice_->setParent(root);
@@ -112,6 +115,14 @@ UserMainWindow::UserMainWindow(UserClientService& service, UserApi* userApi,
     bottomNavigation_->hide();
     layout->addWidget(bottomNavigation_);
     setCentralWidget(root);
+    root->setStyleSheet(QStringLiteral("QWidget#appRoot{background:#FFFFFF;}"));
+    connect(pages_, &QStackedWidget::currentChanged, root,
+            [root](int index)
+            {
+                root->setStyleSheet(index == 0
+                                        ? QStringLiteral("QWidget#appRoot{background:#FFFFFF;}")
+                                        : QStringLiteral("QWidget#appRoot{background:#F5F6F8;}"));
+            });
     noticeAnimation_ = new QSequentialAnimationGroup(this);
     auto* fadeIn = new QPropertyAnimation(noticeOpacity_, "opacity", noticeAnimation_);
     fadeIn->setDuration(180);
@@ -190,22 +201,16 @@ QWidget* UserMainWindow::createHomePage()
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 8, 0, 0);
     auto* heading = new QHBoxLayout;
-    auto* homeTitle = label(QStringLiteral("附近充电站"), 22);
-    homeTitle->setStyleSheet(QStringLiteral("font-size:22px;font-weight:700;color:#182230;"));
-    auto* brand = new QLabel(QStringLiteral("NCS · 电续每一程"));
-    brand->setStyleSheet(QStringLiteral("font-size:12px;font-weight:500;color:#0F766E;"));
-    auto* titleGroup = new QVBoxLayout;
-    titleGroup->setSpacing(4);
-    titleGroup->addWidget(brand);
-    titleGroup->addWidget(homeTitle);
-    heading->addLayout(titleGroup);
-    auto* map = button(
-        QStringLiteral("地图找站"),
-        QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;border-radius:10px;"
-                       "font-size:13px;font-weight:700;padding:0 12px;}"));
-    map->setMinimumHeight(36);
+    auto* homeTitle = label(QStringLiteral("附近"), 28);
+    homeTitle->setStyleSheet(QStringLiteral("font-size:28px;font-weight:800;color:#151A21;"));
+    heading->addWidget(homeTitle);
+    auto* subtitle = label(QStringLiteral("充电站"), 17);
+    subtitle->setStyleSheet(QStringLiteral("font-size:17px;color:#7B828A;padding-left:8px;"));
+    heading->addWidget(subtitle);
     heading->addStretch();
-    heading->addWidget(map);
+    auto* brand = label(QStringLiteral("NCS 充电"), 13);
+    brand->setStyleSheet(QStringLiteral("font-size:13px;color:#167C55;font-weight:700;"));
+    heading->addWidget(brand);
     layout->addLayout(heading);
     stationList_ =
         new StationListWidget(userApi_ ? QVector<StationSummary>{} : service_.stations());
@@ -272,7 +277,7 @@ QWidget* UserMainWindow::createHomePage()
                 selectedStationDistance_ = station.distance;
                 showDetail(station.id);
             });
-    connect(map, &QPushButton::clicked, this, &UserMainWindow::showStationMap);
+    connect(stationList_, &StationListWidget::mapRequested, this, &UserMainWindow::showStationMap);
     return page;
 }
 
@@ -283,13 +288,13 @@ QWidget* UserMainWindow::createStationMapPage()
     layout->setContentsMargins(0, 8, 0, 0);
     layout->setSpacing(10);
     auto* title = label(QStringLiteral("电站地图"), 23);
-    title->setStyleSheet(QStringLiteral("font-size:23px;color:#25324A;font-weight:700;"));
+    title->setStyleSheet(QStringLiteral("font-size:23px;color:#243F30;font-weight:700;"));
     auto* hint = label(QStringLiteral("绿色标记表示有空闲电桩；点击标记查看并预约"), 13);
-    hint->setStyleSheet(QStringLiteral("font-size:13px;color:#667085;"));
+    hint->setStyleSheet(QStringLiteral("font-size:13px;color:#607362;"));
     stationMap_ = new StationMapWidget;
     auto* back = button(
         QStringLiteral("返回站点列表"),
-        QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;border-radius:10px;"
+        QStringLiteral("QPushButton{background:#E4F0DC;color:#23794E;border:0;border-radius:10px;"
                        "font-size:15px;font-weight:600;}"));
     layout->addWidget(title);
     layout->addWidget(hint);
@@ -325,19 +330,19 @@ QWidget* UserMainWindow::createDetailPage()
     layout->setContentsMargins(0, 8, 0, 0);
     layout->setSpacing(10);
     auto* back = button(QStringLiteral("‹ 返回附近电站"),
-                        QStringLiteral("QPushButton{color:#0F766E;border:0;background:transparent;"
+                        QStringLiteral("QPushButton{color:#23794E;border:0;background:transparent;"
                                        "text-align:left;font-size:14px;padding:0;}"));
     back->setFixedHeight(32);
     layout->addWidget(back);
     detailTitle_ = label({}, 22);
-    detailTitle_->setStyleSheet(QStringLiteral("font-size:22px;color:#25324A;font-weight:700;"));
+    detailTitle_->setStyleSheet(QStringLiteral("font-size:22px;color:#243F30;font-weight:700;"));
     detailMeta_ = label({}, 13);
-    detailMeta_->setStyleSheet(QStringLiteral("font-size:13px;color:#667085;line-height:1.5;"));
+    detailMeta_->setStyleSheet(QStringLiteral("font-size:13px;color:#607362;line-height:1.5;"));
     layout->addWidget(detailTitle_);
     layout->addWidget(detailMeta_);
     auto* chargerHeading = label(QStringLiteral("选择可用电桩"), 16);
     chargerHeading->setStyleSheet(
-        QStringLiteral("font-size:16px;color:#25324A;font-weight:700;padding-top:4px;"));
+        QStringLiteral("font-size:16px;color:#243F30;font-weight:700;padding-top:4px;"));
     layout->addWidget(chargerHeading);
     chargerTable_ = new ChargerTable;
     layout->addWidget(chargerTable_, 1);
@@ -391,7 +396,7 @@ QWidget* UserMainWindow::createChargePage()
     auto* page = new QWidget;
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 8, 0, 0);
-    layout->setSpacing(14);
+    layout->setSpacing(10);
     layout->addWidget(label(QStringLiteral("充电控制"), 23));
     chargeState_ = label(QStringLiteral("已预约 · ZGC-DC-01"), 15);
     chargeState_->setStyleSheet(QStringLiteral("padding:10px "
@@ -399,7 +404,7 @@ QWidget* UserMainWindow::createChargePage()
                                                "radius:12px;font-size:15px;font-weight:600;"));
     layout->addWidget(chargeState_);
     reservationCountdown_ = label(QStringLiteral("预约保留中"), 13);
-    reservationCountdown_->setStyleSheet(QStringLiteral("color:#B54708;font-size:13px;"));
+    reservationCountdown_->setStyleSheet(QStringLiteral("color:#886719;font-size:13px;"));
     layout->addWidget(reservationCountdown_);
     auto* metrics = new QWidget;
     auto* grid = new QGridLayout(metrics);
@@ -420,18 +425,23 @@ QWidget* UserMainWindow::createChargePage()
     startButton_ = button(QStringLiteral("开始充电"));
     navigateToStationButton_ =
         button(QStringLiteral("导航到已预约电站"),
-               QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;"
+               QStringLiteral("QPushButton{background:#E4F0DC;color:#23794E;border:0;"
                               "border-radius:10px;font-size:15px;font-weight:600;}"));
     cancelButton_ = button(QStringLiteral("取消预约"),
-                           QStringLiteral("QPushButton{background:#FFF4E5;color:#B54708;border:0;"
+                           QStringLiteral("QPushButton{background:#FFF3C5;color:#886719;border:0;"
                                           "border-radius:10px;font-size:15px;font-weight:600;}"));
-    settleButton_ = button(QStringLiteral("结束充电并结算"),
-                           QStringLiteral("QPushButton{background:#0F9D71;color:white;border:0;"
-                                          "border-radius:10px;font-size:15px;font-weight:600;}"));
+    settleButton_ =
+        button(QStringLiteral("结束充电并结算"),
+               QStringLiteral("QPushButton{background:#0F9D71;color:white;border:0;"
+                              "border-radius:10px;font-size:15px;font-weight:600;}"
+                              "QPushButton:disabled{background:#E1E8DA;color:#687762;}"));
     settleButton_->setEnabled(false);
     layout->addWidget(startButton_);
-    layout->addWidget(navigateToStationButton_);
-    layout->addWidget(cancelButton_);
+    auto* reservationActions = new QHBoxLayout;
+    reservationActions->setSpacing(10);
+    reservationActions->addWidget(navigateToStationButton_, 3);
+    reservationActions->addWidget(cancelButton_, 2);
+    layout->addLayout(reservationActions);
     layout->addWidget(settleButton_);
     layout->addStretch();
     connect(startButton_, &QPushButton::clicked, this,
@@ -601,7 +611,7 @@ QWidget* UserMainWindow::createReceiptPage()
 {
     auto* page = new QWidget;
     auto* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(14, 55, 14, 20);
+    layout->setContentsMargins(0, 16, 0, 12);
     layout->addWidget(label(QStringLiteral("充电小票"), 25));
     receiptText_ = label({}, 16);
     receiptText_->setStyleSheet(QStringLiteral("padding:22px;background:white;border:1px solid "

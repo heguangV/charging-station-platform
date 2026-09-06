@@ -26,7 +26,7 @@ QWidget* UserMainWindow::createProfilePage()
     layout->setContentsMargins(0, 8, 0, 0);
     layout->setSpacing(12);
     auto* title = new QLabel(QStringLiteral("我的账户"));
-    title->setStyleSheet(QStringLiteral("font-size:23px;color:#25324A;"));
+    title->setStyleSheet(QStringLiteral("font-size:23px;color:#243F30;font-weight:700;"));
     layout->addWidget(title);
 
     auto* info = new QFrame;
@@ -37,7 +37,7 @@ QWidget* UserMainWindow::createProfilePage()
     profileAvatar_->setFixedSize(68, 68);
     profileAvatar_->setAlignment(Qt::AlignCenter);
     profileAvatar_->setStyleSheet(
-        QStringLiteral("background:#D7F0EB;color:#0F766E;border-radius:34px;font-weight:700;"));
+        QStringLiteral("background:#D7F0EB;color:#23794E;border-radius:34px;font-weight:700;"));
     auto* avatarRow = new QHBoxLayout;
     avatarRow->addWidget(profileAvatar_);
     auto* avatar = button(QStringLiteral("更换头像"));

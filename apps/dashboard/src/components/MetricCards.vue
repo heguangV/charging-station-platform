@@ -109,115 +109,23 @@ const formatCurrency = (amount: number) => {
 </script>
 
 <style scoped>
-.metrics-container {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-  width: 100%;
-}
+.metrics-container { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.metric-card { border: 1px solid #e3e8ed; border-radius: 16px; background: #fff; padding: 18px; display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+.metric-card:nth-child(2) { background: #fff8ed; border-color: #f5e2c9; }
+.metric-card:nth-child(3) { background: #edf7f1; border-color: #dcece1; }
+.metric-icon-box { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; flex-shrink: 0; background: #eef3f7; color: #204760; }
+.metric-icon-box.gold { background: #ffead0; color: #be6718; }
+.metric-icon-box.green { background: #dcefe3; color: #17744f; }
+.metric-icon-box.purple { background: #eef0f4; color: #506176; }
+.metric-info { flex: 1; min-width: 0; }
+.metric-label { font-size: 14px; color: #53616c; margin-bottom: 8px; }
+.metric-value { font-size: clamp(25px, 1.9vw, 36px); line-height: 1.3; font-weight: 800; color: #183649; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.text-gold { color: #d36c17; }
+.text-green { color: #17754f; }
+.metric-unit { font-size: 12px; font-weight: 400; color: #53616c; }
+.metric-sub { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; margin-top: 8px; font-size: 12px; color: #606c76; }
+.highlight { color: #334b5b; }
+@media (min-width: 1101px) and (max-width: 1500px) { .metric-card { padding: 12px; gap: 8px; } .metric-icon-box { display: none; } }
+@media (max-width: 420px) { .metric-card { padding: 14px; } .metric-icon-box { display: none; } }
 
-.metric-card {
-  background: linear-gradient(135deg, rgba(20, 36, 68, 0.75) 0%, rgba(12, 22, 42, 0.75) 100%);
-  border: 1px solid rgba(0, 210, 255, 0.25);
-  border-radius: 8px;
-  padding: 16px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), inset 0 0 12px rgba(0, 210, 255, 0.05);
-  transition: transform 0.2s ease, border-color 0.2s ease;
-}
-
-.metric-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(0, 210, 255, 0.6);
-}
-
-.metric-icon-box {
-  width: 52px;
-  height: 52px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.metric-icon-box.cyan {
-  background: rgba(0, 210, 255, 0.15);
-  color: #00d2ff;
-  border: 1px solid rgba(0, 210, 255, 0.3);
-}
-
-.metric-icon-box.gold {
-  background: rgba(255, 171, 0, 0.15);
-  color: #ffab00;
-  border: 1px solid rgba(255, 171, 0, 0.3);
-}
-
-.metric-icon-box.green {
-  background: rgba(0, 230, 118, 0.15);
-  color: #00e676;
-  border: 1px solid rgba(0, 230, 118, 0.3);
-}
-
-.metric-icon-box.purple {
-  background: rgba(187, 134, 252, 0.15);
-  color: #bb86fc;
-  border: 1px solid rgba(187, 134, 252, 0.3);
-}
-
-.metric-info {
-  flex: 1;
-  overflow: hidden;
-}
-
-.metric-label {
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
-}
-
-.metric-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: #ffffff;
-  font-family: "SF Pro Display", -apple-system, monospace;
-  white-space: nowrap;
-}
-
-.metric-value.text-gold {
-  color: #ffc107;
-  text-shadow: 0 0 8px rgba(255, 193, 7, 0.35);
-}
-
-.metric-value.text-green {
-  color: #00e676;
-  text-shadow: 0 0 8px rgba(0, 230, 118, 0.35);
-}
-
-.metric-value.text-purple {
-  color: #bb86fc;
-  text-shadow: 0 0 8px rgba(187, 134, 252, 0.35);
-}
-
-.metric-unit {
-  font-size: 12px;
-  font-weight: normal;
-  color: var(--text-secondary);
-  margin-left: 4px;
-}
-
-.metric-sub {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 4px;
-  display: flex;
-  justify-content: space-between;
-}
-
-.metric-sub .highlight {
-  color: var(--primary-color);
-  font-weight: 500;
-}
 </style>

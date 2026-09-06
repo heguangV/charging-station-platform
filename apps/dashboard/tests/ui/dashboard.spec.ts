@@ -66,8 +66,9 @@ test('station names cannot inject tooltip HTML and mWh converts to kWh', async (
   expect(await page.evaluate(() => (window as any).__injected)).toBeUndefined()
 })
 
-test('nonempty backend DTOs render all supported charts', async ({ page }) => {
-  await page.setViewportSize({ width: 1920, height: 1080 })
+for (const [width, height] of [[1920, 1080], [1366, 768]]) {
+test(`nonempty backend DTOs render all supported charts at ${width}`,  async ({ page }) => {
+  await page.setViewportSize({ width, height })
   const dto = summary()
   dto.totalChargeCount = 4268
   dto.totalRevenueCent = 9800000
@@ -87,6 +88,29 @@ test('nonempty backend DTOs render all supported charts', async ({ page }) => {
   await expect(page.getByLabel('预测电站')).toHaveValue('1')
   // Wait for ECharts' initial series animation before recording visual evidence.
   await page.waitForTimeout(1200)
-  await page.screenshot({ path: 'test-results/dashboard-populated.png' })
+  await page.screenshot({ path: `test-results/dashboard-populated-${width}.png` })
   expect(errors).toEqual([])
 })
+}
+
+for (const [width, height] of [[390, 844], [768, 1024]]) {
+  test(`narrow viewport reflows without shrinking text at ${width}`, async ({ page }) => {
+    await page.setViewportSize({ width, height })
+    await page.route('**/api/v1/dashboard/summary', route => route.fulfill({ json: envelope(summary()) }))
+    await login(page)
+    await expect(page.locator('.dashboard-main')).toBeVisible()
+    const layout = await page.locator('.tech-card, .metric-card, .header-title').evaluateAll(elements => elements.map(el => {
+      const box = el.getBoundingClientRect()
+      return { x: box.x, right: box.right, overflow: el.scrollWidth - el.clientWidth }
+    }))
+    for (const box of layout) {
+      expect(box.x).toBeGreaterThanOrEqual(0)
+      expect(box.right).toBeLessThanOrEqual(width)
+      expect(box.overflow).toBeLessThanOrEqual(1)
+    }
+    expect(await page.locator('.header-title').evaluate(el => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(22)
+    await page.locator('.load-prediction-card').scrollIntoViewIfNeeded()
+    await expect(page.locator('.load-prediction-card')).toBeInViewport()
+    await page.screenshot({ path: `test-results/dashboard-${width}.png`, fullPage: true })
+  })
+}

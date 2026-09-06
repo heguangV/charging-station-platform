@@ -26,53 +26,9 @@ const store = useDashboardStore()
 </script>
 
 <style scoped>
-.offline-banner {
-  background: linear-gradient(90deg, rgba(255, 61, 113, 0.9) 0%, rgba(255, 171, 0, 0.85) 100%);
-  color: #ffffff;
-  padding: 6px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 13px;
-  box-shadow: 0 2px 10px rgba(255, 61, 113, 0.35);
-  position: relative;
-  z-index: 20;
-}
+.offline-banner { background: #fff1bc; color: #755718; border-bottom: 1px solid #e8d78f; padding: 10px 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; line-height: 1.6; }
+.banner-content { display: flex; align-items: center; gap: 10px; }
+.warning-icon { flex-shrink: 0; }
+.retry-btn { flex-shrink: 0; background: #fffaf0; color: #755718; border: 1px solid #d8bf71; border-radius: 8px; padding: 7px 12px; }
 
-.banner-content {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.warning-icon {
-  flex-shrink: 0;
-  animation: pulse 1.5s infinite;
-}
-
-.retry-btn {
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.6);
-  color: #ffffff;
-  padding: 3px 12px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-  transition: background 0.2s ease;
-}
-
-.retry-btn:hover {
-  background: rgba(0, 0, 0, 0.4);
-}
-
-.slide-fade-enter-active,
-.slide-fade-leave-active {
-  transition: all 0.3s ease;
-}
-
-.slide-fade-enter-from,
-.slide-fade-leave-to {
-  transform: translateY(-100%);
-  opacity: 0;
-}
 </style>

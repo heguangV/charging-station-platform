@@ -78,9 +78,10 @@ void ChargerTable::rebuild()
         card->setCursor(available ? Qt::PointingHandCursor : Qt::ArrowCursor);
         card->setToolTip(selected ? QStringLiteral("再次点击勾选按钮可取消选择") : QString());
         card->setStyleSheet(
-            QStringLiteral("QFrame{background:%1;border:2px solid %2;border-radius:14px;}")
+            QStringLiteral(
+                "QFrame#chargerCard{background:%1;border:2px solid %2;border-radius:14px;}")
                 .arg(selected ? QStringLiteral("#DDF5EF") : QStringLiteral("#FFFFFF"),
-                     selected ? QStringLiteral("#0F766E") : QStringLiteral("#DDEBE8")));
+                     selected ? QStringLiteral("#23794E") : QStringLiteral("#DDEBE8")));
         if (selected)
         {
             auto* shadow = new QGraphicsDropShadowEffect(card);
@@ -94,14 +95,14 @@ void ChargerTable::rebuild()
         auto* text = new QVBoxLayout;
         text->setSpacing(6);
         auto* code = new QLabel(charger.code);
-        code->setStyleSheet(QStringLiteral("font-size:16px;font-weight:700;color:#25324A;"));
+        code->setStyleSheet(QStringLiteral("font-size:16px;font-weight:700;color:#243F30;"));
         auto* meta =
             new QLabel(QStringLiteral("%1 · 累计 %2 次").arg(charger.type).arg(charger.totalCount));
-        meta->setStyleSheet(QStringLiteral("font-size:12px;color:#667085;"));
+        meta->setStyleSheet(QStringLiteral("font-size:12px;color:#607362;"));
         const QString color = available ? QStringLiteral("#087443")
                               : charger.status == QStringLiteral("故障")
                                   ? QStringLiteral("#B42318")
-                                  : QStringLiteral("#B54708");
+                                  : QStringLiteral("#886719");
         auto* status =
             new QLabel(selected ? QStringLiteral("✓ 已选择 · 双击取消") : charger.status);
         status->setStyleSheet(
@@ -112,7 +113,7 @@ void ChargerTable::rebuild()
         layout->addLayout(text, 1);
         auto* power = new QLabel(QStringLiteral("%1\nkW").arg(charger.powerKw));
         power->setAlignment(Qt::AlignCenter);
-        power->setStyleSheet(QStringLiteral("font-size:20px;font-weight:700;color:#0F766E;"));
+        power->setStyleSheet(QStringLiteral("font-size:20px;font-weight:700;color:#23794E;"));
         layout->addWidget(power);
         auto* choose = new QPushButton(
             available ? (selected ? QStringLiteral("取消选择") : QStringLiteral("选择"))
@@ -126,8 +127,8 @@ void ChargerTable::rebuild()
                 "QPushButton{background:%1;color:%2;border:0;border-radius:9px;font-weight:600;}"
                 "QPushButton:hover{background:%3;}"
                 "QPushButton:disabled{background:#F2F4F7;color:#98A2B3;}")
-                .arg(selected ? QStringLiteral("#0F766E") : QStringLiteral("#E2F3F0"),
-                     selected ? QStringLiteral("white") : QStringLiteral("#0F766E"),
+                .arg(selected ? QStringLiteral("#23794E") : QStringLiteral("#E4F0DC"),
+                     selected ? QStringLiteral("white") : QStringLiteral("#23794E"),
                      selected ? QStringLiteral("#B42318") : QStringLiteral("#CFF0E9")));
         layout->addWidget(choose);
         if (available)

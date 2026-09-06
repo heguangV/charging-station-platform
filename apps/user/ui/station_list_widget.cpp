@@ -1,5 +1,6 @@
 #include "station_list_widget.h"
 
+#include "energy_scene.h"
 #include "station_card.h"
 
 #include <QComboBox>
@@ -35,7 +36,7 @@ class SearchGlyph final : public QWidget
     {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(QColor(QStringLiteral("#667085")), 1.8, Qt::SolidLine, Qt::RoundCap));
+        painter.setPen(QPen(QColor(QStringLiteral("#607362")), 1.8, Qt::SolidLine, Qt::RoundCap));
         painter.setBrush(Qt::NoBrush);
         painter.drawEllipse(QRectF(3.0, 3.0, 9.5, 9.5));
         painter.drawLine(QPointF(11.0, 11.0), QPointF(16.5, 16.5));
@@ -77,7 +78,7 @@ StationListWidget::StationListWidget(const QVector<StationSummary>& stations, QW
     auto* searchBar = new QFrame;
     searchBar->setObjectName(QStringLiteral("stationSearchBar"));
     searchBar->setStyleSheet(QStringLiteral("QFrame#stationSearchBar{background:#FFFFFF;border:1px "
-                                            "solid #DDE9E6;border-radius:15px;}"));
+                                            "solid #EAEDF0;border-radius:24px;}"));
     auto* controls = new QHBoxLayout(searchBar);
     controls->setContentsMargins(6, 6, 6, 6);
     controls->setSpacing(6);
@@ -90,31 +91,42 @@ StationListWidget::StationListWidget(const QVector<StationSummary>& stations, QW
                        "padding:7px 22px 7px 10px;font-size:13px;font-weight:600;}"
                        "QComboBox::drop-down{border:0;width:22px;}"
                        "QComboBox QAbstractItemView{background:#FFFFFF;border:1px solid #D9E9E5;"
-                       "selection-background-color:#E7F5F1;selection-color:#0F766E;}"));
+                       "selection-background-color:#E7F5F1;selection-color:#23794E;}"));
     auto* searchSymbol = new SearchGlyph;
     searchEdit_ = new QLineEdit;
-    searchEdit_->setPlaceholderText(QStringLiteral("搜索地址"));
+    searchEdit_->setPlaceholderText(QStringLiteral("搜索附近场站"));
     searchEdit_->setClearButtonEnabled(true);
     searchEdit_->setStyleSheet(QStringLiteral(
-        "QLineEdit{background:transparent;border:0;padding:8px 0;color:#25324A;font-size:14px;}"
+        "QLineEdit{background:transparent;border:0;padding:8px 0;color:#243F30;font-size:14px;}"
         "QLineEdit:focus{border:0;}"));
     refreshButton_ = new QPushButton(QStringLiteral("刷新"));
     refreshButton_->setToolTip(QStringLiteral("刷新站点"));
     refreshButton_->setFixedSize(44, 38);
     refreshButton_->setStyleSheet(QStringLiteral(
-        "QPushButton{background:transparent;color:#0F766E;border:0;border-radius:10px;"
+        "QPushButton{background:transparent;color:#23794E;border:0;border-radius:10px;"
         "font-size:13px;font-weight:600;}"
         "QPushButton:hover{background:#E7F5F1;}"
         "QPushButton:pressed{background:#D7ECE6;}"
         "QPushButton:disabled{color:#A9BDB8;}"));
-    controls->addWidget(locationBox_);
+    auto* map = new QPushButton(QStringLiteral("地图"));
+    map->setMinimumSize(56, 38);
+    map->setStyleSheet(
+        QStringLiteral("QPushButton{background:white;color:#253348;border:1px solid "
+                       "#E1E5EA;border-radius:18px;font-size:15px;font-weight:700;}"));
+    controls->addWidget(map);
+    connect(map, &QPushButton::clicked, this, &StationListWidget::mapRequested);
     controls->addWidget(searchSymbol);
     controls->addWidget(searchEdit_, 1);
     controls->addWidget(refreshButton_);
     layout->addWidget(searchBar);
     summary_ = new QLabel;
-    summary_->setStyleSheet(QStringLiteral("color:#667085;font-size:12px;"));
-    layout->addWidget(summary_);
+    summary_->setStyleSheet(QStringLiteral("color:#626C77;font-size:12px;"));
+    layout->addWidget(new EnergyScene);
+    auto* filters = new QHBoxLayout;
+    filters->addWidget(locationBox_);
+    filters->addStretch();
+    filters->addWidget(summary_);
+    layout->addLayout(filters);
     auto* scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
@@ -243,14 +255,13 @@ void StationListWidget::refresh()
     {
         auto* empty = new QLabel(QStringLiteral("暂无匹配的充电站\n请切换位置或调整搜索条件"));
         empty->setAlignment(Qt::AlignCenter);
-        empty->setStyleSheet(QStringLiteral("padding:48px 12px;color:#667085;"));
+        empty->setStyleSheet(QStringLiteral("padding:48px 12px;color:#607362;"));
         cards_->addWidget(empty);
     }
     cards_->addStretch();
     const QString locationLabel =
         location == QStringLiteral("附近") ? QStringLiteral("当前位置") : location;
-    summary_->setText(
-        QStringLiteral("%1 · 按距离排序 · 找到 %2 个充电站").arg(locationLabel).arg(count));
+    summary_->setText(QStringLiteral("%1 · %2 个站点").arg(locationLabel).arg(count));
 }
 
 } // namespace ncs::user

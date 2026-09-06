@@ -1,8 +1,10 @@
 #include "bottom_navigation.h"
 
+#include <QGraphicsDropShadowEffect>
 #include <QHBoxLayout>
 #include <QPainter>
 #include <QToolButton>
+#include <QVariantAnimation>
 
 namespace ncs::user
 {
@@ -42,7 +44,7 @@ BottomNavigation::BottomNavigation(QWidget* parent) : QWidget(parent)
     setObjectName(QStringLiteral("bottomNavigation"));
     setAttribute(Qt::WA_StyledBackground, true);
     setStyleSheet(QStringLiteral("QWidget#bottomNavigation{background:#FFFFFF;border:1px solid "
-                                 "#E7EAEE;border-radius:18px;}"));
+                                 "#E8EBEF;border-radius:18px;}"));
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(7, 7, 7, 7);
     layout->setSpacing(6);
@@ -79,16 +81,46 @@ void BottomNavigation::setCurrent(Item item)
 
 void BottomNavigation::updateButton(QToolButton* button, Item item, bool selected)
 {
-    const QColor color(selected ? QStringLiteral("#0F766E") : QStringLiteral("#667085"));
+    const QColor color(selected ? QStringLiteral("#E76B13") : QStringLiteral("#607362"));
     button->setIcon(iconFor(item, color));
     button->setChecked(selected);
-    button->setStyleSheet(
+    auto* transition = button->findChild<QVariantAnimation*>(QStringLiteral("selectionTransition"));
+    if (!transition)
+    {
+        transition = new QVariantAnimation(button);
+        transition->setObjectName(QStringLiteral("selectionTransition"));
+        connect(transition, &QVariantAnimation::valueChanged, button,
+                [button](const QVariant& value)
+                {
+                    const QColor background = value.value<QColor>();
+                    button->setProperty("selectionFill", background);
+                    button->setStyleSheet(button->property("selectionStyle")
+                                              .toString()
+                                              .arg(QStringLiteral("rgba(%1,%2,%3,%4)")
+                                                       .arg(background.red())
+                                                       .arg(background.green())
+                                                       .arg(background.blue())
+                                                       .arg(background.alpha())));
+                });
+    }
+    transition->stop();
+    const QColor previous = button->property("selectionFill").isValid()
+                                ? button->property("selectionFill").value<QColor>()
+                                : QColor(225, 239, 229, 0);
+    button->setProperty(
+        "selectionStyle",
         QStringLiteral("QToolButton{color:%1;background:%2;border:1px solid transparent;"
-                       "border-radius:12px;font-size:12px;font-weight:%3;padding:3px 0;}"
-                       "QToolButton:hover{background:#EDF5F3;}"
-                       "QToolButton:pressed{background:#D8ECE6;}"
-                       "QToolButton:focus{border-color:#0F766E;}")
-            .arg(color.name(), selected ? QStringLiteral("#E2F3EE") : QStringLiteral("transparent"),
+                       "border-radius:17px;font-size:12px;font-weight:%3;padding:3px 0;}"
+                       "QToolButton:hover{background:#EDF5E8;}"
+                       "QToolButton:pressed{background:#D5E8CA;}"
+                       "QToolButton:focus{border-color:#23794E;}")
+            .arg(color.name(), QStringLiteral("%1"),
                  selected ? QStringLiteral("700") : QStringLiteral("500")));
+    transition->setDuration(isVisible() && !qEnvironmentVariableIsSet("NCS_REDUCE_MOTION") ? 180
+                                                                                           : 0);
+    transition->setEasingCurve(QEasingCurve::OutCubic);
+    transition->setStartValue(previous);
+    transition->setEndValue(selected ? QColor(255, 240, 226, 255) : QColor(225, 239, 229, 0));
+    transition->start();
 }
 } // namespace ncs::user

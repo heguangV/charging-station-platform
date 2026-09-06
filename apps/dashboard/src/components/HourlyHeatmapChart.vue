@@ -45,9 +45,9 @@ const updateChart = () => {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      backgroundColor: 'rgba(11, 17, 30, 0.9)',
-      borderColor: '#00d2ff',
-      textStyle: { color: '#ffffff' },
+      backgroundColor: 'rgba(255, 255, 255, 0.98)',
+      borderColor: '#287e54',
+      textStyle: { color: '#294937' },
       formatter: (params: any) => {
         const p = params[0]
         const val = p.value
@@ -57,25 +57,26 @@ const updateChart = () => {
     xAxis: {
       type: 'category',
       data: hours,
-      axisLine: { lineStyle: { color: 'rgba(43, 88, 160, 0.45)' } },
+      axisLine: { lineStyle: { color: 'rgba(128, 153, 132, 0.45)' } },
       axisTick: { alignWithLabel: true },
       axisLabel: {
-        color: '#8da4c4',
-        fontSize: 10,
-        interval: 3
+        color: '#53616d',
+        fontSize: 12,
+        interval: 3,
+        hideOverlap: true
       }
     },
     yAxis: {
       type: 'value',
       splitLine: {
         lineStyle: {
-          color: 'rgba(43, 88, 160, 0.2)',
+          color: 'rgba(128, 153, 132, 0.2)',
           type: 'dashed'
         }
       },
       axisLabel: {
-        color: '#8da4c4',
-        fontSize: 10,
+        color: '#53616d',
+        fontSize: 12,
         formatter: '{value}'
       }
     },
@@ -84,7 +85,7 @@ const updateChart = () => {
       min: 0,
       max: Math.max(1, ...values),
       inRange: {
-        color: ['#00e676', '#00d2ff', '#ffab00', '#ff3d71']
+        color: ['#daeacb', '#8fbd79', '#32945e', '#216543']
       }
     },
     series: [
@@ -115,13 +116,15 @@ const handleResize = () => {
   chartInstance?.resize()
 }
 
+const resizeObserver = new ResizeObserver(handleResize)
+
 onMounted(() => {
   initChart()
-  window.addEventListener('resize', handleResize)
+  if (chartRef.value) resizeObserver.observe(chartRef.value)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
+  resizeObserver.disconnect()
   chartInstance?.dispose()
 })
 </script>

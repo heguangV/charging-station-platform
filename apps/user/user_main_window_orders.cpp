@@ -27,10 +27,10 @@ QString statusColor(const QString& status)
     if (status == QStringLiteral("已完成"))
         return QStringLiteral("#087443");
     if (status == QStringLiteral("充电中"))
-        return QStringLiteral("#B54708");
+        return QStringLiteral("#886719");
     if (status == QStringLiteral("已预约"))
-        return QStringLiteral("#0F766E");
-    return QStringLiteral("#667085");
+        return QStringLiteral("#23794E");
+    return QStringLiteral("#607362");
 }
 
 void clearCards(QVBoxLayout* cards)
@@ -49,20 +49,20 @@ QWidget* UserMainWindow::createOrdersPage()
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 8, 0, 0);
     auto* title = new QLabel(QStringLiteral("我的订单"));
-    title->setStyleSheet(QStringLiteral("font-size:22px;font-weight:700;color:#25324A;"));
+    title->setStyleSheet(QStringLiteral("font-size:22px;font-weight:700;color:#243F30;"));
     auto* heading = new QHBoxLayout;
     heading->addWidget(title);
     auto* help = new QToolButton;
     help->setText(QStringLiteral("ⓘ"));
     help->setToolTip(QStringLiteral("点击订单卡中的“查看小票”可查看详细信息"));
     help->setStyleSheet(QStringLiteral(
-        "QToolButton{color:#0F766E;border:0;background:transparent;font-size:17px;padding:2px;}"));
+        "QToolButton{color:#23794E;border:0;background:transparent;font-size:17px;padding:2px;}"));
     heading->addWidget(help);
     heading->addStretch();
     auto* refresh = new QPushButton(QStringLiteral("刷新"));
     refresh->setCursor(Qt::PointingHandCursor);
     refresh->setStyleSheet(
-        QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;border-radius:9px;"
+        QStringLiteral("QPushButton{background:#E4F0DC;color:#23794E;border:0;border-radius:9px;"
                        "font-size:13px;font-weight:700;padding:7px 12px;}"
                        "QPushButton:hover{background:#D2ECE5;}"));
     heading->addWidget(refresh);
@@ -176,7 +176,7 @@ void UserMainWindow::renderOrders(const QVector<OrderSummary>& records)
         cardLayout->setSpacing(7);
         auto* header = new QHBoxLayout;
         auto* station = new QLabel(order.stationName);
-        station->setStyleSheet(QStringLiteral("font-size:15px;font-weight:600;color:#25324A;"));
+        station->setStyleSheet(QStringLiteral("font-size:15px;font-weight:600;color:#243F30;"));
         auto* status = new QLabel(order.status);
         status->setStyleSheet(QStringLiteral("color:%1;background:#F3F8F7;border-radius:8px;"
                                              "padding:4px 7px;font-size:12px;font-weight:600;")
@@ -189,20 +189,20 @@ void UserMainWindow::renderOrders(const QVector<OrderSummary>& records)
                                     .arg(order.chargerCode, order.startTime.isEmpty()
                                                                 ? QStringLiteral("等待开始")
                                                                 : order.startTime));
-        time->setStyleSheet(QStringLiteral("font-size:12px;color:#667085;"));
+        time->setStyleSheet(QStringLiteral("font-size:12px;color:#607362;"));
         cardLayout->addWidget(time);
         auto* details = new QHBoxLayout;
         auto* energy = new QLabel(QStringLiteral("电量  %1 kWh")
                                       .arg(QString::number(order.energyMwh / 1000000.0, 'f', 3)));
         energy->setStyleSheet(QStringLiteral("font-size:13px;color:#475467;"));
         auto* amount = new QLabel(money(order.amountCent));
-        amount->setStyleSheet(QStringLiteral("font-size:16px;font-weight:700;color:#0F766E;"));
+        amount->setStyleSheet(QStringLiteral("font-size:16px;font-weight:700;color:#23794E;"));
         auto* receipt = new QPushButton(QStringLiteral("查看小票  ›"));
         receipt->setCursor(Qt::PointingHandCursor);
         receipt->setStyleSheet(
-            QStringLiteral("QPushButton{background:transparent;color:#0F766E;border:0;font-size:"
+            QStringLiteral("QPushButton{background:transparent;color:#23794E;border:0;font-size:"
                            "12px;font-weight:600;padding:3px;}"
-                           "QPushButton:hover{color:#07534D;}"));
+                           "QPushButton:hover{color:#174F34;}"));
         details->addWidget(energy);
         details->addWidget(amount);
         details->addStretch();
