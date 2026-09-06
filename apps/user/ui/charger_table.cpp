@@ -76,8 +76,7 @@ void ChargerTable::rebuild()
         } : std::function<void()>{});
         card->setObjectName(QStringLiteral("chargerCard"));
         card->setCursor(available ? Qt::PointingHandCursor : Qt::ArrowCursor);
-        card->setToolTip(selected ? QStringLiteral("再次点击勾选按钮可取消选择")
-                                  : QString());
+        card->setToolTip(selected ? QStringLiteral("再次点击勾选按钮可取消选择") : QString());
         card->setStyleSheet(
             QStringLiteral("QFrame{background:%1;border:2px solid %2;border-radius:14px;}")
                 .arg(selected ? QStringLiteral("#DDF5EF") : QStringLiteral("#FFFFFF"),
@@ -119,8 +118,8 @@ void ChargerTable::rebuild()
             available ? (selected ? QStringLiteral("取消选择") : QStringLiteral("选择"))
                       : charger.status);
         choose->setMinimumSize(66, 36);
-        choose->setAccessibleName((selected ? QStringLiteral("取消选择 ") : QStringLiteral("选择 ")) +
-                                  charger.code);
+        choose->setAccessibleName(
+            (selected ? QStringLiteral("取消选择 ") : QStringLiteral("选择 ")) + charger.code);
         choose->setEnabled(available);
         choose->setStyleSheet(
             QStringLiteral(

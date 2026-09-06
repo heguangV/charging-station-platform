@@ -61,10 +61,10 @@ QWidget* UserMainWindow::createOrdersPage()
     heading->addStretch();
     auto* refresh = new QPushButton(QStringLiteral("刷新"));
     refresh->setCursor(Qt::PointingHandCursor);
-    refresh->setStyleSheet(QStringLiteral(
-        "QPushButton{background:#E2F3F0;color:#0F766E;border:0;border-radius:9px;"
-        "font-size:13px;font-weight:700;padding:7px 12px;}"
-        "QPushButton:hover{background:#D2ECE5;}"));
+    refresh->setStyleSheet(
+        QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;border-radius:9px;"
+                       "font-size:13px;font-weight:700;padding:7px 12px;}"
+                       "QPushButton:hover{background:#D2ECE5;}"));
     heading->addWidget(refresh);
     layout->addLayout(heading);
     ordersScroll_ = new QScrollArea;

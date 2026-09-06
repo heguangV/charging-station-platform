@@ -202,7 +202,8 @@ void StationListWidget::requestRefresh()
 
 void StationListWidget::refreshAvailability()
 {
-    if (!remoteSource_ || !refreshButton_->isEnabled()) return;
+    if (!remoteSource_ || !refreshButton_->isEnabled())
+        return;
     refreshButton_->setEnabled(false);
     const QPointF coordinate = locationCoordinate(locationBox_->currentText());
     emit loadRequested(qRound64(coordinate.y() * 1000000), qRound64(coordinate.x() * 1000000),

@@ -103,7 +103,8 @@ class StationMapWidget final : public QWidget
         {
             if (QLineF(event->position(), pointFor(station)).length() <= 18)
             {
-                if (onStationSelected_) onStationSelected_(station.id);
+                if (onStationSelected_)
+                    onStationSelected_(station.id);
                 return;
             }
         }
@@ -115,8 +116,10 @@ class StationMapWidget final : public QWidget
         painter.setRenderHint(QPainter::Antialiasing);
         painter.fillRect(rect(), QColor(QStringLiteral("#EDF6F3")));
         painter.setPen(QPen(QColor(QStringLiteral("#D8E9E4")), 1));
-        for (int x = 24; x < width(); x += 48) painter.drawLine(x, 0, x, height());
-        for (int y = 24; y < height(); y += 48) painter.drawLine(0, y, width(), y);
+        for (int x = 24; x < width(); x += 48)
+            painter.drawLine(x, 0, x, height());
+        for (int y = 24; y < height(); y += 48)
+            painter.drawLine(0, y, width(), y);
         painter.setPen(QPen(QColor(QStringLiteral("#CCE4DD")), 7, Qt::SolidLine, Qt::RoundCap));
         painter.drawLine(QPointF(16, height() * 0.72), QPointF(width() - 16, height() * 0.27));
         painter.setPen(QPen(QColor(QStringLiteral("#B8D8CF")), 4, Qt::SolidLine, Qt::RoundCap));
@@ -124,7 +127,8 @@ class StationMapWidget final : public QWidget
         if (stations_.isEmpty())
         {
             painter.setPen(QColor(QStringLiteral("#667085")));
-            painter.drawText(rect(), Qt::AlignCenter, QStringLiteral("暂无可展示的电站\n请返回列表刷新"));
+            painter.drawText(rect(), Qt::AlignCenter,
+                             QStringLiteral("暂无可展示的电站\n请返回列表刷新"));
             return;
         }
         for (const StationSummary& station : stations_)
@@ -147,15 +151,16 @@ class StationMapWidget final : public QWidget
   private:
     QPointF pointFor(const StationSummary& station) const
     {
-        if (stations_.isEmpty()) return rect().center();
-        const auto [minLat, maxLat] = std::minmax_element(
-            stations_.cbegin(), stations_.cend(), [](const StationSummary& left, const StationSummary& right) {
-                return left.latitude < right.latitude;
-            });
-        const auto [minLon, maxLon] = std::minmax_element(
-            stations_.cbegin(), stations_.cend(), [](const StationSummary& left, const StationSummary& right) {
-                return left.longitude < right.longitude;
-            });
+        if (stations_.isEmpty())
+            return rect().center();
+        const auto [minLat, maxLat] =
+            std::minmax_element(stations_.cbegin(), stations_.cend(),
+                                [](const StationSummary& left, const StationSummary& right)
+                                { return left.latitude < right.latitude; });
+        const auto [minLon, maxLon] =
+            std::minmax_element(stations_.cbegin(), stations_.cend(),
+                                [](const StationSummary& left, const StationSummary& right)
+                                { return left.longitude < right.longitude; });
         const qreal latRange = qMax(0.002, maxLat->latitude - minLat->latitude);
         const qreal lonRange = qMax(0.002, maxLon->longitude - minLon->longitude);
         const QRectF canvas = rect().adjusted(30, 30, -30, -38);
@@ -248,7 +253,8 @@ UserMainWindow::UserMainWindow(UserClientService& service, UserApi* userApi,
                         stationList_->refreshAvailability();
                     }
                 }
-                else stationRefreshTicks_ = 0;
+                else
+                    stationRefreshTicks_ = 0;
                 refreshCharge();
             });
     timer_->start(1000);
@@ -290,63 +296,79 @@ QWidget* UserMainWindow::createHomePage()
     titleGroup->addWidget(brand);
     titleGroup->addWidget(homeTitle);
     heading->addLayout(titleGroup);
-    auto* map = button(QStringLiteral("地图找站"), QStringLiteral(
-        "QPushButton{background:#E2F3F0;color:#0F766E;border:0;border-radius:10px;"
-        "font-size:13px;font-weight:700;padding:0 12px;}"));
+    auto* map = button(
+        QStringLiteral("地图找站"),
+        QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;border-radius:10px;"
+                       "font-size:13px;font-weight:700;padding:0 12px;}"));
     map->setMinimumHeight(36);
     heading->addStretch();
     heading->addWidget(map);
     layout->addLayout(heading);
-    stationList_ = new StationListWidget(userApi_ ? QVector<StationSummary>{} : service_.stations());
+    stationList_ =
+        new StationListWidget(userApi_ ? QVector<StationSummary>{} : service_.stations());
     layout->addWidget(stationList_, 1);
     if (userApi_)
     {
-        connect(stationList_, &StationListWidget::loadRequested, this,
-                [this](qint64 latitudeE6, qint64 longitudeE6, const QString& locationKeyword) {
-                    if (!onlineSession_) return;
-                    const int requestId = ++stationsRequestId_;
-                    userApi_->stations(latitudeE6, longitudeE6, locationKeyword,
-                                       [this, requestId](ApiReply reply) {
-                                           if (!onlineSession_ || requestId != stationsRequestId_) return;
-                                           if (!reply.ok())
-                                           {
-                                               stationList_->showError(reply.message);
-                                               return;
-                                           }
-                                           QVector<StationSummary> stations;
-                                           for (const QJsonValue& value : reply.data.toObject()
-                                                                            .value(QStringLiteral("items"))
-                                                                            .toArray())
-                                           {
-                                               const QJsonObject item = value.toObject();
-                                               StationSummary station;
-                                               station.id = item.value(QStringLiteral("id")).toInt();
-                                               station.name = item.value(QStringLiteral("name")).toString();
-                                               station.address = item.value(QStringLiteral("address")).toString();
-                                               station.priceCentPerKwh = item.value(QStringLiteral("totalPriceCentPerKwh")).toInt();
-                                               station.idleCount = item.value(QStringLiteral("idleCount")).toInt();
-                                               station.totalCount = item.value(QStringLiteral("totalCount")).toInt();
-                                               station.latitude = item.value(QStringLiteral("latitudeE6")).toDouble() / 1000000.0;
-                                               station.longitude = item.value(QStringLiteral("longitudeE6")).toDouble() / 1000000.0;
-                                               const qint64 meter = item.value(QStringLiteral("distanceMeter")).toInteger();
-                                               station.distance = meter < 1000 ? QStringLiteral("%1 m").arg(meter)
-                                                                               : QStringLiteral("%1 km").arg(QString::number(meter / 1000.0, 'f', 1));
-                                               if (station.id > 0 && !station.name.isEmpty()) stations.append(std::move(station));
-                                           }
-                                           stationsById_.clear();
-                                           for (const StationSummary& station : stations)
-                                               stationsById_.insert(station.id, station);
-                                           stationMap_->setStations(stations);
-                                           stationList_->setStations(std::move(stations));
-                                       });
-                });
+        connect(
+            stationList_, &StationListWidget::loadRequested, this,
+            [this](qint64 latitudeE6, qint64 longitudeE6, const QString& locationKeyword)
+            {
+                if (!onlineSession_)
+                    return;
+                const int requestId = ++stationsRequestId_;
+                userApi_->stations(
+                    latitudeE6, longitudeE6, locationKeyword,
+                    [this, requestId](ApiReply reply)
+                    {
+                        if (!onlineSession_ || requestId != stationsRequestId_)
+                            return;
+                        if (!reply.ok())
+                        {
+                            stationList_->showError(reply.message);
+                            return;
+                        }
+                        QVector<StationSummary> stations;
+                        for (const QJsonValue& value :
+                             reply.data.toObject().value(QStringLiteral("items")).toArray())
+                        {
+                            const QJsonObject item = value.toObject();
+                            StationSummary station;
+                            station.id = item.value(QStringLiteral("id")).toInt();
+                            station.name = item.value(QStringLiteral("name")).toString();
+                            station.address = item.value(QStringLiteral("address")).toString();
+                            station.priceCentPerKwh =
+                                item.value(QStringLiteral("totalPriceCentPerKwh")).toInt();
+                            station.idleCount = item.value(QStringLiteral("idleCount")).toInt();
+                            station.totalCount = item.value(QStringLiteral("totalCount")).toInt();
+                            station.latitude =
+                                item.value(QStringLiteral("latitudeE6")).toDouble() / 1000000.0;
+                            station.longitude =
+                                item.value(QStringLiteral("longitudeE6")).toDouble() / 1000000.0;
+                            const qint64 meter =
+                                item.value(QStringLiteral("distanceMeter")).toInteger();
+                            station.distance = meter < 1000
+                                                   ? QStringLiteral("%1 m").arg(meter)
+                                                   : QStringLiteral("%1 km").arg(
+                                                         QString::number(meter / 1000.0, 'f', 1));
+                            if (station.id > 0 && !station.name.isEmpty())
+                                stations.append(std::move(station));
+                        }
+                        stationsById_.clear();
+                        for (const StationSummary& station : stations)
+                            stationsById_.insert(station.id, station);
+                        stationMap_->setStations(stations);
+                        stationList_->setStations(std::move(stations));
+                    });
+            });
         stationList_->setRemoteSource(true);
     }
-    connect(stationList_, &StationListWidget::stationSelected, this, [this](const StationSummary& station) {
-        stationsById_.insert(station.id, station);
-        selectedStationDistance_ = station.distance;
-        showDetail(station.id);
-    });
+    connect(stationList_, &StationListWidget::stationSelected, this,
+            [this](const StationSummary& station)
+            {
+                stationsById_.insert(station.id, station);
+                selectedStationDistance_ = station.distance;
+                showDetail(station.id);
+            });
     connect(map, &QPushButton::clicked, this, &UserMainWindow::showStationMap);
     return page;
 }
@@ -362,24 +384,27 @@ QWidget* UserMainWindow::createStationMapPage()
     auto* hint = label(QStringLiteral("绿色标记表示有空闲电桩；点击标记查看并预约"), 13);
     hint->setStyleSheet(QStringLiteral("font-size:13px;color:#667085;"));
     stationMap_ = new StationMapWidget;
-    auto* back = button(QStringLiteral("返回站点列表"), QStringLiteral(
-        "QPushButton{background:#E2F3F0;color:#0F766E;border:0;border-radius:10px;"
-        "font-size:15px;font-weight:600;}"));
+    auto* back = button(
+        QStringLiteral("返回站点列表"),
+        QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;border-radius:10px;"
+                       "font-size:15px;font-weight:600;}"));
     layout->addWidget(title);
     layout->addWidget(hint);
     layout->addWidget(stationMap_, 1);
     layout->addWidget(back);
     connect(back, &QPushButton::clicked, this, &UserMainWindow::showHome);
-    stationMap_->setOnStationSelected([this](int stationId) {
-        const auto station = stationsById_.constFind(stationId);
-        if (station == stationsById_.cend())
+    stationMap_->setOnStationSelected(
+        [this](int stationId)
         {
-            notify(QStringLiteral("站点信息已更新，请返回列表刷新"), true);
-            return;
-        }
-        selectedStationDistance_ = station->distance;
-        showDetail(stationId);
-    });
+            const auto station = stationsById_.constFind(stationId);
+            if (station == stationsById_.cend())
+            {
+                notify(QStringLiteral("站点信息已更新，请返回列表刷新"), true);
+                return;
+            }
+            selectedStationDistance_ = station->distance;
+            showDetail(stationId);
+        });
     return page;
 }
 
@@ -490,10 +515,10 @@ QWidget* UserMainWindow::createChargePage()
     chargeSoc_ = new ChargeSocGauge;
     layout->addWidget(chargeSoc_);
     startButton_ = button(QStringLiteral("开始充电"));
-    navigateToStationButton_ = button(
-        QStringLiteral("导航到已预约电站"),
-        QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;"
-                       "border-radius:10px;font-size:15px;font-weight:600;}"));
+    navigateToStationButton_ =
+        button(QStringLiteral("导航到已预约电站"),
+               QStringLiteral("QPushButton{background:#E2F3F0;color:#0F766E;border:0;"
+                              "border-radius:10px;font-size:15px;font-weight:600;}"));
     cancelButton_ = button(QStringLiteral("取消预约"),
                            QStringLiteral("QPushButton{background:#FFF4E5;color:#B54708;border:0;"
                                           "border-radius:10px;font-size:15px;font-weight:600;}"));
@@ -555,8 +580,7 @@ QWidget* UserMainWindow::createChargePage()
                     notify(message, true);
                 }
             });
-    connect(navigateToStationButton_, &QPushButton::clicked, this,
-            &UserMainWindow::showNavigation);
+    connect(navigateToStationButton_, &QPushButton::clicked, this, &UserMainWindow::showNavigation);
     connect(cancelButton_, &QPushButton::clicked, this,
             [this]
             {

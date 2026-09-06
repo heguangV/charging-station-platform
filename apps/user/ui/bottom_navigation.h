@@ -10,13 +10,19 @@ class BottomNavigation final : public QWidget
 {
     Q_OBJECT
   public:
-    enum class Item { Home, Orders, Profile };
+    enum class Item
+    {
+        Home,
+        Orders,
+        Profile
+    };
     explicit BottomNavigation(QWidget* parent = nullptr);
     void setCurrent(Item item);
   signals:
     void homeRequested();
     void ordersRequested();
     void profileRequested();
+
   private:
     void updateButton(QToolButton* button, Item item, bool selected);
     QToolButton* home_ = nullptr;
