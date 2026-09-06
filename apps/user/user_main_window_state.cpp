@@ -3,6 +3,7 @@
 #include "ui/charger_table.h"
 #include "ui/charge_soc_gauge.h"
 #include "ui/bottom_navigation.h"
+#include "ui/station_list_widget.h"
 #include "net/user_api.h"
 
 #include <QLabel>
@@ -76,6 +77,7 @@ void UserMainWindow::keyPressEvent(QKeyEvent* event)
 
 void UserMainWindow::showHome()
 {
+    if (userApi_ && onlineSession_) stationList_->requestRefresh();
     bottomNavigation_->setCurrent(BottomNavigation::Item::Home);
     bottomNavigation_->show();
     pages_->setCurrentIndex(kHomePage);
@@ -200,6 +202,21 @@ void UserMainWindow::beginFlowRequest()
                               [this](ApiReply reply) {
             if (!reply.ok())
             {
+                if (reply.code == QStringLiteral("7") ||
+                    reply.code == QStringLiteral("18") ||
+                    reply.message.contains(QStringLiteral("余额")))
+                {
+                    QMessageBox dialog(QMessageBox::Warning, QStringLiteral("余额不足"),
+                        QStringLiteral("当前余额不足，暂不能预约该电桩。\n\n请先前往“我的”完成充值，再重新预约。"),
+                        QMessageBox::NoButton, this);
+                    auto* cancel = dialog.addButton(QStringLiteral("取消"), QMessageBox::RejectRole);
+                    auto* recharge = dialog.addButton(QStringLiteral("去充值"), QMessageBox::AcceptRole);
+                    dialog.setDefaultButton(recharge);
+                    dialog.setEscapeButton(cancel);
+                    dialog.exec();
+                    if (dialog.clickedButton() == recharge) showProfile();
+                    return;
+                }
                 notify(reply.message, true);
                 return;
             }

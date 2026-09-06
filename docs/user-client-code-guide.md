@@ -1,6 +1,6 @@
 # PE1 用户端代码阅读指南（从零开始）
 
-这份文档对应 `apps/user/`。阅读目标不是背每一行，而是能回答：**程序从哪里开始？一个点击如何变成页面变化？数据放在哪里？以后后端如何接入？**
+这份文档对应 `apps/user/`。阅读目标不是背每一行，而是能回答：**程序从哪里开始？一个点击如何变成页面变化？数据放在哪里？现在如何异步访问后端？**
 
 ## 0. 先记住一张图
 
@@ -8,14 +8,15 @@
 main.cpp
   ├─ 创建 QApplication（Qt 程序运行环境）
   ├─ 读取配置、启动日志、应用主题
-  ├─ 创建 MockUserClientService（当前演示数据/业务状态）
+  ├─ 创建 ApiClient + UserApi（正常模式的异步 REST 边界）
+  ├─ 创建 MockUserClientService（仅 --mock-scenario 演示/回归）
   └─ 创建 UserMainWindow（所有页面）
        ├─ 登录、首页、选桩、充电、订单、我的等页面
        ├─ ui/ 中的可复用控件
-       └─ 调用 service_ 读取或修改数据
+       └─ 正常模式调用 UserApi；Mock 模式调用 service_
 
-将来：UserClientService → RestUserClientService → UserApi → ApiClient → 后端 REST
-当前：UserClientService → MockUserClientService（不需要后端也能演示）
+正常：Widget/Page → UserApi → ApiClient → 后端 REST
+Mock：Widget/Page → MockUserClientService（仅显式 --mock-scenario）
 ```
 
 程序不是每个页面一个可执行文件；它只有一个 `ncs_user` 窗口，内部用 `QStackedWidget` 切换“当前页”。
@@ -24,7 +25,7 @@ main.cpp
 
 | 位置 | 你把它理解成什么 | 主要职责 |
 | --- | --- | --- |
-| `main.cpp` | 程序总开关 | 创建 Qt 应用、主题、配置、日志、Mock Service 和主窗口 |
+| `main.cpp` | 程序总开关 | 创建 Qt 应用、主题、配置、异步 REST 边界、Mock 演示模式和主窗口 |
 | `user_main_window.h` | 主窗口的“目录/说明书” | 声明有哪些页面、控件指针和状态变量 |
 | `user_main_window.cpp` | 主窗口主体 | 创建页面容器、首页、选桩、充电、小票及按钮连接 |
 | `user_main_window_login.cpp` | 登录页 | 手机号校验、验证码倒计时、登录按钮 |
@@ -46,8 +47,10 @@ main.cpp
 ```cpp
 QApplication app(argc, argv);              // 让 Qt 接管窗口和事件循环
 AppTheme::apply(app);                      // 应用统一 QSS 样式
-MockUserClientService service;             // 创建当前的离线数据源
-UserMainWindow window(service);            // 把数据源交给界面
+ApiClient client(baseUrl, &app);            // 正常模式的异步 HTTP 客户端
+UserApi userApi(client);                    // 用户 REST 契约封装
+MockUserClientService mockService;          // 仅 --mock-scenario 使用
+UserMainWindow window(mockService, &userApi, mapKey, mapOrigin);
 window.show();                             // 显示窗口
 return app.exec();                         // 开始等待鼠标、键盘、定时器等事件
 ```
@@ -69,7 +72,7 @@ UserClientService& service_;
 - `QLabel*`：指向屏幕上的一段文字控件。保存它，之后 `refreshCharge()` 才能改金额文本。
 - `QPushButton*`：保存按钮，之后可 `setEnabled(false)` 防止重复结算。
 - `= nullptr`：刚创建窗口时还没有对象，先置空，避免野指针。
-- `UserClientService&`：引用，不复制 Service；主窗口始终操作 `main.cpp` 创建的同一个数据源。
+- `UserClientService&`：引用，不复制 Mock Service；它只在显式 Mock 模式下提供离线状态。正常模式由 `userApi_` 发起异步请求。
 
 Qt 控件大多有父对象：例如 `new QLabel(page)`。`page` 被销毁时会自动销毁它的子控件，因此一般不需要手动 `delete` 每个 Label。
 
@@ -189,7 +192,7 @@ settle()  → 扣余额、订单改“已完成”、清除活动订单
 - `const`：这里只读，不能误改原数据；
 - `&`：引用，不复制整份站点对象，效率更好。
 
-列表筛选目前在 Mock 数据上运行；接 REST 后，应由接口返回列表，再用相同卡片渲染，不把 JSON 解析写进组件。
+正常模式由 REST 返回站点列表并渲染相同卡片；Mock 模式才使用本地站点集合。组件不手拼 URL，响应解析集中在窗口状态层和 `UserApi`。
 
 ## 9. 充电页与自绘 SoC 仪表
 
@@ -217,7 +220,7 @@ void ChargeSocGauge::paintEvent(QPaintEvent*) {
 
 `UserApi` 知道团队接口名称，例如 `POST /api/v1/user/flows`、`GET /flows/{flowNo}/progress`，但不认识任何 Qt 页面。这样后端路径变更只改 `net/user_api.cpp`，而不是到处搜索替换。
 
-**重要现状：** 当前 UI 注入的是 `MockUserClientService`，所以点击页面不会真的发网络请求。`UserApi` 已按团队 V1 文档实现，下一步要做异步 `RestUserClientService`/ViewModel，把网络回调转换为页面刷新；绝不能用等待网络返回的同步循环，否则界面会卡死。
+**重要现状：** 正常 UI 已注入 `UserApi`，登录、站点、电桩、充电流程、订单、资料、余额和导航均通过回调异步访问真实 REST。`MockUserClientService` 仅在 `--mock-scenario` 下使用。后续扩展仍不得用等待网络返回的同步循环，否则界面会卡死。
 
 ## 11. 其他常见语法速查
 
@@ -238,13 +241,13 @@ void ChargeSocGauge::paintEvent(QPaintEvent*) {
 
 按这个顺序打开代码，每个文件只看职责和关键函数：
 
-1. `main.cpp`：知道程序如何启动、为何当前是 Mock。
+1. `main.cpp`：知道程序如何创建 REST 边界，以及何时显式启用 Mock。
 2. `user_demo_service.h`：知道页面能向数据源要什么。
 3. `user_demo_service.cpp`：重点看 `reserve/start/tick/progress/settle` 状态变化。
 4. `user_main_window.h`：知道窗口存了哪些页面控件和状态。
 5. `user_main_window_state.cpp`：知道跳页、刷新、Toast 和 Esc 逻辑。
 6. `ui/station_list_widget.cpp`：理解信号槽、搜索和动态卡片。
 7. `ui/charge_soc_gauge.cpp`：理解自绘组件。
-8. `net/api_client.cpp`、`net/user_api.cpp`：只需理解“异步请求统一封装，尚未注入页面”。
+8. `net/api_client.cpp`、`net/user_api.cpp`：理解“异步请求统一封装，并已被正常页面调用”。
 
-明天最低限度要能自己说清：**我做的是用户端界面和演示状态机；Mock 是为了不依赖后端；正式模式通过 REST 异步访问后端；客户端绝不直接操作数据库；目前 REST 基础已就绪但页面真实联调是下一步。**
+最低限度要能自己说清：**我做的是用户端界面与异步 REST 状态层；正常模式通过 REST 访问后端，Mock 仅用于显式演示；客户端绝不直接操作数据库；隔离服务端的真实 HTTP 账户充电闭环已通过，Qt 图形界面端到端录屏验收仍待执行。**

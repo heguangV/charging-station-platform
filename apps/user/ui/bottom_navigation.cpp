@@ -2,8 +2,6 @@
 
 #include <QHBoxLayout>
 #include <QPainter>
-#include <QPropertyAnimation>
-#include <QSequentialAnimationGroup>
 #include <QToolButton>
 
 namespace ncs::user
@@ -12,7 +10,9 @@ namespace
 {
 QIcon iconFor(BottomNavigation::Item item, const QColor& color)
 {
-    QPixmap pixmap(24, 24); pixmap.fill(Qt::transparent);
+    QPixmap pixmap(72, 72);
+    pixmap.setDevicePixelRatio(3.0);
+    pixmap.fill(Qt::transparent);
     QPainter p(&pixmap); p.setRenderHint(QPainter::Antialiasing);
     p.setPen(QPen(color, 1.9, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     if (item == BottomNavigation::Item::Home) {
@@ -28,11 +28,27 @@ QIcon iconFor(BottomNavigation::Item item, const QColor& color)
 } // namespace
 BottomNavigation::BottomNavigation(QWidget* parent) : QWidget(parent)
 {
-    setStyleSheet(QStringLiteral("BottomNavigation{background:#FFFFFF;border-top:1px solid #DDEBE8;}"));
-    auto* layout = new QHBoxLayout(this); layout->setContentsMargins(18, 5, 18, 6); layout->setSpacing(8);
+    setObjectName(QStringLiteral("bottomNavigation"));
+    setAttribute(Qt::WA_StyledBackground, true);
+    setStyleSheet(QStringLiteral("QWidget#bottomNavigation{background:#FFFFFF;border:1px solid #E7EAEE;border-radius:18px;}"));
+    auto* layout = new QHBoxLayout(this);
+    layout->setContentsMargins(7, 7, 7, 7);
+    layout->setSpacing(6);
     home_ = new QToolButton; orders_ = new QToolButton; profile_ = new QToolButton;
     home_->setText(QStringLiteral("首页")); orders_->setText(QStringLiteral("订单")); profile_->setText(QStringLiteral("我的"));
-    for (QToolButton* button : {home_, orders_, profile_}) { button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon); button->setIconSize(QSize(22, 22)); button->setMinimumHeight(53); layout->addWidget(button, 1); }
+    for (QToolButton* button : {home_, orders_, profile_})
+    {
+        button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        button->setIconSize(QSize(24, 24));
+        button->setFixedHeight(56);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        button->setCursor(Qt::PointingHandCursor);
+        button->setFocusPolicy(Qt::StrongFocus);
+        button->setCheckable(true);
+        button->setAutoExclusive(true);
+        button->setAccessibleName(button->text());
+        layout->addWidget(button, 1);
+    }
     connect(home_, &QToolButton::clicked, this, &BottomNavigation::homeRequested);
     connect(orders_, &QToolButton::clicked, this, &BottomNavigation::ordersRequested);
     connect(profile_, &QToolButton::clicked, this, &BottomNavigation::profileRequested);
@@ -40,27 +56,22 @@ BottomNavigation::BottomNavigation(QWidget* parent) : QWidget(parent)
 }
 void BottomNavigation::setCurrent(Item item)
 {
-    const bool animate = hasCurrent_ && current_ != item;
-    current_ = item;
-    hasCurrent_ = true;
-    updateButton(home_, Item::Home, item == Item::Home, animate && item == Item::Home);
-    updateButton(orders_, Item::Orders, item == Item::Orders, animate && item == Item::Orders);
-    updateButton(profile_, Item::Profile, item == Item::Profile, animate && item == Item::Profile);
+    updateButton(home_, Item::Home, item == Item::Home);
+    updateButton(orders_, Item::Orders, item == Item::Orders);
+    updateButton(profile_, Item::Profile, item == Item::Profile);
 }
 
-void BottomNavigation::updateButton(QToolButton* button, Item item, bool selected, bool animate)
+void BottomNavigation::updateButton(QToolButton* button, Item item, bool selected)
 {
     const QColor color(selected ? QStringLiteral("#0F766E") : QStringLiteral("#667085")); button->setIcon(iconFor(item, color));
-    button->setStyleSheet(QStringLiteral("QToolButton{color:%1;background:%2;border:0;border-radius:12px;font-size:11px;font-weight:%3;}QToolButton:hover{background:#EAF5F3;}").arg(color.name(), selected ? QStringLiteral("#E2F3F0") : QStringLiteral("transparent"), selected ? QStringLiteral("700") : QStringLiteral("500")));
-    if (!animate) return;
-    auto* pulse = new QSequentialAnimationGroup(button);
-    auto* grow = new QPropertyAnimation(button, "iconSize", pulse);
-    grow->setDuration(125); grow->setStartValue(QSize(22, 22)); grow->setEndValue(QSize(27, 27));
-    grow->setEasingCurve(QEasingCurve::OutBack);
-    auto* settle = new QPropertyAnimation(button, "iconSize", pulse);
-    settle->setDuration(135); settle->setStartValue(QSize(27, 27)); settle->setEndValue(QSize(22, 22));
-    settle->setEasingCurve(QEasingCurve::OutCubic);
-    connect(pulse, &QSequentialAnimationGroup::finished, pulse, &QObject::deleteLater);
-    pulse->start();
+    button->setChecked(selected);
+    button->setStyleSheet(QStringLiteral(
+        "QToolButton{color:%1;background:%2;border:1px solid transparent;"
+        "border-radius:12px;font-size:12px;font-weight:%3;padding:3px 0;}"
+        "QToolButton:hover{background:#EDF5F3;}"
+        "QToolButton:pressed{background:#D8ECE6;}"
+        "QToolButton:focus{border-color:#0F766E;}")
+        .arg(color.name(), selected ? QStringLiteral("#E2F3EE") : QStringLiteral("transparent"),
+             selected ? QStringLiteral("700") : QStringLiteral("500")));
 }
 } // namespace ncs::user

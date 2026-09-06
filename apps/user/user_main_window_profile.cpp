@@ -6,9 +6,9 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFileDialog>
-#include <QFormLayout>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QDoubleSpinBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -26,47 +26,69 @@ QWidget* UserMainWindow::createProfilePage()
     layout->setContentsMargins(0, 8, 0, 0);
     layout->setSpacing(12);
     auto* title = new QLabel(QStringLiteral("我的账户"));
-    title->setStyleSheet(QStringLiteral("font-size:23px;color:#25324A;"));
+    title->setStyleSheet(QStringLiteral("font-size:22px;font-weight:700;color:#182230;"));
     layout->addWidget(title);
 
     auto* info = new QFrame;
     info->setObjectName(QStringLiteral("card"));
-    auto* form = new QFormLayout(info);
+    auto* form = new QVBoxLayout(info);
     form->setContentsMargins(18, 18, 18, 18);
+    form->setSpacing(14);
     profileAvatar_ = new QLabel(QStringLiteral("NCS"));
     profileAvatar_->setFixedSize(68, 68);
     profileAvatar_->setAlignment(Qt::AlignCenter);
     profileAvatar_->setStyleSheet(QStringLiteral("background:#D7F0EB;color:#0F766E;border-radius:34px;font-weight:700;"));
     auto* avatarRow = new QHBoxLayout;
     avatarRow->addWidget(profileAvatar_);
+    profileName_ = new QLabel;
+    profileName_->setStyleSheet(QStringLiteral("font-size:14px;color:#667085;"));
+    avatarRow->addWidget(profileName_, 1);
     auto* avatar = button(QStringLiteral("更换头像"));
     avatar->setObjectName(QStringLiteral("secondaryButton"));
     avatar->setMinimumHeight(34);
     avatarRow->addWidget(avatar);
-    avatarRow->addStretch();
     nicknameEdit_ = new QLineEdit;
     nicknameEdit_->setMaxLength(20);
-    profileName_ = new QLabel;
     profileBalance_ = new QLabel;
-    profileBalance_->setStyleSheet(QStringLiteral("font-size:24px;font-weight:700;color:#147A50;"));
-    form->addRow(QStringLiteral("头像"), avatarRow);
-    form->addRow(QStringLiteral("昵称"), nicknameEdit_);
-    form->addRow(QStringLiteral("手机号"), profileName_);
-    form->addRow(QStringLiteral("余额"), profileBalance_);
+    profileBalance_->setStyleSheet(QStringLiteral("font-size:28px;font-weight:700;color:#182230;"));
+    form->addLayout(avatarRow);
+    auto* nicknameRow = new QHBoxLayout;
+    nicknameRow->setContentsMargins(0, 0, 0, 0);
+    auto* save = button(QStringLiteral("保存"));
+    save->setObjectName(QStringLiteral("secondaryButton"));
+    save->setMinimumHeight(34);
+    nicknameEdit_->setPlaceholderText(QStringLiteral("昵称"));
+    nicknameEdit_->setAccessibleName(QStringLiteral("昵称"));
+    nicknameRow->addWidget(nicknameEdit_, 1);
+    nicknameRow->addWidget(save);
+    form->addLayout(nicknameRow);
     layout->addWidget(info);
 
-    auto* save = button(QStringLiteral("保存昵称"));
-    save->setObjectName(QStringLiteral("secondaryButton"));
-    auto* recharge = button(QStringLiteral("余额充值"));
-    layout->addWidget(recharge);
-    layout->addWidget(save);
+    auto* wallet = new QFrame;
+    wallet->setObjectName(QStringLiteral("card"));
+    auto* walletLayout = new QVBoxLayout(wallet);
+    walletLayout->setContentsMargins(18, 16, 18, 16);
+    walletLayout->setSpacing(10);
+    auto* balanceTitle = new QLabel(QStringLiteral("账户余额"));
+    balanceTitle->setStyleSheet(QStringLiteral("font-size:13px;color:#667085;"));
+    walletLayout->addWidget(balanceTitle);
+    auto* balanceRow = new QHBoxLayout;
+    balanceRow->addWidget(profileBalance_, 1);
+    auto* recharge = button(QStringLiteral("充值"));
+    recharge->setMinimumWidth(80);
+    balanceRow->addWidget(recharge);
+    walletLayout->addLayout(balanceRow);
+    layout->addWidget(wallet);
     layout->addSpacing(2);
     auto* logout = button(QStringLiteral("退出登录"));
-    logout->setObjectName(QStringLiteral("dangerButton"));
+    logout->setObjectName(QStringLiteral("secondaryButton"));
     auto* deleteAccount = button(QStringLiteral("申请注销账户"));
     deleteAccount->setObjectName(QStringLiteral("dangerButton"));
-    layout->addWidget(logout);
-    layout->addWidget(deleteAccount);
+    auto* accountActions = new QHBoxLayout;
+    accountActions->setSpacing(10);
+    accountActions->addWidget(logout, 1);
+    accountActions->addWidget(deleteAccount, 1);
+    layout->addLayout(accountActions);
     layout->addStretch();
     connect(avatar, &QPushButton::clicked, this, [this] {
         const QString file = QFileDialog::getOpenFileName(this, QStringLiteral("选择头像"), {},
@@ -126,9 +148,22 @@ QWidget* UserMainWindow::createProfilePage()
         notify(message, message != QStringLiteral("昵称已保存"));
     });
     connect(recharge, &QPushButton::clicked, this, [this] {
-        bool ok = false;
-        const double value = QInputDialog::getDouble(this, QStringLiteral("余额充值"), QStringLiteral("金额（元）"), 100.0, 0.01, 10000.0, 2, &ok);
-        if (!ok) return;
+        QInputDialog dialog(this);
+        dialog.setWindowTitle(QStringLiteral("余额充值"));
+        dialog.setLabelText(QStringLiteral("充值金额（元）"));
+        dialog.setInputMode(QInputDialog::DoubleInput);
+        dialog.setDoubleDecimals(2);
+        dialog.setDoubleRange(0.01, 10000.0);
+        dialog.setDoubleValue(100.0);
+        dialog.setOkButtonText(QStringLiteral("确认充值"));
+        dialog.setCancelButtonText(QStringLiteral("取消"));
+        if (auto* amount = dialog.findChild<QDoubleSpinBox*>())
+        {
+            amount->setButtonSymbols(QAbstractSpinBox::NoButtons);
+            amount->setMinimumHeight(44);
+        }
+        if (dialog.exec() != QDialog::Accepted) return;
+        const double value = dialog.doubleValue();
         if (userApi_)
         {
             userApi_->recharge(qRound(value * 100), [this](ApiReply reply) {

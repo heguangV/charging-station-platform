@@ -22,6 +22,7 @@ class QJsonObject;
 namespace ncs::user { class ChargerTable; }
 namespace ncs::user { class ChargeSocGauge; }
 namespace ncs::user { class StationListWidget; }
+namespace ncs::user { class StationMapWidget; }
 namespace ncs::user { class BottomNavigation; }
 namespace ncs::user { class UserApi; }
 namespace ncs::user
@@ -42,10 +43,12 @@ class UserMainWindow final : public QMainWindow
     QWidget* createProfilePage();
     QWidget* createOrdersPage();
     QWidget* createNavigationPage();
+    QWidget* createStationMapPage();
     void showLogin();
     void showOrders();
     void showProfile();
     void showNavigation();
+    void showStationMap();
     void showNavigationFallback(const QString& reason = {});
     void applyNavigationRoute(const QJsonObject& routeData);
     void renderNavigationMap(const QJsonObject& routeData);
@@ -81,6 +84,7 @@ class UserMainWindow final : public QMainWindow
     QLabel* detailMeta_ = nullptr;
     ChargerTable* chargerTable_ = nullptr;
     StationListWidget* stationList_ = nullptr;
+    StationMapWidget* stationMap_ = nullptr;
     BottomNavigation* bottomNavigation_ = nullptr;
     QLabel* chargeState_ = nullptr;
     QLabel* reservationCountdown_ = nullptr;
@@ -92,6 +96,7 @@ class UserMainWindow final : public QMainWindow
     QPushButton* startButton_ = nullptr;
     QPushButton* cancelButton_ = nullptr;
     QPushButton* settleButton_ = nullptr;
+    QPushButton* navigateToStationButton_ = nullptr;
     QLabel* receiptText_ = nullptr;
     QLabel* profileName_ = nullptr;
     QLabel* profileAvatar_ = nullptr;
@@ -100,6 +105,7 @@ class UserMainWindow final : public QMainWindow
     QScrollArea* ordersScroll_ = nullptr;
     QVBoxLayout* ordersCards_ = nullptr;
     QLabel* ordersEmpty_ = nullptr;
+    QPushButton* ordersRetryButton_ = nullptr;
     QComboBox* navigationMode_ = nullptr;
     QLabel* navigationSummary_ = nullptr;
     QWidget* navigationMap_ = nullptr;
@@ -119,6 +125,9 @@ class UserMainWindow final : public QMainWindow
     bool progressRequestInFlight_ = false;
     QHash<int, StationSummary> stationsById_;
     QVector<OrderSummary> orderRecords_;
+    int ordersRequestId_ = 0;
+    int stationsRequestId_ = 0;
+    int stationRefreshTicks_ = 0;
     qint64 profileVersion_ = 0;
     bool chargingStarted_ = false;
     int codeCountdown_ = 0;

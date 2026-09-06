@@ -18,11 +18,9 @@ class BottomNavigation final : public QWidget
     void ordersRequested();
     void profileRequested();
   private:
-    void updateButton(QToolButton* button, Item item, bool selected, bool animate);
+    void updateButton(QToolButton* button, Item item, bool selected);
     QToolButton* home_ = nullptr;
     QToolButton* orders_ = nullptr;
     QToolButton* profile_ = nullptr;
-    Item current_ = Item::Home;
-    bool hasCurrent_ = false;
 };
 } // namespace ncs::user

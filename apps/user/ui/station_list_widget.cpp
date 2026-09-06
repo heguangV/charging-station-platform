@@ -76,23 +76,23 @@ StationListWidget::StationListWidget(const QVector<StationSummary>& stations, QW
     auto* searchBar = new QFrame;
     searchBar->setObjectName(QStringLiteral("stationSearchBar"));
     searchBar->setStyleSheet(QStringLiteral(
-        "QFrame#stationSearchBar{background:#FFFFFF;border:1px solid #DDE9E6;border-radius:15px;}"));
+        "QFrame#stationSearchBar{background:#FFFFFF;border:1px solid #E7EAEE;border-radius:12px;}"));
     auto* controls = new QHBoxLayout(searchBar);
     controls->setContentsMargins(6, 6, 6, 6);
     controls->setSpacing(6);
     locationBox_ = new QComboBox;
     locationBox_->addItems({QStringLiteral("附近"), QStringLiteral("中关村"),
                             QStringLiteral("望京"), QStringLiteral("国贸")});
-    locationBox_->setFixedWidth(80);
+    locationBox_->setFixedWidth(94);
     locationBox_->setStyleSheet(QStringLiteral(
-        "QComboBox{background:#F1F6F5;color:#47635D;border:0;border-radius:10px;"
+        "QComboBox{background:#F2F4F7;color:#344054;border:0;border-radius:8px;"
         "padding:7px 22px 7px 10px;font-size:13px;font-weight:600;}"
         "QComboBox::drop-down{border:0;width:22px;}"
         "QComboBox QAbstractItemView{background:#FFFFFF;border:1px solid #D9E9E5;"
         "selection-background-color:#E7F5F1;selection-color:#0F766E;}"));
     auto* searchSymbol = new SearchGlyph;
     searchEdit_ = new QLineEdit;
-    searchEdit_->setPlaceholderText(QStringLiteral("搜索站点或地址"));
+    searchEdit_->setPlaceholderText(QStringLiteral("搜索地址"));
     searchEdit_->setClearButtonEnabled(true);
     searchEdit_->setStyleSheet(QStringLiteral(
         "QLineEdit{background:transparent;border:0;padding:8px 0;color:#25324A;font-size:14px;}"
@@ -131,6 +131,7 @@ StationListWidget::StationListWidget(const QVector<StationSummary>& stations, QW
 
 void StationListWidget::setStations(QVector<StationSummary> stations)
 {
+    setLoading(false);
     stations_ = std::move(stations);
     refresh();
 }
@@ -138,7 +139,6 @@ void StationListWidget::setStations(QVector<StationSummary> stations)
 void StationListWidget::setRemoteSource(bool enabled)
 {
     remoteSource_ = enabled;
-    if (remoteSource_) requestRefresh();
 }
 
 void StationListWidget::clearCards()
@@ -165,6 +165,7 @@ void StationListWidget::setLoading(bool loading)
 
 void StationListWidget::showError(const QString& userMessage)
 {
+    refreshButton_->setEnabled(true);
     clearCards();
     auto* error = new QLabel(userMessage.isEmpty() ? QStringLiteral("网络服务不可用，请稍后重试")
                                                      : userMessage);
@@ -193,6 +194,15 @@ void StationListWidget::requestRefresh()
     setLoading(true);
     const QPointF coordinate = locationCoordinate(locationBox_->currentText());
     // Per the REST contract, keyword is an address/location hint, not a local name filter.
+    emit loadRequested(qRound64(coordinate.y() * 1000000), qRound64(coordinate.x() * 1000000),
+                       searchEdit_->text().trimmed());
+}
+
+void StationListWidget::refreshAvailability()
+{
+    if (!remoteSource_ || !refreshButton_->isEnabled()) return;
+    refreshButton_->setEnabled(false);
+    const QPointF coordinate = locationCoordinate(locationBox_->currentText());
     emit loadRequested(qRound64(coordinate.y() * 1000000), qRound64(coordinate.x() * 1000000),
                        searchEdit_->text().trimmed());
 }

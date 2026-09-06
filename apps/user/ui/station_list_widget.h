@@ -24,6 +24,8 @@ class StationListWidget final : public QWidget
     void setRemoteSource(bool enabled);
     void setLoading(bool loading);
     void showError(const QString& userMessage);
+    void requestRefresh();
+    void refreshAvailability();
 
   signals:
     void stationSelected(const StationSummary& station);
@@ -32,7 +34,6 @@ class StationListWidget final : public QWidget
   private:
     void clearCards();
     void refresh();
-    void requestRefresh();
 
     QVector<StationSummary> stations_;
     QComboBox* locationBox_ = nullptr;
