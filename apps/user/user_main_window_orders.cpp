@@ -13,6 +13,9 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QStackedWidget>
+#include <QTimeZone>
+#include <QToolButton>
+#include <QToolTip>
 #include <QVBoxLayout>
 
 namespace ncs::user
@@ -21,9 +24,12 @@ namespace
 {
 QString statusColor(const QString& status)
 {
-    if (status == QStringLiteral("已完成")) return QStringLiteral("#087443");
-    if (status == QStringLiteral("充电中")) return QStringLiteral("#B54708");
-    if (status == QStringLiteral("已预约")) return QStringLiteral("#0F766E");
+    if (status == QStringLiteral("已完成"))
+        return QStringLiteral("#087443");
+    if (status == QStringLiteral("充电中"))
+        return QStringLiteral("#B54708");
+    if (status == QStringLiteral("已预约"))
+        return QStringLiteral("#0F766E");
     return QStringLiteral("#667085");
 }
 
@@ -46,6 +52,12 @@ QWidget* UserMainWindow::createOrdersPage()
     title->setStyleSheet(QStringLiteral("font-size:22px;font-weight:700;color:#25324A;"));
     auto* heading = new QHBoxLayout;
     heading->addWidget(title);
+    auto* help = new QToolButton;
+    help->setText(QStringLiteral("ⓘ"));
+    help->setToolTip(QStringLiteral("点击订单卡中的“查看小票”可查看详细信息"));
+    help->setStyleSheet(QStringLiteral(
+        "QToolButton{color:#0F766E;border:0;background:transparent;font-size:17px;padding:2px;}"));
+    heading->addWidget(help);
     heading->addStretch();
     auto* refresh = new QPushButton(QStringLiteral("刷新"));
     refresh->setCursor(Qt::PointingHandCursor);
@@ -76,6 +88,11 @@ QWidget* UserMainWindow::createOrdersPage()
     layout->addWidget(ordersRetryButton_);
     connect(refresh, &QPushButton::clicked, this, &UserMainWindow::refreshOrders);
     connect(ordersRetryButton_, &QPushButton::clicked, this, &UserMainWindow::refreshOrders);
+    connect(help, &QToolButton::clicked, this,
+            [help] {
+                QToolTip::showText(help->mapToGlobal(QPoint(0, help->height())), help->toolTip(),
+                                   help);
+            });
     return page;
 }
 
@@ -96,37 +113,47 @@ void UserMainWindow::refreshOrders()
         ordersEmpty_->setText(QStringLiteral("正在加载…"));
         ordersEmpty_->show();
         ordersRetryButton_->hide();
-        userApi_->orders(1, 50, [this, requestId](ApiReply reply) {
-            if (requestId != ordersRequestId_) return;
-            if (!reply.ok())
+        userApi_->orders(
+            1, 50,
+            [this, requestId](ApiReply reply)
             {
-                ordersEmpty_->setText(QStringLiteral("加载失败"));
-                ordersRetryButton_->show();
-                notify(reply.message, true);
-                return;
-            }
-            orderRecords_.clear();
-            for (const QJsonValue& value : reply.data.toObject().value(QStringLiteral("items")).toArray())
-            {
-                const QJsonObject item = value.toObject();
-                OrderSummary order;
-                order.orderNo = item.value(QStringLiteral("orderNo")).toString();
-                order.stationName = item.value(QStringLiteral("stationName")).toString();
-                order.chargerCode = item.value(QStringLiteral("chargerCode")).toString();
-                order.status = item.value(QStringLiteral("statusText")).toString();
-                order.energyMwh = item.value(QStringLiteral("energyMwh")).toInt();
-                order.amountCent = item.value(QStringLiteral("amountCent")).toInt();
-                const auto formatTime = [](const QJsonValue& timestamp) {
-                    if (timestamp.isNull() || timestamp.isUndefined()) return QString{};
-                    return QDateTime::fromSecsSinceEpoch(timestamp.toVariant().toLongLong(), Qt::UTC)
-                        .toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm"));
-                };
-                order.startTime = formatTime(item.value(QStringLiteral("startedAt")));
-                order.endTime = formatTime(item.value(QStringLiteral("endedAt")));
-                if (!order.orderNo.isEmpty()) orderRecords_.append(std::move(order));
-            }
-            renderOrders(orderRecords_);
-        });
+                if (requestId != ordersRequestId_)
+                    return;
+                if (!reply.ok())
+                {
+                    ordersEmpty_->setText(QStringLiteral("加载失败"));
+                    ordersRetryButton_->show();
+                    notify(reply.message, true);
+                    return;
+                }
+                orderRecords_.clear();
+                for (const QJsonValue& value :
+                     reply.data.toObject().value(QStringLiteral("items")).toArray())
+                {
+                    const QJsonObject item = value.toObject();
+                    OrderSummary order;
+                    order.orderNo = item.value(QStringLiteral("orderNo")).toString();
+                    order.stationName = item.value(QStringLiteral("stationName")).toString();
+                    order.chargerCode = item.value(QStringLiteral("chargerCode")).toString();
+                    order.status = item.value(QStringLiteral("statusText")).toString();
+                    order.energyMwh = item.value(QStringLiteral("energyMwh")).toInt();
+                    order.amountCent = item.value(QStringLiteral("amountCent")).toInt();
+                    const auto formatTime = [](const QJsonValue& timestamp)
+                    {
+                        if (timestamp.isNull() || timestamp.isUndefined())
+                            return QString{};
+                        return QDateTime::fromSecsSinceEpoch(timestamp.toVariant().toLongLong(),
+                                                             QTimeZone::utc())
+                            .toLocalTime()
+                            .toString(QStringLiteral("yyyy-MM-dd HH:mm"));
+                    };
+                    order.startTime = formatTime(item.value(QStringLiteral("startedAt")));
+                    order.endTime = formatTime(item.value(QStringLiteral("endedAt")));
+                    if (!order.orderNo.isEmpty())
+                        orderRecords_.append(std::move(order));
+                }
+                renderOrders(orderRecords_);
+            });
         return;
     }
     renderOrders(service_.orders());
@@ -151,16 +178,17 @@ void UserMainWindow::renderOrders(const QVector<OrderSummary>& records)
         auto* station = new QLabel(order.stationName);
         station->setStyleSheet(QStringLiteral("font-size:15px;font-weight:600;color:#25324A;"));
         auto* status = new QLabel(order.status);
-        status->setStyleSheet(QStringLiteral("color:%1;background:#F3F8F7;border-radius:8px;padding:4px 7px;font-size:12px;font-weight:600;")
+        status->setStyleSheet(QStringLiteral("color:%1;background:#F3F8F7;border-radius:8px;"
+                                             "padding:4px 7px;font-size:12px;font-weight:600;")
                                   .arg(statusColor(order.status)));
         header->addWidget(station);
         header->addStretch();
         header->addWidget(status);
         cardLayout->addLayout(header);
         auto* time = new QLabel(QStringLiteral("%1  ·  %2")
-                                     .arg(order.chargerCode,
-                                          order.startTime.isEmpty() ? QStringLiteral("等待开始")
-                                                                    : order.startTime));
+                                    .arg(order.chargerCode, order.startTime.isEmpty()
+                                                                ? QStringLiteral("等待开始")
+                                                                : order.startTime));
         time->setStyleSheet(QStringLiteral("font-size:12px;color:#667085;"));
         cardLayout->addWidget(time);
         auto* details = new QHBoxLayout;
@@ -171,52 +199,77 @@ void UserMainWindow::renderOrders(const QVector<OrderSummary>& records)
         amount->setStyleSheet(QStringLiteral("font-size:16px;font-weight:700;color:#0F766E;"));
         auto* receipt = new QPushButton(QStringLiteral("查看小票  ›"));
         receipt->setCursor(Qt::PointingHandCursor);
-        receipt->setStyleSheet(QStringLiteral("QPushButton{background:transparent;color:#0F766E;border:0;font-size:12px;font-weight:600;padding:3px;}"
-                                               "QPushButton:hover{color:#07534D;}"));
+        receipt->setStyleSheet(
+            QStringLiteral("QPushButton{background:transparent;color:#0F766E;border:0;font-size:"
+                           "12px;font-weight:600;padding:3px;}"
+                           "QPushButton:hover{color:#07534D;}"));
         details->addWidget(energy);
         details->addWidget(amount);
         details->addStretch();
         details->addWidget(receipt);
         cardLayout->addLayout(details);
-        connect(receipt, &QPushButton::clicked, this, [this, order] {
-            if (userApi_)
+        connect(
+            receipt, &QPushButton::clicked, this,
+            [this, order]
             {
-                userApi_->order(order.orderNo, [this](ApiReply reply) {
-                    if (!reply.ok())
-                    {
-                        notify(reply.message, true);
-                        return;
-                    }
-                    const QJsonObject value = reply.data.toObject();
-                    const auto time = [](const QJsonValue& timestamp) {
-                        return QDateTime::fromSecsSinceEpoch(timestamp.toVariant().toLongLong(), Qt::UTC)
-                            .toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm"));
-                    };
-                    QMessageBox::information(this, QStringLiteral("订单小票"),
-                        QStringLiteral("订单号  %1\n电站  %2\n电桩  %3\n开始  %4\n结束  %5\n充电时长  %6 分钟\n电量  %7 kWh\n电费  %8 / 度\n服务费  %9 / 度\n实付  %10\n状态  %11")
-                            .arg(value.value(QStringLiteral("orderNo")).toString(),
-                                 value.value(QStringLiteral("stationName")).toString(),
-                                 value.value(QStringLiteral("chargerCode")).toString(),
-                                 time(value.value(QStringLiteral("startedAt"))),
-                                 time(value.value(QStringLiteral("endedAt"))),
-                                 QString::number(value.value(QStringLiteral("durationSec")).toInteger() / 60),
-                                 QString::number(value.value(QStringLiteral("energyMwh")).toInteger() / 1000000.0, 'f', 3),
-                                 money(value.value(QStringLiteral("electricityPriceCentPerKwh")).toInt()),
-                                 money(value.value(QStringLiteral("servicePriceCentPerKwh")).toInt()),
-                                 money(value.value(QStringLiteral("paidCent")).toInt()),
-                                 value.value(QStringLiteral("statusText")).toString()));
-                });
-                return;
-            }
-            QMessageBox::information(
-                this, QStringLiteral("订单小票"),
-                QStringLiteral("订单号  %1\n电站  %2\n电桩  %3\n开始  %4\n结束  %5\n电量  %6 kWh\n金额  %7\n状态  %8")
-                    .arg(order.orderNo, order.stationName, order.chargerCode,
-                         order.startTime.isEmpty() ? QStringLiteral("--") : order.startTime,
-                         order.endTime.isEmpty() ? QStringLiteral("--") : order.endTime,
-                         QString::number(order.energyMwh / 1000000.0, 'f', 3), money(order.amountCent),
-                         order.status));
-        });
+                if (userApi_)
+                {
+                    userApi_->order(
+                        order.orderNo,
+                        [this](ApiReply reply)
+                        {
+                            if (!reply.ok())
+                            {
+                                notify(reply.message, true);
+                                return;
+                            }
+                            const QJsonObject value = reply.data.toObject();
+                            const auto time = [](const QJsonValue& timestamp)
+                            {
+                                return QDateTime::fromSecsSinceEpoch(
+                                           timestamp.toVariant().toLongLong(), QTimeZone::utc())
+                                    .toLocalTime()
+                                    .toString(QStringLiteral("yyyy-MM-dd HH:mm"));
+                            };
+                            QMessageBox::information(
+                                this, QStringLiteral("订单小票"),
+                                QStringLiteral("订单号  %1\n电站  %2\n电桩  %3\n开始  %4\n结束  "
+                                               "%5\n充电时长  %6 分钟\n电量  %7 kWh\n电费  %8 / "
+                                               "度\n服务费  %9 / 度\n实付  %10\n状态  %11")
+                                    .arg(
+                                        value.value(QStringLiteral("orderNo")).toString(),
+                                        value.value(QStringLiteral("stationName")).toString(),
+                                        value.value(QStringLiteral("chargerCode")).toString(),
+                                        time(value.value(QStringLiteral("startedAt"))),
+                                        time(value.value(QStringLiteral("endedAt"))),
+                                        QString::number(
+                                            value.value(QStringLiteral("durationSec")).toInteger() /
+                                            60),
+                                        QString::number(
+                                            value.value(QStringLiteral("energyMwh")).toInteger() /
+                                                1000000.0,
+                                            'f', 3),
+                                        money(
+                                            value
+                                                .value(QStringLiteral("electricityPriceCentPerKwh"))
+                                                .toInt()),
+                                        money(value.value(QStringLiteral("servicePriceCentPerKwh"))
+                                                  .toInt()),
+                                        money(value.value(QStringLiteral("paidCent")).toInt()),
+                                        value.value(QStringLiteral("statusText")).toString()));
+                        });
+                    return;
+                }
+                QMessageBox::information(
+                    this, QStringLiteral("订单小票"),
+                    QStringLiteral("订单号  %1\n电站  %2\n电桩  %3\n开始  %4\n结束  %5\n电量  %6 "
+                                   "kWh\n金额  %7\n状态  %8")
+                        .arg(order.orderNo, order.stationName, order.chargerCode,
+                             order.startTime.isEmpty() ? QStringLiteral("--") : order.startTime,
+                             order.endTime.isEmpty() ? QStringLiteral("--") : order.endTime,
+                             QString::number(order.energyMwh / 1000000.0, 'f', 3),
+                             money(order.amountCent), order.status));
+            });
         ordersCards_->addWidget(card);
     }
     ordersCards_->addStretch();

@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, codex/tencent-navigation-integration]
   push:
-    branches: [main, develop]
+    branches: [main, develop, codex/tencent-navigation-integration]
 
 permissions:
   contents: read

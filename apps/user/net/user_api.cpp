@@ -61,6 +61,14 @@ void UserApi::updateProfile(const QString& nickname, qint64 version, ApiClient::
                     std::move(done));
 }
 
+void UserApi::currentAvatar(const QByteArray& etag, ApiClient::BinaryHandler done)
+{
+    QHash<QByteArray, QByteArray> headers;
+    if (!etag.isEmpty())
+        headers.insert("If-None-Match", etag);
+    client_.getBinary(kUserBase + "/me/avatar/content", headers, std::move(done));
+}
+
 void UserApi::uploadAvatar(QFile* image, const QString& fileName, ApiClient::Handler done)
 {
     auto* body = new QHttpMultiPart(QHttpMultiPart::FormDataType);
@@ -70,6 +78,20 @@ void UserApi::uploadAvatar(QFile* image, const QString& fileName, ApiClient::Han
         QVariant(QStringLiteral("form-data; name=\"file\"; filename=\"%1\"").arg(fileName)));
     part.setBodyDevice(image);
     image->setParent(body);
+    body->append(part);
+    client_.postMultipart(kUserBase + "/me/avatar", body, std::move(done));
+}
+
+void UserApi::uploadAvatar(const QByteArray& image, const QString& fileName,
+                           const QByteArray& contentType, ApiClient::Handler done)
+{
+    auto* body = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+    QHttpPart part;
+    part.setHeader(
+        QNetworkRequest::ContentDispositionHeader,
+        QVariant(QStringLiteral("form-data; name=\"file\"; filename=\"%1\"").arg(fileName)));
+    part.setHeader(QNetworkRequest::ContentTypeHeader, contentType);
+    part.setBody(image);
     body->append(part);
     client_.postMultipart(kUserBase + "/me/avatar", body, std::move(done));
 }

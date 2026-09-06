@@ -1,24 +1,25 @@
 #include "user_main_window.h"
 
-#include "ui/charger_table.h"
-#include "ui/charge_soc_gauge.h"
-#include "ui/bottom_navigation.h"
 #include "ui/station_list_widget.h"
 #include "net/user_api.h"
+#include "ui/bottom_navigation.h"
+#include "ui/charge_soc_gauge.h"
+#include "ui/charger_table.h"
 
-#include <QLabel>
-#include <QLineEdit>
-#include <QMessageBox>
-#include <QPushButton>
+#include <QDateTime>
 #include <QGraphicsOpacityEffect>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QKeyEvent>
-#include <QDateTime>
+#include <QLabel>
+#include <QLineEdit>
+#include <QMessageBox>
 #include <QPauseAnimation>
 #include <QPixmap>
+#include <QPushButton>
 #include <QSequentialAnimationGroup>
 #include <QStackedWidget>
+#include <QTimeZone>
 
 namespace ncs::user
 {
@@ -105,39 +106,48 @@ void UserMainWindow::showDetail(int stationId)
             return;
         }
         detailTitle_->setText(station->name);
-        const QString distance = selectedStationDistance_.isEmpty() ? station->distance : selectedStationDistance_;
-        detailMeta_->setText(station->address + QStringLiteral("\n") + distance + QStringLiteral(" · ") +
-                             money(station->priceCentPerKwh) + QStringLiteral(" / 度"));
+        const QString distance =
+            selectedStationDistance_.isEmpty() ? station->distance : selectedStationDistance_;
+        detailMeta_->setText(station->address + QStringLiteral("\n") + distance +
+                             QStringLiteral(" · ") + money(station->priceCentPerKwh) +
+                             QStringLiteral(" / 度"));
         chargerTable_->setChargers({});
         pages_->setCurrentIndex(kDetailPage);
-        userApi_->chargers(stationId, [this, stationId](ApiReply reply) {
-            if (stationId != selectedStationId_) return;
-            if (!reply.ok())
+        userApi_->chargers(
+            stationId,
+            [this, stationId](ApiReply reply)
             {
-                notify(reply.message, true);
-                return;
-            }
-            QVector<ChargerSummary> chargers;
-            for (const QJsonValue& value : reply.data.toObject().value(QStringLiteral("items")).toArray())
-            {
-                const QJsonObject item = value.toObject();
-                ChargerSummary charger;
-                charger.id = item.value(QStringLiteral("id")).toVariant().toLongLong();
-                charger.code = item.value(QStringLiteral("code")).toString();
-                charger.type = item.value(QStringLiteral("chargerTypeText")).toString();
-                charger.typeValue = item.value(QStringLiteral("chargerType")).toInt();
-                charger.powerKw = item.value(QStringLiteral("powerWatt")).toInt() / 1000;
-                charger.status = item.value(QStringLiteral("statusText")).toString();
-                charger.totalCount = item.value(QStringLiteral("totalCount")).toInt();
-                if (!charger.code.isEmpty()) chargers.append(std::move(charger));
-            }
-            chargerTable_->setChargers(chargers);
-        });
+                if (stationId != selectedStationId_)
+                    return;
+                if (!reply.ok())
+                {
+                    notify(reply.message, true);
+                    return;
+                }
+                QVector<ChargerSummary> chargers;
+                for (const QJsonValue& value :
+                     reply.data.toObject().value(QStringLiteral("items")).toArray())
+                {
+                    const QJsonObject item = value.toObject();
+                    ChargerSummary charger;
+                    charger.id = item.value(QStringLiteral("id")).toVariant().toLongLong();
+                    charger.code = item.value(QStringLiteral("code")).toString();
+                    charger.type = item.value(QStringLiteral("chargerTypeText")).toString();
+                    charger.typeValue = item.value(QStringLiteral("chargerType")).toInt();
+                    charger.powerKw = item.value(QStringLiteral("powerWatt")).toInt() / 1000;
+                    charger.status = item.value(QStringLiteral("statusText")).toString();
+                    charger.totalCount = item.value(QStringLiteral("totalCount")).toInt();
+                    if (!charger.code.isEmpty())
+                        chargers.append(std::move(charger));
+                }
+                chargerTable_->setChargers(chargers);
+            });
         return;
     }
     const StationSummary station = service_.stations().at(stationId - 1);
     detailTitle_->setText(station.name);
-    const QString distance = selectedStationDistance_.isEmpty() ? station.distance : selectedStationDistance_;
+    const QString distance =
+        selectedStationDistance_.isEmpty() ? station.distance : selectedStationDistance_;
     detailMeta_->setText(station.address + QStringLiteral("\n") + distance + QStringLiteral(" · ") +
                          money(station.priceCentPerKwh) + QStringLiteral(" / 度"));
     chargerTable_->setChargers(service_.chargers(stationId));
@@ -158,21 +168,23 @@ void UserMainWindow::restoreActiveFlow()
         showHome();
         return;
     }
-    userApi_->activeFlow([this](ApiReply reply) {
-        if (!reply.ok())
+    userApi_->activeFlow(
+        [this](ApiReply reply)
         {
-            notify(reply.message, true);
-            showHome();
-            return;
-        }
-        const QJsonObject data = reply.data.toObject();
-        if (!data.value(QStringLiteral("hasActiveFlow")).toBool())
-        {
-            showHome();
-            return;
-        }
-        restoreFlow(data.value(QStringLiteral("flow")).toObject());
-    });
+            if (!reply.ok())
+            {
+                notify(reply.message, true);
+                showHome();
+                return;
+            }
+            const QJsonObject data = reply.data.toObject();
+            if (!data.value(QStringLiteral("hasActiveFlow")).toBool())
+            {
+                showHome();
+                return;
+            }
+            restoreFlow(data.value(QStringLiteral("flow")).toObject());
+        });
 }
 
 void UserMainWindow::beginFlowRequest()
@@ -185,44 +197,52 @@ void UserMainWindow::beginFlowRequest()
         notify(QStringLiteral("请先选择空闲电桩"), true);
         return;
     }
-    userApi_->activeFlow([this](ApiReply active) {
-        if (!active.ok())
+    userApi_->activeFlow(
+        [this](ApiReply active)
         {
-            notify(active.message, true);
-            return;
-        }
-        const QJsonObject activeData = active.data.toObject();
-        if (activeData.value(QStringLiteral("hasActiveFlow")).toBool())
-        {
-            notify(QStringLiteral("您有未完成的充电订单，请先处理"), true);
-            restoreFlow(activeData.value(QStringLiteral("flow")).toObject());
-            return;
-        }
-        userApi_->requestFlow(selectedStationId_, selectedChargerType_, selectedChargerId_,
-                              [this](ApiReply reply) {
-            if (!reply.ok())
+            if (!active.ok())
             {
-                if (reply.code == QStringLiteral("7") ||
-                    reply.code == QStringLiteral("18") ||
-                    reply.message.contains(QStringLiteral("余额")))
-                {
-                    QMessageBox dialog(QMessageBox::Warning, QStringLiteral("余额不足"),
-                        QStringLiteral("当前余额不足，暂不能预约该电桩。\n\n请先前往“我的”完成充值，再重新预约。"),
-                        QMessageBox::NoButton, this);
-                    auto* cancel = dialog.addButton(QStringLiteral("取消"), QMessageBox::RejectRole);
-                    auto* recharge = dialog.addButton(QStringLiteral("去充值"), QMessageBox::AcceptRole);
-                    dialog.setDefaultButton(recharge);
-                    dialog.setEscapeButton(cancel);
-                    dialog.exec();
-                    if (dialog.clickedButton() == recharge) showProfile();
-                    return;
-                }
-                notify(reply.message, true);
+                notify(active.message, true);
                 return;
             }
-            restoreFlow(reply.data.toObject());
+            const QJsonObject activeData = active.data.toObject();
+            if (activeData.value(QStringLiteral("hasActiveFlow")).toBool())
+            {
+                notify(QStringLiteral("您有未完成的充电订单，请先处理"), true);
+                restoreFlow(activeData.value(QStringLiteral("flow")).toObject());
+                return;
+            }
+            userApi_->requestFlow(selectedStationId_, selectedChargerType_, selectedChargerId_,
+                                  [this](ApiReply reply)
+                                  {
+                                      if (!reply.ok())
+                                      {
+                                          if (reply.code == QStringLiteral("7") ||
+                                              reply.code == QStringLiteral("18") ||
+                                              reply.message.contains(QStringLiteral("余额")))
+                                          {
+                                              QMessageBox dialog(
+                                                  QMessageBox::Warning, QStringLiteral("余额不足"),
+                                                  QStringLiteral("当前余额不足，暂不能预约该电桩。\n\n请先前往"
+                                                                 "“我的”完成充值，再重新预约。"),
+                                                  QMessageBox::NoButton, this);
+                                              auto* cancel = dialog.addButton(
+                                                  QStringLiteral("取消"), QMessageBox::RejectRole);
+                                              auto* recharge = dialog.addButton(
+                                                  QStringLiteral("去充值"), QMessageBox::AcceptRole);
+                                              dialog.setDefaultButton(recharge);
+                                              dialog.setEscapeButton(cancel);
+                                              dialog.exec();
+                                              if (dialog.clickedButton() == recharge)
+                                                  showProfile();
+                                              return;
+                                          }
+                                          notify(reply.message, true);
+                                          return;
+                                      }
+                                      restoreFlow(reply.data.toObject());
+                                  });
         });
-    });
 }
 
 void UserMainWindow::restoreFlow(const QJsonObject& flow)
@@ -262,40 +282,51 @@ void UserMainWindow::restoreFlow(const QJsonObject& flow)
         }
         const QString quoteNo = quote.value(QStringLiteral("quoteNo")).toString();
         const int price = quote.value(QStringLiteral("totalPriceCentPerKwh")).toInt();
-        if (QMessageBox::question(this, QStringLiteral("确认充电报价"),
-                                  QStringLiteral("电桩：%1\n总价：%2 / 度\n报价有效期至：%3\n\n确认预约吗？")
-                                      .arg(quote.value(QStringLiteral("chargerCode")).toString(), money(price),
-                                           QDateTime::fromSecsSinceEpoch(quote.value(QStringLiteral("expiresAt")).toVariant().toLongLong(), Qt::UTC)
-                                               .toLocalTime().toString(QStringLiteral("HH:mm:ss")))) != QMessageBox::Yes)
+        if (QMessageBox::question(
+                this, QStringLiteral("确认充电报价"),
+                QStringLiteral("电桩：%1\n总价：%2 / 度\n报价有效期至：%3\n\n确认预约吗？")
+                    .arg(quote.value(QStringLiteral("chargerCode")).toString(), money(price),
+                         QDateTime::fromSecsSinceEpoch(
+                             quote.value(QStringLiteral("expiresAt")).toVariant().toLongLong(),
+                             QTimeZone::utc())
+                             .toLocalTime()
+                             .toString(QStringLiteral("HH:mm:ss")))) != QMessageBox::Yes)
         {
             userApi_->cancelFlow(activeFlowNo_, activeFlowVersion_, QStringLiteral("USER_DECLINED"),
-                                 [this](ApiReply reply) {
-                if (!reply.ok()) notify(reply.message, true);
-                activeFlowNo_.clear();
-                showHome();
-            });
+                                 [this](ApiReply reply)
+                                 {
+                                     if (!reply.ok())
+                                         notify(reply.message, true);
+                                     activeFlowNo_.clear();
+                                     showHome();
+                                 });
             return;
         }
-        userApi_->confirmQuote(activeFlowNo_, quoteNo, activeFlowVersion_, [this](ApiReply confirmed) {
-            if (!confirmed.ok())
+        userApi_->confirmQuote(
+            activeFlowNo_, quoteNo, activeFlowVersion_,
+            [this](ApiReply confirmed)
             {
-                notify(confirmed.message, true);
-                return;
-            }
-            const QJsonObject value = confirmed.data.toObject();
-            activeFlowNo_ = value.value(QStringLiteral("flowNo")).toString();
-            activeFlowVersion_ = value.value(QStringLiteral("version")).toVariant().toLongLong();
-            activeFlowStatus_ = value.value(QStringLiteral("status")).toInt();
-            reservationUntil_ = value.value(QStringLiteral("reservedUntil")).toVariant().toLongLong();
-            selectedChargerCode_ = value.value(QStringLiteral("chargerCode")).toString();
-            chargingStarted_ = false;
-            chargeState_->setText(QStringLiteral("已预约 · %1").arg(selectedChargerCode_));
-            startButton_->setEnabled(true);
-            cancelButton_->setEnabled(true);
-            settleButton_->setEnabled(false);
-            notify(QStringLiteral("报价已确认，请在保留时间内开始充电"));
-            showCharge();
-        });
+                if (!confirmed.ok())
+                {
+                    notify(confirmed.message, true);
+                    return;
+                }
+                const QJsonObject value = confirmed.data.toObject();
+                activeFlowNo_ = value.value(QStringLiteral("flowNo")).toString();
+                activeFlowVersion_ =
+                    value.value(QStringLiteral("version")).toVariant().toLongLong();
+                activeFlowStatus_ = value.value(QStringLiteral("status")).toInt();
+                reservationUntil_ =
+                    value.value(QStringLiteral("reservedUntil")).toVariant().toLongLong();
+                selectedChargerCode_ = value.value(QStringLiteral("chargerCode")).toString();
+                chargingStarted_ = false;
+                chargeState_->setText(QStringLiteral("已预约 · %1").arg(selectedChargerCode_));
+                startButton_->setEnabled(true);
+                cancelButton_->setEnabled(true);
+                settleButton_->setEnabled(false);
+                notify(QStringLiteral("报价已确认，请在保留时间内开始充电"));
+                showCharge();
+            });
         return;
     }
     if (activeFlowStatus_ == 30)
@@ -324,7 +355,7 @@ void UserMainWindow::restoreFlow(const QJsonObject& flow)
     {
         chargingStarted_ = false;
         chargeState_->setText(activeFlowStatus_ == 80 ? QStringLiteral("结算失败，请重试")
-                                                       : QStringLiteral("结算处理中，请稍后重试"));
+                                                      : QStringLiteral("结算处理中，请稍后重试"));
         startButton_->setEnabled(false);
         cancelButton_->setEnabled(false);
         settleButton_->setEnabled(true);
@@ -338,61 +369,73 @@ void UserMainWindow::restoreFlow(const QJsonObject& flow)
 
 void UserMainWindow::refreshCharge()
 {
-    if (!chargeDuration_) return;
+    if (!chargeDuration_)
+        return;
     if (userApi_)
     {
-        if (activeFlowNo_.isEmpty() || progressRequestInFlight_) return;
+        if (activeFlowNo_.isEmpty() || progressRequestInFlight_)
+            return;
         if (!chargingStarted_)
         {
             if (activeFlowStatus_ == 10 || activeFlowStatus_ == 20 || activeFlowStatus_ == 30)
             {
-                if (++flowPollTicks_ < 5) return;
+                if (++flowPollTicks_ < 5)
+                    return;
                 flowPollTicks_ = 0;
                 progressRequestInFlight_ = true;
-                userApi_->flow(activeFlowNo_, [this](ApiReply reply) {
-                    progressRequestInFlight_ = false;
-                    if (!reply.ok())
-                    {
-                        notify(reply.message, true);
-                        return;
-                    }
-                    const QJsonObject flow = reply.data.toObject();
-                    if (flow.value(QStringLiteral("status")).toInt() != activeFlowStatus_)
-                    {
-                        notify(QStringLiteral("充电流程状态已更新"));
-                        restoreFlow(flow);
-                    }
-                });
+                userApi_->flow(activeFlowNo_,
+                               [this](ApiReply reply)
+                               {
+                                   progressRequestInFlight_ = false;
+                                   if (!reply.ok())
+                                   {
+                                       notify(reply.message, true);
+                                       return;
+                                   }
+                                   const QJsonObject flow = reply.data.toObject();
+                                   if (flow.value(QStringLiteral("status")).toInt() !=
+                                       activeFlowStatus_)
+                                   {
+                                       notify(QStringLiteral("充电流程状态已更新"));
+                                       restoreFlow(flow);
+                                   }
+                               });
                 return;
             }
             const qint64 remaining = reservationUntil_ - QDateTime::currentSecsSinceEpoch();
             if (remaining > 0)
                 reservationCountdown_->setText(QStringLiteral("请在 %1:%2 内开始充电")
-                    .arg(remaining / 60, 2, 10, QLatin1Char('0'))
-                    .arg(remaining % 60, 2, 10, QLatin1Char('0')));
+                                                   .arg(remaining / 60, 2, 10, QLatin1Char('0'))
+                                                   .arg(remaining % 60, 2, 10, QLatin1Char('0')));
             else if (reservationUntil_ > 0)
                 reservationCountdown_->setText(QStringLiteral("预约可能已超时，正在同步状态"));
             return;
         }
         progressRequestInFlight_ = true;
-        userApi_->progress(activeFlowNo_, [this](ApiReply reply) {
-            progressRequestInFlight_ = false;
-            if (!reply.ok())
+        userApi_->progress(
+            activeFlowNo_,
+            [this](ApiReply reply)
             {
-                notify(reply.message, true);
-                return;
-            }
-            const QJsonObject value = reply.data.toObject();
-            const qint64 duration = value.value(QStringLiteral("durationSec")).toVariant().toLongLong();
-            chargeDuration_->setText(QStringLiteral("%1:%2:%3")
-                .arg(duration / 3600, 2, 10, QLatin1Char('0'))
-                .arg(duration / 60 % 60, 2, 10, QLatin1Char('0'))
-                .arg(duration % 60, 2, 10, QLatin1Char('0')));
-            chargeEnergy_->setText(QStringLiteral("%1 kWh").arg(QString::number(value.value(QStringLiteral("energyMwh")).toInteger() / 1000000.0, 'f', 3)));
-            chargeAmount_->setText(money(value.value(QStringLiteral("amountCent")).toInt()));
-            chargePower_->setText(QStringLiteral("%1 kW").arg(value.value(QStringLiteral("powerWatt")).toInt() / 1000));
-            chargeSoc_->setValue(value.value(QStringLiteral("simulatedSoc")).toInt());
-        });
+                progressRequestInFlight_ = false;
+                if (!reply.ok())
+                {
+                    notify(reply.message, true);
+                    return;
+                }
+                const QJsonObject value = reply.data.toObject();
+                const qint64 duration =
+                    value.value(QStringLiteral("durationSec")).toVariant().toLongLong();
+                chargeDuration_->setText(QStringLiteral("%1:%2:%3")
+                                             .arg(duration / 3600, 2, 10, QLatin1Char('0'))
+                                             .arg(duration / 60 % 60, 2, 10, QLatin1Char('0'))
+                                             .arg(duration % 60, 2, 10, QLatin1Char('0')));
+                chargeEnergy_->setText(QStringLiteral("%1 kWh").arg(QString::number(
+                    value.value(QStringLiteral("energyMwh")).toInteger() / 1000000.0, 'f', 3)));
+                chargeAmount_->setText(money(value.value(QStringLiteral("amountCent")).toInt()));
+                chargePower_->setText(QStringLiteral("%1 kW").arg(
+                    value.value(QStringLiteral("powerWatt")).toInt() / 1000));
+                chargeSoc_->setValue(value.value(QStringLiteral("simulatedSoc")).toInt());
+            });
         return;
     }
     const ChargeProgress value = service_.progress();
@@ -410,12 +453,13 @@ void UserMainWindow::refreshCharge()
     chargeSoc_->setValue(value.soc);
     if (!chargingStarted_ && !selectedChargerCode_.isEmpty())
     {
-        const int seconds = service_.reservationRemainingSeconds();
-        if (seconds > 0)
+        const int reservationSeconds = service_.reservationRemainingSeconds();
+        if (reservationSeconds > 0)
         {
             reservationCountdown_->setText(
-                QStringLiteral("请在 %1:%2 内开始充电").arg(seconds / 60, 2, 10, QLatin1Char('0'))
-                    .arg(seconds % 60, 2, 10, QLatin1Char('0')));
+                QStringLiteral("请在 %1:%2 内开始充电")
+                    .arg(reservationSeconds / 60, 2, 10, QLatin1Char('0'))
+                    .arg(reservationSeconds % 60, 2, 10, QLatin1Char('0')));
         }
         else
         {
@@ -430,29 +474,37 @@ void UserMainWindow::refreshProfile()
     if (userApi_)
     {
         profileName_->setText(QStringLiteral("加载中…"));
-        userApi_->currentProfile([this](ApiReply reply) {
-            if (!reply.ok())
+        userApi_->currentProfile(
+            [this](ApiReply reply)
             {
-                notify(reply.message, true);
-                return;
-            }
-            const QJsonObject user = reply.data.toObject();
-            profileVersion_ = user.value(QStringLiteral("version")).toVariant().toLongLong();
-            nicknameEdit_->setText(user.value(QStringLiteral("nickname")).toString());
-            profileName_->setText(user.value(QStringLiteral("phoneMasked")).toString());
-            profileBalance_->setText(money(user.value(QStringLiteral("balanceCent")).toInt()));
-            profileAvatar_->setText(QStringLiteral("NCS"));
-            profileAvatar_->setPixmap({});
-            if (user.value(QStringLiteral("avatarUrl")).toString().isEmpty()) return;
-            userApi_->avatarContent([this](QByteArray bytes, const QString&, int status) {
-                if (status < 200 || status >= 300 || bytes.isEmpty()) return;
-                QPixmap avatar;
-                if (!avatar.loadFromData(bytes)) return;
-                profileAvatar_->setText({});
-                profileAvatar_->setPixmap(avatar.scaled(profileAvatar_->size(), Qt::KeepAspectRatioByExpanding,
-                                                         Qt::SmoothTransformation));
+                if (!reply.ok())
+                {
+                    notify(reply.message, true);
+                    return;
+                }
+                const QJsonObject user = reply.data.toObject();
+                profileVersion_ = user.value(QStringLiteral("version")).toVariant().toLongLong();
+                nicknameEdit_->setText(user.value(QStringLiteral("nickname")).toString());
+                profileName_->setText(user.value(QStringLiteral("phoneMasked")).toString());
+                profileBalance_->setText(money(user.value(QStringLiteral("balanceCent")).toInt()));
+                profileAvatar_->setText(QStringLiteral("NCS"));
+                profileAvatar_->setPixmap({});
+                if (user.value(QStringLiteral("avatarUrl")).toString().isEmpty())
+                    return;
+                userApi_->avatarContent(
+                    [this](QByteArray bytes, const QString&, int status)
+                    {
+                        if (status < 200 || status >= 300 || bytes.isEmpty())
+                            return;
+                        QPixmap avatar;
+                        if (!avatar.loadFromData(bytes))
+                            return;
+                        profileAvatar_->setText({});
+                        profileAvatar_->setPixmap(avatar.scaled(profileAvatar_->size(),
+                                                                Qt::KeepAspectRatioByExpanding,
+                                                                Qt::SmoothTransformation));
+                    });
             });
-        });
         return;
     }
     nicknameEdit_->setText(service_.nickname());
@@ -467,8 +519,8 @@ void UserMainWindow::refreshProfile()
     else
     {
         profileAvatar_->setText({});
-        profileAvatar_->setPixmap(avatar.scaled(profileAvatar_->size(), Qt::KeepAspectRatioByExpanding,
-                                                 Qt::SmoothTransformation));
+        profileAvatar_->setPixmap(avatar.scaled(
+            profileAvatar_->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
     }
 }
 
@@ -477,7 +529,9 @@ void UserMainWindow::notify(const QString& message, bool error)
     noticeAnimation_->stop();
     notice_->setText(message);
     notice_->setStyleSheet(
-        QStringLiteral("padding:10px 14px;border-radius:14px;font-size:13px;font-weight:600;color:%1;background:%2;")
+        QStringLiteral(
+            "padding:10px "
+            "14px;border-radius:14px;font-size:13px;font-weight:600;color:%1;background:%2;")
             .arg(error ? QStringLiteral("#B42318") : QStringLiteral("#0F766E"),
                  error ? QStringLiteral("#FFF4F2") : QStringLiteral("#E7F6F2")));
     notice_->setFixedHeight(qMax(44, notice_->sizeHint().height()));

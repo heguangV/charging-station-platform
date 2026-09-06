@@ -16,6 +16,7 @@ class UserApi final
     explicit UserApi(ApiClient& client);
 
     void setAccessToken(const QString& token);
+
     void requestSmsCode(const QString& phone, ApiClient::Handler done);
     void requestPasswordResetCode(const QString& phone, ApiClient::Handler done);
     void loginSms(const QString& phone, const QString& smsCode, const QString& deviceId,
@@ -24,7 +25,10 @@ class UserApi final
     void currentProfile(ApiClient::Handler done);
     void avatarContent(ApiClient::BytesHandler done);
     void updateProfile(const QString& nickname, qint64 version, ApiClient::Handler done);
+    void currentAvatar(const QByteArray& etag, ApiClient::BinaryHandler done);
     void uploadAvatar(QFile* image, const QString& fileName, ApiClient::Handler done);
+    void uploadAvatar(const QByteArray& image, const QString& fileName,
+                      const QByteArray& contentType, ApiClient::Handler done);
     void recharge(qint64 amountCent, ApiClient::Handler done);
     void orders(int page, int pageSize, ApiClient::Handler done);
     void order(const QString& orderNo, ApiClient::Handler done);

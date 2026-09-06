@@ -1,6 +1,8 @@
 add_library(ncs_infrastructure_sqlite STATIC
     sqlite_repository.cpp
     sqlite_repository.h
+    sqlite_seed.cpp
+    sqlite_seed.h
 )
 add_library(ncs::infrastructure_sqlite ALIAS ncs_infrastructure_sqlite)
 

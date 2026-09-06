@@ -66,12 +66,15 @@ enum class StartupAction
     Run,
     ShowHelp,
     ShowVersion,
+    BootstrapOwner,
 };
 
 struct StartupOptions
 {
     ServerConfig config;
     StartupAction action = StartupAction::Run;
+    // Username supplied to --bootstrap-owner (StartupAction::BootstrapOwner).
+    std::string bootstrapOwnerUsername;
 };
 
 class ConfigError final : public std::runtime_error

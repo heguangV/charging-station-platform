@@ -4,7 +4,6 @@
 
 #include <QWidget>
 
-
 class QComboBox;
 class QLabel;
 class QLineEdit;

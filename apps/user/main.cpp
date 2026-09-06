@@ -1,8 +1,8 @@
-#include "user_main_window.h"
-#include "user_demo_service.h"
 #include "net/api_client.h"
 #include "net/user_api.h"
 #include "ui/app_theme.h"
+#include "user_demo_service.h"
+#include "user_main_window.h"
 
 #include "config/application_config.h"
 #include "logging/application_logger.h"
@@ -28,9 +28,11 @@ int main(int argc, char* argv[])
     parser.setApplicationDescription(QStringLiteral("NCS Qt Widgets 用户端"));
     parser.addHelpOption();
     parser.addOption({QStringLiteral("smoke-test"), QStringLiteral("启动后自动退出")});
-    parser.addOption({QStringLiteral("mock-scenario"),
-                      QStringLiteral("选择 Mock 场景：happy-path、low-balance、no-available-charger、active-charging"),
-                      QStringLiteral("name")});
+    parser.addOption(
+        {QStringLiteral("mock-scenario"),
+         QStringLiteral(
+             "选择 Mock 场景：happy-path、low-balance、no-available-charger、active-charging"),
+         QStringLiteral("name")});
     parser.addOption({QStringLiteral("api-request-code"),
                       QStringLiteral("向配置的 REST 服务请求一次验证码后退出"),
                       QStringLiteral("phone")});
@@ -88,11 +90,14 @@ int main(int argc, char* argv[])
     if (parser.isSet(QStringLiteral("api-request-code")))
     {
         userApi->requestSmsCode(parser.value(QStringLiteral("api-request-code")),
-                                 [&app](ncs::user::ApiReply reply) {
-            qInfo().noquote() << (reply.ok() ? QStringLiteral("REST 验证码请求成功")
-                                              : QStringLiteral("REST 请求失败：") + reply.message);
-            app.exit(reply.ok() ? 0 : 4);
-        });
+                                [&app](ncs::user::ApiReply reply)
+                                {
+                                    qInfo().noquote()
+                                        << (reply.ok() ? QStringLiteral("REST 验证码请求成功")
+                                                       : QStringLiteral("REST 请求失败：") +
+                                                             reply.message);
+                                    app.exit(reply.ok() ? 0 : 4);
+                                });
         const int result = app.exec();
         ncs::infrastructure::ApplicationLogger::shutdown();
         return result;
@@ -101,13 +106,15 @@ int main(int argc, char* argv[])
     ncs::user::MockUserClientService mockService;
     const bool mockMode = parser.isSet(QStringLiteral("mock-scenario"));
     QString scenarioMessage;
-    if (mockMode && !mockService.configureScenario(parser.value(QStringLiteral("mock-scenario")), &scenarioMessage))
+    if (mockMode && !mockService.configureScenario(parser.value(QStringLiteral("mock-scenario")),
+                                                   &scenarioMessage))
     {
         qCritical().noquote() << scenarioMessage;
         ncs::infrastructure::ApplicationLogger::shutdown();
         return 4;
     }
-    if (mockMode) qInfo().noquote() << scenarioMessage;
+    if (mockMode)
+        qInfo().noquote() << scenarioMessage;
     ncs::user::UserMainWindow window(mockService, mockMode ? nullptr : userApi,
                                      config.value().tencentMapWebKey(),
                                      config.value().tencentMapJsOrigin());

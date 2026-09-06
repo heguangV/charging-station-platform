@@ -32,23 +32,28 @@ StationCard::StationCard(const StationSummary& station, QWidget* parent)
     name->setStyleSheet(name->styleSheet() + QStringLiteral("font-weight:600;"));
     heading->addWidget(name);
     heading->addStretch();
-    auto* distance = text(station.distance, 12, QStringLiteral("#667085"));
+    auto* distance = text(station.distance, 12, QStringLiteral("#0F766E"));
+    distance->setStyleSheet(
+        distance->styleSheet() +
+        QStringLiteral("background:#EDF7F4;border-radius:8px;padding:4px 6px;font-weight:600;"));
     heading->addWidget(distance);
     layout->addLayout(heading);
     layout->addWidget(text(station.address, 12, QStringLiteral("#667085")));
 
     auto* details = new QHBoxLayout;
-    auto* price = text(QStringLiteral("¥%1").arg(QString::number(station.priceCentPerKwh / 100.0, 'f', 2)),
-                       22, QStringLiteral("#182230"));
-    price->setStyleSheet(price->styleSheet() + QStringLiteral("font-weight:700;"));
-    details->addWidget(price);
-    details->addWidget(text(QStringLiteral("/ 度"), 12, QStringLiteral("#667085")), 0, Qt::AlignBottom);
-    details->addStretch();
-    auto* availability = text(QStringLiteral("空闲 %1 / %2").arg(station.idleCount).arg(station.totalCount),
-                              12, station.idleCount > 0 ? QStringLiteral("#087443") : QStringLiteral("#667085"));
-    availability->setStyleSheet(availability->styleSheet() +
-                                QStringLiteral("border-radius:6px;padding:4px 0;font-weight:600;"));
+    auto* availability =
+        text(QStringLiteral("%1 / %2 空闲").arg(station.idleCount).arg(station.totalCount), 13,
+             QStringLiteral("#087443"));
+    availability->setStyleSheet(
+        availability->styleSheet() +
+        QStringLiteral("background:#E8F8EF;border-radius:8px;padding:5px 8px;font-weight:600;"));
     details->addWidget(availability);
+    details->addSpacing(2);
+    details->addWidget(text(
+        QStringLiteral("¥%1 / 度").arg(QString::number(station.priceCentPerKwh / 100.0, 'f', 2)),
+        13, QStringLiteral("#475467")));
+    details->addStretch();
+    details->addWidget(text(QStringLiteral("查看电桩  ›"), 12, QStringLiteral("#0F766E")));
     layout->addLayout(details);
 }
 

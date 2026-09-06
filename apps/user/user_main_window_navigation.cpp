@@ -28,17 +28,19 @@ namespace ncs::user
 namespace
 {
 NavigationRoute browserFallbackRoute(const StationSummary& station, const QString& mode,
-                                    const QString& distance)
+                                     const QString& distance)
 {
-    const QString routeType = mode == QStringLiteral("walking") ? QStringLiteral("walk")
-        : mode == QStringLiteral("transit") ? QStringLiteral("bus") : QStringLiteral("drive");
+    const QString routeType = mode == QStringLiteral("walking")   ? QStringLiteral("walk")
+                              : mode == QStringLiteral("transit") ? QStringLiteral("bus")
+                                                                  : QStringLiteral("drive");
     QUrl url(QStringLiteral("https://apis.map.qq.com/uri/v1/routeplan"));
     QUrlQuery query;
     query.addQueryItem(QStringLiteral("type"), routeType);
     query.addQueryItem(QStringLiteral("from"), QStringLiteral("当前位置"));
-    query.addQueryItem(QStringLiteral("to"), QStringLiteral("%1,%2,%3")
-        .arg(QString::number(station.latitude, 'f', 6),
-             QString::number(station.longitude, 'f', 6), station.name));
+    query.addQueryItem(QStringLiteral("to"),
+                       QStringLiteral("%1,%2,%3")
+                           .arg(QString::number(station.latitude, 'f', 6),
+                                QString::number(station.longitude, 'f', 6), station.name));
     url.setQuery(query);
     return {station.name, station.address, distance.isEmpty() ? station.distance : distance, mode,
             url.toString()};

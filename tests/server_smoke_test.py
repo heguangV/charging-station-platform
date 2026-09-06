@@ -165,32 +165,48 @@ class WsClient:
         self.received = []
         self._lock = threading.Lock()
         self._socket_lock = threading.Lock()
-        self._background_reader = self.status == 101 and background_reader
+        self._reader_thread = None
         # A real client reads its socket continuously. The background reader
         # answers application pings immediately so the server's pong timeout
         # cannot expire while the test drives the other connections: the
         # phases before the heartbeat check take over a minute on slow
         # Windows CI runners, longer than the server's 60 s pong timeout.
-        if self._background_reader:
-            threading.Thread(target=self._read_forever, daemon=True).start()
+        if self.status == 101:
+            self._reader_thread = threading.Thread(
+                target=self._read_forever, daemon=True)
+            self._reader_thread.start()
 
     def _read_forever(self):
-        # Python's SSLSocket must not be read and written concurrently. The
-        # one-second read timeout bounds how long a writer can wait for the
-        # shared socket lock.
+        # The background reader owns the socket. It never holds _socket_lock
+        # while blocked in recv (SSLSocket allows one concurrent reader and
+        # writer), so the test thread can always send frames without waiting
+        # for a read to time out.
         try:
             while True:
                 with self._lock:
                     if self.closed:
                         return
+                self._socket.settimeout(1.0)
                 try:
-                    with self._socket_lock:
-                        self._socket.settimeout(1.0)
-                        opcode, payload = self._recv_frame()
+                    opcode, payload = self._recv_frame()
                 except socket.timeout:
                     continue
-                if not self._handle_frame(opcode, payload):
+                if opcode == 0x1:
+                    event = json.loads(payload)
+                    if event.get("type") == "ping":
+                        self.send_pong()
+                    with self._lock:
+                        self.received.append(event)
+                elif opcode == 0x8:
+                    with self._lock:
+                        self.closed = True
+                        if len(payload) >= 2:
+                            self.close_code = int.from_bytes(payload[:2], "big")
+                            self.close_reason = payload[2:]
                     return
+                elif opcode == 0x9:
+                    self._send_frame(0xA, payload)
+                # opcode 0xA (pong) and 0x2 (binary) are ignored
         except (OSError, ValueError):
             with self._lock:
                 self.closed = True
@@ -218,6 +234,18 @@ class WsClient:
         with self._socket_lock:
             self._socket.sendall(header + mask + masked)
 
+    def send_oversized_header(self, payload_length: int):
+        """Announce an oversized inbound frame by sending only its header:
+        the server's 1009 check fires at header parse, before the mask or
+        payload bytes arrive. Keeping the writer out of the server's close
+        path makes the 1009 close frame readable back deterministically —
+        sending the full payload instead races the server's close against
+        the client's in-flight write (SSLEOFError on the writer)."""
+        header = (bytes([0x80 | 0x1, 0x80 | 127])
+                  + payload_length.to_bytes(8, "big"))
+        with self._socket_lock:
+            self._socket.sendall(header)
+
     def send_text(self, payload: str):
         self._send_frame(0x1, payload.encode())
 
@@ -240,46 +268,11 @@ class WsClient:
             payload = self._read_exact(length)
         return opcode, payload
 
-    def _handle_frame(self, opcode: int, payload: bytes) -> bool:
-        if opcode == 0x1:
-            event = json.loads(payload)
-            if event.get("type") == "ping":
-                self.send_pong()
-            with self._lock:
-                self.received.append(event)
-        elif opcode == 0x8:
-            with self._lock:
-                self.closed = True
-                if len(payload) >= 2:
-                    self.close_code = int.from_bytes(payload[:2], "big")
-                    self.close_reason = payload[2:]
-            return False
-        elif opcode == 0x9:
-            self._send_frame(0xA, payload)
-        # opcode 0xA (pong) and 0x2 (binary) are ignored
-        return True
-
     def recv_events(self, timeout: float):
         """Block until `timeout` seconds elapse or the connection closes,
-        then return every frame collected so far."""
+        then return every frame collected so far. The background reader owns
+        the socket; this polls the shared queue instead of reading."""
         deadline = time.monotonic() + timeout
-        if not self._background_reader:
-            while time.monotonic() < deadline:
-                with self._lock:
-                    if self.closed:
-                        break
-                try:
-                    with self._socket_lock:
-                        self._socket.settimeout(
-                            max(0.1, deadline - time.monotonic()))
-                        opcode, payload = self._recv_frame()
-                except (socket.timeout, OSError):
-                    break
-                if not self._handle_frame(opcode, payload):
-                    break
-            with self._lock:
-                return list(self.received)
-
         while time.monotonic() < deadline:
             with self._lock:
                 if self.closed:
@@ -322,6 +315,15 @@ class WsClient:
             return [event for event in self.received if event.get("type") == event_type]
 
     def close(self):
+        """Send the close frame, read the server's close reply back (bounded
+        wait), then stop the background reader BEFORE the socket fd can be
+        reused. Closing the fd while the reader is inside SSL_read/SSL_write
+        leaves a live SSL object holding the old fd number: the next fresh
+        connection reuses that fd, and the stale reader then consumes the new
+        handshake's bytes or writes stale frames into it. Under CPU
+        contention this surfaces as WRONG_VERSION_NUMBER / bad record mac on
+        the request that follows close() — the reader must be joined before
+        this method returns."""
         with self._lock:
             already_closed = self.closed
         if not already_closed:
@@ -329,10 +331,20 @@ class WsClient:
                 self._send_frame(0x8, b"")
             except OSError:
                 pass
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                with self._lock:
+                    if self.closed:
+                        break
+                time.sleep(0.02)
         with self._lock:
             self.closed = True
-        with self._socket_lock:
+        try:
             self._socket.close()
+        except OSError:
+            pass
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=2.0)
 
 
 def main() -> int:
@@ -369,6 +381,33 @@ def main() -> int:
             stderr=subprocess.DEVNULL,
         )
         os.chmod(private_key, 0o600)
+
+        # UC-A-09 first-OWNER bootstrap: the one-shot command seeds the
+        # production OWNER on the fresh database, never echoes the key, and
+        # refuses to run twice.
+        bootstrap_key = "Ncs-Bootstrap-2026-K3y"
+        without_key = {name: value for name, value in os.environ.items()
+                       if name != "NCS_ADMIN_BOOTSTRAP_KEY"}
+        with_key = {**without_key, "NCS_ADMIN_BOOTSTRAP_KEY": bootstrap_key}
+
+        def run_bootstrap(environment):
+            return subprocess.run(
+                [str(server), "--environment", "production", "--database-path",
+                 str(database), "--bootstrap-owner", "root_owner"],
+                env=environment, capture_output=True, text=True)
+
+        missing_key = run_bootstrap(without_key)
+        assert missing_key.returncode == 1
+        assert "NCS_ADMIN_BOOTSTRAP_KEY" in missing_key.stderr
+
+        bootstrapped = run_bootstrap(with_key)
+        assert bootstrapped.returncode == 0, bootstrapped.stderr
+        assert "root_owner" in bootstrapped.stdout and "created" in bootstrapped.stdout
+        assert bootstrap_key not in bootstrapped.stdout + bootstrapped.stderr
+
+        again = run_bootstrap(with_key)
+        assert again.returncode == 1
+        assert "one-shot" in again.stderr
 
         def server_arguments(server_port: int):
             return [
@@ -717,7 +756,10 @@ def main() -> int:
             ml_task_no = json.loads(ml_start_body)["data"]["taskNo"]
             assert ml_start_status == 202
             ml_task = None
-            deadline = time.monotonic() + 20
+            # CI runners (Debug build, v8 seed with 90 days of history) can
+            # push a PREDICT task past 20s; 60s keeps the margin without
+            # masking a genuinely hung worker.
+            deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
                 task_status, _, task_body = request(
                     port, f"/api/v1/admin/ml-tasks/{ml_task_no}", admin_headers)
@@ -730,7 +772,60 @@ def main() -> int:
             prediction_status, _, prediction_body = request(
                 port, "/api/v1/admin/predictions?horizonHour=1", admin_headers)
             assert prediction_status == 200
-            assert len(json.loads(prediction_body)["data"]["items"]) == 3
+            # UC-D-02 v8 种子含 5 个站点，无站点过滤时逐站返回一项预测。
+            assert len(json.loads(prediction_body)["data"]["items"]) == 5
+
+            # UC-A-09: the bootstrapped OWNER logs in with the one-shot key
+            # while flagged for a password change, changes it, and the old key
+            # stops working.
+            owner_login_status, _, owner_login_body = request(
+                port, "/api/v1/admin/auth/login", json_headers, "POST",
+                json.dumps({
+                    "username": "root_owner",
+                    "password": bootstrap_key,
+                    "deviceId": "smoke-owner",
+                }))
+            owner_login = json.loads(owner_login_body)["data"]
+            owner_headers = {"Authorization": f"Bearer {owner_login['accessToken']}"}
+            assert owner_login_status == 200 and owner_login["admin"]["mustChangePassword"]
+            owner_new_password = "Ncs-Owner-New-2026"
+            owner_stale_status, _, _ = request(
+                port, "/api/v1/admin/me/password",
+                {**owner_headers, **json_headers}, "PUT",
+                json.dumps({
+                    "currentPassword": "wrong-bootstrap-key",
+                    "newPassword": owner_new_password,
+                }))
+            assert owner_stale_status == 401
+            owner_change_status, _, owner_change_body = request(
+                port, "/api/v1/admin/me/password",
+                {**owner_headers, **json_headers}, "PUT",
+                json.dumps({
+                    "currentPassword": bootstrap_key,
+                    "newPassword": owner_new_password,
+                }))
+            owner_changed = json.loads(owner_change_body)["data"]
+            assert owner_change_status == 200 and not owner_changed["mustChangePassword"]
+            owner_old_status, _, _ = request(
+                port, "/api/v1/admin/auth/login", json_headers, "POST",
+                json.dumps({
+                    "username": "root_owner",
+                    "password": bootstrap_key,
+                    "deviceId": "smoke-owner-old",
+                }))
+            assert owner_old_status == 401
+            owner_new_status, _, owner_new_body = request(
+                port, "/api/v1/admin/auth/login", json_headers, "POST",
+                json.dumps({
+                    "username": "root_owner",
+                    "password": owner_new_password,
+                    "deviceId": "smoke-owner-new",
+                }))
+            owner_new_login = json.loads(owner_new_body)["data"]
+            assert (
+                owner_new_status == 200
+                and not owner_new_login["admin"]["mustChangePassword"]
+            )
 
             # Scope isolation: user B saw no user-A or admin business events
             # (its own session.ready and application pings are expected).
@@ -765,23 +860,21 @@ def main() -> int:
                 ws_user.closed, ws_user.close_code)
 
             # Oversized inbound frame: the server answers with a protocol-level
-            # 1009 close frame instead of dropping the transport (13.1). The
-            # admin token reuses the admin session whose assertions are done;
-            # this replaces ws_admin (closed 1001) without disturbing the
-            # user-B heartbeat checks below.
-            ws_oversized = WsClient(port, admin_token, background_reader=False)
+            # 1009 close frame instead of dropping the transport (13.1). Only
+            # the frame header is sent: the server must reject at header
+            # parse, and sending the full 70 KiB payload races the server's
+            # close against the client's in-flight write. The admin token
+            # reuses the admin session whose assertions are done; this
+            # replaces ws_admin (closed 1001) without disturbing the user-B
+            # heartbeat checks below.
+            ws_oversized = WsClient(port, admin_token)
             assert ws_oversized.status == 101
             ws_oversized.recv_events(2.0)
-            try:
-                ws_oversized.send_text("x" * (70 * 1024))
-            except (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError):
-                # The server may reject and close the oversized frame before
-                # the client finishes writing it. The close-code assertion
-                # below still verifies that this was the expected 1009 close.
-                pass
+            ws_oversized.send_oversized_header(70 * 1024)
             ws_oversized.recv_events(3.0)
             assert ws_oversized.closed and ws_oversized.close_code == 1009, (
                 ws_oversized.closed, ws_oversized.close_code)
+            ws_oversized.close()
 
             # Heartbeat: user B's idle connection receives the application
             # ping, answers with pong, and stays connected.
@@ -799,6 +892,7 @@ def main() -> int:
             dashboard_logout_retry, _, _ = request(
                 port, "/api/v1/dashboard/auth/logout", dashboard_headers, "POST")
             assert dashboard_logout == 200 and dashboard_logout_retry == 200
+            ws_dashboard.close()
         except BaseException:
             # Surface server-side diagnostics (errors, structured logs) before
             # the temporary directory is cleaned up.

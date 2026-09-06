@@ -1,4 +1,6 @@
 add_library(ncs_core_application STATIC
+    admin_account_service.cpp
+    admin_account_service.h
     admin_auth_service.cpp
     admin_auth_service.h
     admin_repository.cpp
@@ -23,6 +25,7 @@ add_library(ncs_core_application STATIC
     event_hub.h
     idempotency_service.cpp
     idempotency_service.h
+    in_memory_admin_accounts.cpp
     in_memory_admin_repository.cpp
     in_memory_admin_repository.h
     in_memory_user_account_repository.cpp

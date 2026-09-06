@@ -32,7 +32,8 @@ int main(int argc, char* argv[])
     expect(service.configureScenario(QStringLiteral("no-available-charger"), &message),
            "no-available-charger scenario must configure");
     for (const auto& charger : service.chargers(1))
-        expect(charger.status != QStringLiteral("空闲"), "unavailable scenario must expose no idle charger");
+        expect(charger.status != QStringLiteral("空闲"),
+               "unavailable scenario must expose no idle charger");
 
     expect(service.configureScenario(QStringLiteral("active-charging"), &message),
            "active-charging scenario must configure");
@@ -43,11 +44,14 @@ int main(int argc, char* argv[])
            "happy-path scenario must configure");
     expect(service.reserve(1, QStringLiteral("ZGC-DC-01"), &message),
            "happy-path must reserve an idle charger");
-    for (int second = 0; second < 15 * 60; ++second) service.tick();
+    for (int second = 0; second < 15 * 60; ++second)
+        service.tick();
     expect(!service.hasUnfinishedOrder(), "expired reservation must not remain active");
-    expect(!service.orders().isEmpty() && service.orders().first().status == QStringLiteral("已超时"),
+    expect(!service.orders().isEmpty() &&
+               service.orders().first().status == QStringLiteral("已超时"),
            "expired reservation must update order status");
 
-    if (failures == 0) qInfo() << "All user mock tests passed.";
+    if (failures == 0)
+        qInfo() << "All user mock tests passed.";
     return failures == 0 ? 0 : 1;
 }
