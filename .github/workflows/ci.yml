@@ -73,3 +73,30 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build/windows -C Debug --output-on-failure
+
+  dashboard:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/dashboard
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/dashboard/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/dashboard/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: cmake -S . -B ../../build/dashboard-tests
+      - run: ctest --test-dir ../../build/dashboard-tests --output-on-failure
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dashboard-test-results
+          path: apps/dashboard/test-results/

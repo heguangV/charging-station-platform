@@ -1,5 +1,6 @@
 #include "user_api.h"
 
+#include <QFile>
 #include <QHttpMultiPart>
 #include <QHttpPart>
 #include <QNetworkRequest>
@@ -25,6 +26,12 @@ void UserApi::requestSmsCode(const QString& phone, ApiClient::Handler done)
                      std::move(done));
 }
 
+void UserApi::requestPasswordResetCode(const QString& phone, ApiClient::Handler done)
+{
+    client_.postJson(kUserBase + "/auth/sms/code",
+                     {{"phone", phone}, {"purpose", "RESET_PASSWORD"}}, std::move(done));
+}
+
 void UserApi::loginSms(const QString& phone, const QString& smsCode, const QString& deviceId,
                        ApiClient::Handler done)
 {
@@ -43,6 +50,11 @@ void UserApi::currentProfile(ApiClient::Handler done)
     client_.get(kUserBase + "/me", {}, std::move(done));
 }
 
+void UserApi::avatarContent(ApiClient::BytesHandler done)
+{
+    client_.getBytes(kUserBase + "/me/avatar/content", std::move(done));
+}
+
 void UserApi::updateProfile(const QString& nickname, qint64 version, ApiClient::Handler done)
 {
     client_.putJson(kUserBase + "/me", {{"nickname", nickname}, {"version", version}},
@@ -55,6 +67,19 @@ void UserApi::currentAvatar(const QByteArray& etag, ApiClient::BinaryHandler don
     if (!etag.isEmpty())
         headers.insert("If-None-Match", etag);
     client_.getBinary(kUserBase + "/me/avatar/content", headers, std::move(done));
+}
+
+void UserApi::uploadAvatar(QFile* image, const QString& fileName, ApiClient::Handler done)
+{
+    auto* body = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+    QHttpPart part;
+    part.setHeader(
+        QNetworkRequest::ContentDispositionHeader,
+        QVariant(QStringLiteral("form-data; name=\"file\"; filename=\"%1\"").arg(fileName)));
+    part.setBodyDevice(image);
+    image->setParent(body);
+    body->append(part);
+    client_.postMultipart(kUserBase + "/me/avatar", body, std::move(done));
 }
 
 void UserApi::uploadAvatar(const QByteArray& image, const QString& fileName,
@@ -84,6 +109,18 @@ void UserApi::orders(int page, int pageSize, ApiClient::Handler done)
     query.addQueryItem("pageSize", QString::number(pageSize));
     query.addQueryItem("sort", "-createdAt");
     client_.get(kUserBase + "/orders", query, std::move(done));
+}
+
+void UserApi::order(const QString& orderNo, ApiClient::Handler done)
+{
+    client_.get(kUserBase + QStringLiteral("/orders/%1").arg(orderNo), {}, std::move(done));
+}
+
+void UserApi::deleteAccount(const QString& smsCode, ApiClient::Handler done)
+{
+    client_.deleteJson(kUserBase + "/me",
+                       {{"confirm", true}, {"password", QJsonValue::Null}, {"smsCode", smsCode}},
+                       std::move(done));
 }
 
 void UserApi::stations(qint64 latitudeE6, qint64 longitudeE6, const QString& keyword,

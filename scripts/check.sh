@@ -16,9 +16,11 @@ if [[ -n "${base_ref}" ]]; then
         echo "NCS_CHECK_BASE_REF 不是可用的 Git 提交：${base_ref}" >&2
         exit 2
     fi
-    git diff --check "${base_commit}...HEAD"
+    # 空白检查与下方 clang-format 同口径，仅覆盖 C/C++ 文件；
+    # .patch 等生成内容的空白由其自身工具链（git apply --whitespace=nowarn）负责。
+    git diff --check "${base_commit}...HEAD" -- '*.cpp' '*.h'
 fi
-git diff --check HEAD
+git diff --check HEAD -- '*.cpp' '*.h'
 
 declare -A seen_sources=()
 changed_sources=()

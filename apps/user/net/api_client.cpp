@@ -75,6 +75,28 @@ void ApiClient::getBinary(const QString& path, const QHash<QByteArray, QByteArra
         PendingBinaryRequest{path, std::move(requestHeaders), std::move(handler), 0}));
 }
 
+void ApiClient::getBytes(const QString& path, BytesHandler handler)
+{
+    QNetworkRequest request(urlFor(path));
+    request.setTransferTimeout(10000);
+    request.setRawHeader("Accept", "image/*");
+    if (!accessToken_.isEmpty())
+        request.setRawHeader("Authorization", "Bearer " + accessToken_.toUtf8());
+    QNetworkReply* reply = manager_->get(request);
+    connect(reply, &QNetworkReply::finished, this,
+            [reply, handler = std::move(handler)]
+            {
+                const int status =
+                    reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                const QByteArray body = reply->readAll();
+                const QString contentType =
+                    reply->header(QNetworkRequest::ContentTypeHeader).toString();
+                handler(reply->error() == QNetworkReply::NoError ? body : QByteArray{}, contentType,
+                        status);
+                reply->deleteLater();
+            });
+}
+
 void ApiClient::postJson(const QString& path, const QJsonObject& body, Handler handler,
                          const QHash<QByteArray, QByteArray>& headers)
 {
@@ -87,6 +109,12 @@ void ApiClient::postJson(const QString& path, const QJsonObject& body, Handler h
 void ApiClient::putJson(const QString& path, const QJsonObject& body, Handler handler)
 {
     enqueue("PUT", path, QJsonDocument(body).toJson(QJsonDocument::Compact),
+            {{"Content-Type", "application/json"}}, std::move(handler));
+}
+
+void ApiClient::deleteJson(const QString& path, const QJsonObject& body, Handler handler)
+{
+    enqueue("DELETE", path, QJsonDocument(body).toJson(QJsonDocument::Compact),
             {{"Content-Type", "application/json"}}, std::move(handler));
 }
 
@@ -125,6 +153,8 @@ void ApiClient::send(const std::shared_ptr<PendingRequest>& pending)
         reply = manager_->get(request);
     else if (pending->method == "PUT")
         reply = manager_->put(request, pending->body);
+    else if (pending->method == "DELETE")
+        reply = manager_->sendCustomRequest(request, "DELETE", pending->body);
     else
         reply = manager_->post(request, pending->body);
 

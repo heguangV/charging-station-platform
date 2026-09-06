@@ -15,6 +15,8 @@ class ChargerTable final : public QWidget
     explicit ChargerTable(QWidget* parent = nullptr);
     void setChargers(const QVector<ChargerSummary>& chargers);
     QString selectedChargerCode() const;
+    qint64 selectedChargerId() const;
+    int selectedChargerType() const;
 
   private:
     void rebuild();

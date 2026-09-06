@@ -10,6 +10,69 @@
 namespace ncs::user
 {
 
+bool MockUserClientService::configureScenario(const QString& name, QString* userMessage)
+{
+    resetScenario();
+    const QString scenario = name.trimmed().toLower();
+    if (scenario.isEmpty() || scenario == QStringLiteral("happy-path") ||
+        scenario == QStringLiteral("empty-orders"))
+    {
+        *userMessage = QStringLiteral("Mock 场景：正常充电流程");
+        return true;
+    }
+    if (scenario == QStringLiteral("low-balance"))
+    {
+        balanceCent_ = 100;
+        *userMessage = QStringLiteral("Mock 场景：余额不足");
+        return true;
+    }
+    if (scenario == QStringLiteral("no-available-charger"))
+    {
+        noAvailableChargers_ = true;
+        *userMessage = QStringLiteral("Mock 场景：当前站点无空闲电桩");
+        return true;
+    }
+    if (scenario == QStringLiteral("active-charging"))
+    {
+        selectedStationId_ = 1;
+        selectedChargerCode_ = QStringLiteral("ZGC-DC-01");
+        activeOrderNo_ = QStringLiteral("OR-DEMO-ACTIVE");
+        charging_ = true;
+        reserved_ = true;
+        elapsedSeconds_ = 42;
+        orders_.append({activeOrderNo_,
+                        QStringLiteral("NCS 中关村充电站"),
+                        selectedChargerCode_,
+                        QStringLiteral("2026-09-03 14:00:00"),
+                        {},
+                        0,
+                        0,
+                        0,
+                        QStringLiteral("充电中")});
+        *userMessage = QStringLiteral("Mock 场景：存在充电中订单");
+        return true;
+    }
+    *userMessage =
+        QStringLiteral("未知 Mock 场景：%1（可选 "
+                       "happy-path、low-balance、no-available-charger、active-charging）")
+            .arg(name);
+    return false;
+}
+
+void MockUserClientService::resetScenario()
+{
+    balanceCent_ = 12800;
+    selectedStationId_ = 0;
+    selectedChargerCode_.clear();
+    reserved_ = false;
+    charging_ = false;
+    reservationRemainingSeconds_ = 0;
+    elapsedSeconds_ = 0;
+    activeOrderNo_.clear();
+    orders_.clear();
+    noAvailableChargers_ = false;
+}
+
 bool MockUserClientService::login(const QString& phone, const QString& code, QString* userMessage)
 {
     if (code != developmentCode())
@@ -22,7 +85,7 @@ bool MockUserClientService::login(const QString& phone, const QString& code, QSt
     {
         nickname_ = QStringLiteral("用户%1").arg(phone.right(4));
     }
-    *userMessage = QStringLiteral("登录成功，已进入演示数据模式");
+    *userMessage = QStringLiteral("登录成功");
     return true;
 }
 
@@ -97,9 +160,8 @@ QVector<OrderSummary> MockUserClientService::orders() const
 NavigationRoute MockUserClientService::route(int stationId, const QString& mode) const
 {
     const StationSummary station = stations().at(qBound(0, stationId - 1, stations().size() - 1));
-    const QString routeType = mode == QStringLiteral("walking")   ? QStringLiteral("walk")
-                              : mode == QStringLiteral("transit") ? QStringLiteral("bus")
-                                                                  : QStringLiteral("drive");
+    const QString routeType =
+        mode == QStringLiteral("walking") ? QStringLiteral("walk") : QStringLiteral("drive");
     QUrl url(QStringLiteral("https://apis.map.qq.com/uri/v1/routeplan"));
     QUrlQuery query;
     query.addQueryItem(QStringLiteral("type"), routeType);
@@ -122,6 +184,15 @@ QVector<StationSummary> MockUserClientService::stations() const
 QVector<ChargerSummary> MockUserClientService::chargers(int stationId) const
 {
     Q_UNUSED(stationId)
+    if (noAvailableChargers_)
+    {
+        return {{QStringLiteral("ZGC-DC-01"), QStringLiteral("直流快充"), 120,
+                 QStringLiteral("充电中"), 248},
+                {QStringLiteral("ZGC-DC-02"), QStringLiteral("直流快充"), 60,
+                 QStringLiteral("充电中"), 176},
+                {QStringLiteral("ZGC-AC-03"), QStringLiteral("交流慢充"), 7, QStringLiteral("故障"),
+                 93}};
+    }
     return {
         {QStringLiteral("ZGC-DC-01"), QStringLiteral("直流快充"), 120, QStringLiteral("空闲"), 248},
         {QStringLiteral("ZGC-DC-02"), QStringLiteral("直流快充"), 60, QStringLiteral("充电中"),
@@ -215,7 +286,7 @@ bool MockUserClientService::start(QString* userMessage)
     if (reservationRemainingSeconds_ <= 0)
     {
         *userMessage = QStringLiteral("预约已超时，请重新选择空闲充电桩");
-        reserved_ = false;
+        expireReservation();
         return false;
     }
     charging_ = true;
@@ -228,7 +299,7 @@ bool MockUserClientService::start(QString* userMessage)
                 QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
         }
     }
-    *userMessage = QStringLiteral("充电已开始，数据每秒刷新");
+    *userMessage = QStringLiteral("充电已开始");
     return true;
 }
 
@@ -237,11 +308,26 @@ void MockUserClientService::tick()
     if (reserved_ && !charging_ && reservationRemainingSeconds_ > 0)
     {
         --reservationRemainingSeconds_;
+        if (reservationRemainingSeconds_ == 0)
+            expireReservation();
     }
     if (charging_)
     {
         ++elapsedSeconds_;
     }
+}
+
+void MockUserClientService::expireReservation()
+{
+    reserved_ = false;
+    reservationRemainingSeconds_ = 0;
+    for (OrderSummary& order : orders_)
+    {
+        if (order.orderNo == activeOrderNo_)
+            order.status = QStringLiteral("已超时");
+    }
+    selectedChargerCode_.clear();
+    activeOrderNo_.clear();
 }
 
 ChargeProgress MockUserClientService::progress() const
