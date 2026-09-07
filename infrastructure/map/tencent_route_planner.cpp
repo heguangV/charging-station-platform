@@ -120,27 +120,8 @@ void appendSteps(std::vector<core::application::RouteStep>& target, const QJsonA
     }
 }
 
-} // namespace
-
-TencentRoutePlanner::TencentRoutePlanner(QString serverKey) : serverKey_(std::move(serverKey)) {}
-
-std::optional<core::application::PlannedRoute>
-TencentRoutePlanner::plan(const core::application::RoutePoint origin,
-                          const core::application::RoutePoint destination,
-                          const core::application::TravelMode mode)
+QByteArray requestPayload(const QUrl& endpoint)
 {
-    if (serverKey_.isEmpty())
-    {
-        return std::nullopt;
-    }
-    QUrl endpoint(
-        QStringLiteral("https://apis.map.qq.com/ws/direction/v1/%1/").arg(endpointMode(mode)));
-    QUrlQuery query;
-    query.addQueryItem(QStringLiteral("from"), coordinate(origin));
-    query.addQueryItem(QStringLiteral("to"), coordinate(destination));
-    query.addQueryItem(QStringLiteral("key"), serverKey_);
-    endpoint.setQuery(query);
-
     QNetworkRequest request(endpoint);
     request.setTransferTimeout(timeoutMs);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
@@ -171,8 +152,33 @@ TencentRoutePlanner::plan(const core::application::RoutePoint origin,
     reply->deleteLater();
     if (error != QNetworkReply::NoError || payload.size() > maximumResponseBytes)
     {
+        return {};
+    }
+    return payload;
+}
+
+} // namespace
+
+TencentRoutePlanner::TencentRoutePlanner(QString serverKey) : serverKey_(std::move(serverKey)) {}
+
+std::optional<core::application::PlannedRoute>
+TencentRoutePlanner::plan(const core::application::RoutePoint origin,
+                          const core::application::RoutePoint destination,
+                          const core::application::TravelMode mode)
+{
+    if (serverKey_.isEmpty())
+    {
         return std::nullopt;
     }
+    QUrl endpoint(
+        QStringLiteral("https://apis.map.qq.com/ws/direction/v1/%1/").arg(endpointMode(mode)));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("from"), coordinate(origin));
+    query.addQueryItem(QStringLiteral("to"), coordinate(destination));
+    query.addQueryItem(QStringLiteral("key"), serverKey_);
+    endpoint.setQuery(query);
+
+    const QByteArray payload = requestPayload(endpoint);
     return parseResponse(payload, mode);
 }
 
@@ -203,7 +209,7 @@ TencentRoutePlanner::parseResponse(const QByteArray& payload,
         static_cast<std::int64_t>(route.value(QStringLiteral("distance")).toDouble());
     result.durationSecond =
         static_cast<std::int64_t>(route.value(QStringLiteral("duration")).toDouble() * 60.0);
-    if (result.distanceMeter <= 0 || result.durationSecond <= 0)
+    if (result.distanceMeter <= 1 || result.durationSecond <= 0)
     {
         return std::nullopt;
     }
@@ -222,7 +228,49 @@ TencentRoutePlanner::parseResponse(const QByteArray& payload,
         appendPolyline(result.polyline, route.value(QStringLiteral("polyline")).toArray());
         appendSteps(result.steps, route.value(QStringLiteral("steps")).toArray());
     }
+    if (result.polyline.size() < 2 ||
+        std::none_of(result.polyline.begin(), result.polyline.end(),
+                     [first = result.polyline.front()](const auto point) {
+                         return point.latitudeE6 != first.latitudeE6 ||
+                                point.longitudeE6 != first.longitudeE6;
+                     }))
+        return std::nullopt;
     return result;
 }
 
+} // namespace ncs::infrastructure::map
+
+namespace ncs::infrastructure::map
+{
+std::optional<core::application::RoutePoint>
+TencentRoutePlanner::normalizeGps(core::application::RoutePoint origin)
+{
+    if (serverKey_.isEmpty())
+        return std::nullopt;
+    QUrl endpoint(QStringLiteral("https://apis.map.qq.com/ws/coord/v1/translate"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("locations"), coordinate(origin));
+    query.addQueryItem(QStringLiteral("type"), QStringLiteral("1"));
+    query.addQueryItem(QStringLiteral("key"), serverKey_);
+    endpoint.setQuery(query);
+    return parseGpsResponse(requestPayload(endpoint));
+}
+
+std::optional<core::application::RoutePoint>
+TencentRoutePlanner::parseGpsResponse(const QByteArray& payload)
+{
+    const auto root = QJsonDocument::fromJson(payload).object();
+    const auto locations = root.value(QStringLiteral("locations")).toArray();
+    if (root.value(QStringLiteral("status")).toInt(-1) != 0 || locations.size() != 1)
+        return std::nullopt;
+    const auto point = locations.first().toObject();
+    const auto lat = point.value(QStringLiteral("lat"));
+    const auto lon = point.value(QStringLiteral("lng"));
+    if (!lat.isDouble() || !lon.isDouble() || !std::isfinite(lat.toDouble()) ||
+        !std::isfinite(lon.toDouble()) || std::abs(lat.toDouble()) > 90 ||
+        std::abs(lon.toDouble()) > 180)
+        return std::nullopt;
+    return core::application::RoutePoint{std::llround(lat.toDouble() * 1e6),
+                                         std::llround(lon.toDouble() * 1e6)};
+}
 } // namespace ncs::infrastructure::map

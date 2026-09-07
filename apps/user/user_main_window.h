@@ -4,6 +4,7 @@
 
 #include <QHash>
 #include <QMainWindow>
+#include <QPointF>
 #include <QVector>
 
 class QLabel;
@@ -66,6 +67,8 @@ class UserMainWindow final : public QMainWindow
     void showOrders();
     void showProfile();
     void showNavigation();
+    void locateNavigationOrigin();
+    void cancelNavigationLocation();
     void showStationMap();
     void showNavigationFallback(const QString& reason = {});
     void applyNavigationRoute(const QJsonObject& routeData);
@@ -125,6 +128,18 @@ class UserMainWindow final : public QMainWindow
     QLabel* ordersEmpty_ = nullptr;
     QPushButton* ordersRetryButton_ = nullptr;
     QComboBox* navigationMode_ = nullptr;
+    QComboBox* navigationOrigin_ = nullptr;
+    QLabel* navigationDestination_ = nullptr;
+    QLabel* navigationMapMessage_ = nullptr;
+    QStackedWidget* navigationMapPanel_ = nullptr;
+    QPushButton* navigationRetryButton_ = nullptr;
+    QString navigationOriginText_;
+    bool navigationMapReady_ = false;
+    bool navigationHasDeviceCoordinate_ = false;
+    bool navigationLocating_ = false;
+    int navigationLocationRequest_ = 0;
+    QPointF navigationDeviceCoordinate_;
+    QObject* navigationPositionSource_ = nullptr;
     QLabel* navigationSummary_ = nullptr;
     QWidget* navigationMap_ = nullptr;
     QPushButton* navigationBrowserButton_ = nullptr;

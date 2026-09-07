@@ -38,7 +38,7 @@ class UserApi final
     void chargers(qint64 stationId, ApiClient::Handler done);
     void navigationRoute(qint64 stationId, std::optional<qint64> latitudeE6,
                          std::optional<qint64> longitudeE6, const QString& keyword,
-                         const QString& mode, ApiClient::Handler done);
+                         const QString& mode, ApiClient::Handler done, bool gpsOrigin = false);
     void requestFlow(qint64 stationId, int chargerType, qint64 preferredChargerId,
                      ApiClient::Handler done);
     void activeFlow(ApiClient::Handler done);

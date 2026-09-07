@@ -494,7 +494,9 @@ Idempotency-Key: <uuid>
 
 ### 4.5 GET `/stations/{stationId}/route` — 腾讯地图路线规划
 
-需要用户会话。参数：`latitudeE6`、`longitudeE6`、`keyword`、`mode`。`mode` 必填且仅允许 `driving`、`walking`、`transit`；经纬度必须成对出现。客户端已有有效坐标时优先使用坐标，否则服务端尝试地理编码 `keyword`，最后才使用演示默认位置。
+需要用户会话。参数：`latitudeE6`、`longitudeE6`、`keyword`、`mode`、可选 `coordinateType`（`gcj02` 默认，或 `wgs84`）。`mode` 必填且仅允许 `driving`、`walking`、`transit`；经纬度必须成对出现。这里的坐标和 `keyword` 均代表起点，禁止填入目标电站坐标或地址。客户端选择预设模拟位置时传坐标，输入自定义地址时省略经纬度并只传 `keyword`。服务端已有有效坐标时优先使用坐标，否则尝试地理编码 `keyword`，最后才使用演示默认位置。
+
+系统自动定位必须传成对坐标与 `coordinateType=wgs84`；服务端先调用腾讯固定 HTTPS 坐标转换端点（type=1），将 WGS84 转为 GCJ-02 后规划。响应与浏览器 URL 均使用转换后的坐标。坐标类型非法或 WGS84 缺少坐标返回 422；转换失败返回 503（错误码 12），客户端提示重新定位或输入地址，不使用默认位置掩盖转换失败。
 
 服务端使用 `TENCENT_MAP_SERVER_KEY` 请求固定的腾讯地图 HTTPS 路线规划端点；Key 不得出现在响应、URL 日志或客户端配置中。腾讯调用在有界阻塞工作队列执行，超时、无 Key、配额或响应异常时返回成功的降级结果，而不阻断导航页面。
 
@@ -516,7 +518,8 @@ Idempotency-Key: <uuid>
   "locationFallback": false,
   "routeFallback": false,
   "polyline": [
-    {"latitudeE6": 39977680, "longitudeE6": 116316417}
+    {"latitudeE6": 39977680, "longitudeE6": 116316417},
+    {"latitudeE6": 39983700, "longitudeE6": 116315200}
   ],
   "steps": [
     {"instruction": "向东行驶", "distanceMeter": 300, "durationSecond": 60}
@@ -525,7 +528,7 @@ Idempotency-Key: <uuid>
 }
 ```
 
-腾讯路线成功时 `provider=TENCENT_MAP`、`routeFallback=false`。腾讯能力不可用时返回 `provider=LOCAL_FALLBACK`、`routeFallback=true`、`durationSecond=0`，`polyline` 只含起终点并以 Haversine 计算 `distanceMeter`；`browserUrl` 仅作为最终用户操作入口。`locationFallback` 只表示起点定位是否退回默认坐标，与路线服务是否降级相互独立。
+腾讯路线有效时 `provider=TENCENT_MAP`、`routeFallback=false`。起终点直线距离 ≤5 米，或返回距离 ≤1 米、预计时长 ≤0、折线不足两个有效且不同的点，均视为退化结果，按下述本地降级返回，不能仅凭第三方 status=0 标记成功。腾讯能力不可用时返回 `provider=LOCAL_FALLBACK`、`routeFallback=true`、`durationSecond=0`，`polyline` 只含起终点并以 Haversine 计算 `distanceMeter`；`browserUrl` 仅作为最终用户操作入口。`locationFallback` 只表示起点定位是否退回默认坐标，与路线服务是否降级相互独立。
 
 ## 5. 充电流程接口（`/api/v1/user`）
 

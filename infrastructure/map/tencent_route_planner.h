@@ -17,6 +17,10 @@ class TencentRoutePlanner final : public core::application::RoutePlanner
     plan(core::application::RoutePoint origin, core::application::RoutePoint destination,
          core::application::TravelMode mode) override;
 
+    std::optional<core::application::RoutePoint>
+    normalizeGps(core::application::RoutePoint origin) override;
+    static std::optional<core::application::RoutePoint> parseGpsResponse(const QByteArray& payload);
+
     static std::optional<core::application::PlannedRoute>
     parseResponse(const QByteArray& payload, core::application::TravelMode mode);
 

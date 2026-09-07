@@ -144,7 +144,7 @@ void UserApi::chargers(qint64 stationId, ApiClient::Handler done)
 
 void UserApi::navigationRoute(qint64 stationId, std::optional<qint64> latitudeE6,
                               std::optional<qint64> longitudeE6, const QString& keyword,
-                              const QString& mode, ApiClient::Handler done)
+                              const QString& mode, ApiClient::Handler done, bool gpsOrigin)
 {
     QUrlQuery query;
     if (latitudeE6 && longitudeE6)
@@ -155,6 +155,8 @@ void UserApi::navigationRoute(qint64 stationId, std::optional<qint64> latitudeE6
     if (!keyword.trimmed().isEmpty())
         query.addQueryItem(QStringLiteral("keyword"), keyword.trimmed());
     query.addQueryItem(QStringLiteral("mode"), mode);
+    if (gpsOrigin)
+        query.addQueryItem(QStringLiteral("coordinateType"), QStringLiteral("wgs84"));
     client_.get(kUserBase + QStringLiteral("/stations/%1/route").arg(stationId), query,
                 std::move(done));
 }

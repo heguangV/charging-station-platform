@@ -45,6 +45,10 @@ class RoutePlanner
 {
   public:
     virtual ~RoutePlanner() = default;
+    virtual std::optional<RoutePoint> normalizeGps(RoutePoint)
+    {
+        return std::nullopt;
+    }
     virtual std::optional<PlannedRoute> plan(RoutePoint origin, RoutePoint destination,
                                              TravelMode mode) = 0;
 };
@@ -77,7 +81,8 @@ class NavigationService final
     ServiceResult<NavigationResult> routeToStation(std::int64_t stationId,
                                                    std::optional<std::int64_t> latitudeE6,
                                                    std::optional<std::int64_t> longitudeE6,
-                                                   const std::string& keyword, TravelMode mode);
+                                                   const std::string& keyword, TravelMode mode,
+                                                   bool gpsOrigin = false);
 
   private:
     ChargingRepository& repository_;

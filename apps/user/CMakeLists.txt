@@ -24,6 +24,7 @@ qt_add_executable(ncs_user
     user_main_window.h
     user_main_window_login.cpp
     user_main_window_navigation.cpp
+    user_main_window_location.cpp
     user_main_window_orders.cpp
     user_main_window_profile.cpp
     user_main_window_state.cpp
@@ -45,5 +46,11 @@ ncs_set_project_warnings(ncs_user)
 
 qt_add_resources(ncs_user user_visual_assets
     PREFIX "/ncs"
-    FILES resources/charging-scene.png
+    FILES resources/charging-scene.png resources/navigation-chevron.svg
 )
+
+find_package(Qt6 ${PROJECT_MINIMUM_QT_VERSION} QUIET COMPONENTS Positioning)
+if(TARGET Qt6::Positioning)
+    target_link_libraries(ncs_user PRIVATE Qt6::Positioning)
+    target_compile_definitions(ncs_user PRIVATE NCS_HAS_POSITIONING=1)
+endif()

@@ -51,7 +51,7 @@ QString browserRouteUrl(const core::application::NavigationResult& route)
     QUrl url(QStringLiteral("https://apis.map.qq.com/uri/v1/routeplan"));
     QUrlQuery query;
     query.addQueryItem(QStringLiteral("type"), type);
-    query.addQueryItem(QStringLiteral("from"), QStringLiteral("当前位置"));
+    query.addQueryItem(QStringLiteral("from"), QStringLiteral("导航起点"));
     query.addQueryItem(QStringLiteral("fromcoord"), coordinate(route.origin));
     query.addQueryItem(QStringLiteral("to"), QString::fromStdString(route.stationName));
     query.addQueryItem(QStringLiteral("tocoord"), coordinate(route.destination));
@@ -125,8 +125,8 @@ NavigationRoutes::NavigationRoutes(ApiRoutes& routes,
                     response.end();
                     return;
                 }
-                const auto parameters =
-                    parseQueryParameters(request, {"latitudeE6", "longitudeE6", "keyword", "mode"});
+                const auto parameters = parseQueryParameters(
+                    request, {"latitudeE6", "longitudeE6", "keyword", "mode", "coordinateType"});
                 if (!parameters)
                 {
                     response = errorResponse(core::domain::ErrorCode::ValidationFailed,
@@ -144,8 +144,19 @@ NavigationRoutes::NavigationRoutes(ApiRoutes& routes,
                                       ? std::optional<core::application::TravelMode>{}
                                       : travelMode(modeValue->second);
                 const auto keyword = parameters->find("keyword");
+                const auto coordinateType = parameters->find("coordinateType");
+                const bool gpsOrigin =
+                    coordinateType != parameters->end() && coordinateType->second == "wgs84";
+                if (coordinateType != parameters->end() && coordinateType->second != "gcj02" &&
+                    coordinateType->second != "wgs84")
+                {
+                    response = errorResponse(core::domain::ErrorCode::ValidationFailed,
+                                             "invalid coordinate type", "起点坐标类型不符合要求");
+                    response.end();
+                    return;
+                }
                 if (!latitude || !longitude || (latitude->has_value() != longitude->has_value()) ||
-                    !mode)
+                    !mode || (gpsOrigin && (!latitude->has_value() || !longitude->has_value())))
                 {
                     response = errorResponse(core::domain::ErrorCode::ValidationFailed,
                                              "invalid route origin or travel mode",
@@ -162,15 +173,18 @@ NavigationRoutes::NavigationRoutes(ApiRoutes& routes,
                 }
                 dispatchBlocking(
                     request, response, executor,
-                    [&navigation, stationId, latitude, longitude, mode,
+                    [&navigation, stationId, latitude, longitude, mode, gpsOrigin,
                      keyword = keyword == parameters->end() ? std::string() : keyword->second]()
                     {
-                        const auto result = navigation.routeToStation(stationId, *latitude,
-                                                                      *longitude, keyword, *mode);
+                        const auto result = navigation.routeToStation(
+                            stationId, *latitude, *longitude, keyword, *mode, gpsOrigin);
                         if (!result.ok())
                         {
-                            return errorResponse(result.error, "station not found",
-                                                 "未找到相关电站");
+                            return errorResponse(
+                                result.error, "navigation unavailable",
+                                result.error == core::domain::ErrorCode::NotFound
+                                    ? "未找到相关电站"
+                                    : "系统定位坐标转换失败，请重试或输入起点地址");
                         }
                         return responseFor(*result.value);
                     });

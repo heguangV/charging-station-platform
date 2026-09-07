@@ -25,6 +25,7 @@ class StationListWidget final : public QWidget
     void showError(const QString& userMessage);
     void requestRefresh();
     void refreshAvailability();
+    QString navigationOriginText() const;
 
   signals:
     void mapRequested();

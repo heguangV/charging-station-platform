@@ -523,3 +523,15 @@ if(UNIX)
         set_tests_properties(ncs_check_script PROPERTIES LABELS "unit;repository")
     endif()
 endif()
+
+add_executable(ncs_user_navigation_origin_tests
+    user_navigation_origin_test.cpp
+    ../apps/user/net/api_client.cpp
+    ../apps/user/net/api_client.h
+    ../apps/user/net/user_api.cpp
+)
+target_include_directories(ncs_user_navigation_origin_tests PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(ncs_user_navigation_origin_tests PRIVATE Qt6::Core Qt6::Network)
+set_target_properties(ncs_user_navigation_origin_tests PROPERTIES AUTOMOC ON AUTOUIC OFF AUTORCC OFF)
+add_test(NAME ncs_user_navigation_origin COMMAND ncs_user_navigation_origin_tests)
+set_tests_properties(ncs_user_navigation_origin PROPERTIES LABELS "unit;user;navigation")
