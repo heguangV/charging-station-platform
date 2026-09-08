@@ -1,284 +1,423 @@
 #include "admin_main_window.h"
-
-#include "admin_api_client.h"
-#include "admin_main_window_utils.h"
-
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QInputDialog>
-#include <QLineEdit>
-#include <QMessageBox>
 #include <QJsonObject>
-#include <QNetworkReply>
+#include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSpinBox>
-
+#include <QTimer>
 #include <algorithm>
-
 namespace ncs::admin
 {
-
-void AdminMainWindow::addStation()
+bool AdminMainWindow::confirmReason(const QString& title, const QString& description,
+                                    QString* reason)
 {
     QDialog dialog(this);
-    dialog.setWindowTitle(QStringLiteral("新增充电站"));
+    dialog.setObjectName("confirmOperation");
+    dialog.setWindowTitle(title);
+    dialog.setMinimumWidth(420);
     auto* form = new QFormLayout(&dialog);
-    auto* code = new QLineEdit(&dialog);
-    auto* name = new QLineEdit(&dialog);
-    auto* address = new QLineEdit(&dialog);
-    auto* adcode = new QLineEdit(&dialog);
-    auto* latitude = new QSpinBox(&dialog);
-    auto* longitude = new QSpinBox(&dialog);
-    auto* businessHours = new QLineEdit(&dialog);
-    auto* count = new QSpinBox(&dialog);
-    auto* chargerType = new QComboBox(&dialog);
-    auto* powerWatt = new QSpinBox(&dialog);
-    auto* connectorStandard = new QLineEdit(&dialog);
-    code->setPlaceholderText(QStringLiteral("例如 ZGC2"));
-    adcode->setPlaceholderText(QStringLiteral("例如 110108"));
-    latitude->setRange(-90000000, 90000000);
-    longitude->setRange(-180000000, 180000000);
-    latitude->setValue(39977680);
-    longitude->setValue(116316417);
-    businessHours->setText(QStringLiteral("00:00-24:00"));
-    count->setRange(1, 100);
-    count->setValue(4);
-    chargerType->addItem(QStringLiteral("慢充"), 0);
-    chargerType->addItem(QStringLiteral("快充"), 1);
-    powerWatt->setRange(1000, 250000);
-    powerWatt->setValue(60000);
-    connectorStandard->setText(QStringLiteral("GB/T 20234.3"));
-    adcode->setText(QStringLiteral("110108"));
-    form->addRow(QStringLiteral("站点编码"), code);
-    form->addRow(QStringLiteral("站点名称"), name);
-    form->addRow(QStringLiteral("地址"), address);
-    form->addRow(QStringLiteral("行政区编码"), adcode);
-    form->addRow(QStringLiteral("纬度(E6)"), latitude);
-    form->addRow(QStringLiteral("经度(E6)"), longitude);
-    form->addRow(QStringLiteral("营业时间"), businessHours);
-    form->addRow(QStringLiteral("初始桩数"), count);
-    form->addRow(QStringLiteral("初始桩类型"), chargerType);
-    form->addRow(QStringLiteral("单桩功率(W)"), powerWatt);
-    form->addRow(QStringLiteral("接口标准"), connectorStandard);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->setContentsMargins(24, 24, 24, 24);
+    form->setSpacing(16);
+    auto* hint = new QLabel(description);
+    hint->setTextFormat(Qt::PlainText);
+    hint->setWordWrap(true);
+    form->addRow(hint);
+    auto* input = new QLineEdit;
+    input->setObjectName("operationReason");
+    input->setMaxLength(200);
+    input->setPlaceholderText(QStringLiteral("填写操作原因，至少 2 个字"));
+    form->addRow(QStringLiteral("操作原因"), input);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("确认操作"));
+    buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));
+    buttons->button(QDialogButtonBox::Ok)->setEnabled(false);
     form->addRow(buttons);
+    connect(
+        input, &QLineEdit::textChanged, &dialog,
+        [input, buttons] {
+            buttons->button(QDialogButtonBox::Ok)->setEnabled(input->text().trimmed().size() >= 2);
+        });
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    if (dialog.exec() != QDialog::Accepted) return;
-    if (code->text().trimmed().isEmpty() || name->text().trimmed().isEmpty() ||
-        address->text().trimmed().isEmpty() || adcode->text().trimmed().isEmpty() ||
-        businessHours->text().trimmed().isEmpty() ||
-        connectorStandard->text().trimmed().isEmpty()) {
-        showApiError(QStringLiteral("站点编码、名称、地址、行政区编码、营业时间和接口标准不能为空"));
-        return;
-    }
-    QJsonObject initialCharger;
-    initialCharger.insert(QStringLiteral("count"), count->value());
-    initialCharger.insert(QStringLiteral("chargerType"), chargerType->currentData().toInt());
-    initialCharger.insert(QStringLiteral("powerWatt"), powerWatt->value());
-    initialCharger.insert(QStringLiteral("connectorStandard"), connectorStandard->text().trimmed());
-
-    QJsonObject body;
-    body.insert(QStringLiteral("code"), code->text().trimmed());
-    body.insert(QStringLiteral("name"), name->text().trimmed());
-    body.insert(QStringLiteral("address"), address->text().trimmed());
-    body.insert(QStringLiteral("adcode"), adcode->text().trimmed());
-    body.insert(QStringLiteral("latitudeE6"), latitude->value());
-    body.insert(QStringLiteral("longitudeE6"), longitude->value());
-    body.insert(QStringLiteral("businessHours"), businessHours->text().trimmed());
-    body.insert(QStringLiteral("initialCharger"), initialCharger);
-
-    auto* reply = apiClient_->postJson(QStringLiteral("admin/stations"), body, true);
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
-        const auto bodyBytes = reply->readAll();
-        if (reply->error() != QNetworkReply::NoError) {
-            statusBar()->showMessage(requestFailureText(reply, bodyBytes), 6000);
-            reply->deleteLater();
-            return;
-        }
-        QString error;
-        extractEnvelopeObject(bodyBytes, &error);
-        if (!error.isEmpty()) {
-            statusBar()->showMessage(error, 6000);
-            reply->deleteLater();
-            return;
-        }
-        refreshAllData();
-        statusBar()->showMessage(QStringLiteral("充电站已提交到后端。"), 3000);
-        reply->deleteLater();
-    });
+    if (dialog.exec() != QDialog::Accepted)
+        return false;
+    *reason = input->text().trimmed();
+    return api_.hasSession();
 }
-
+void AdminMainWindow::mutate(const QString& method, const QString& path, const QJsonObject& body,
+                             int page)
+{
+    if (!api_.hasSession())
+        return;
+    setBusy(true);
+    auto callback = [this, page](AdminReply reply)
+    {
+        setBusy(false);
+        notify(reply.ok() ? QStringLiteral("操作已完成，列表正在更新") : reply.message,
+               !reply.ok());
+        if (reply.ok() || reply.httpStatus == 409)
+        {
+            if (page == 1)
+            {
+                catalog_.clear();
+                loadCatalog();
+                refreshStations();
+            }
+            else if (page == 2)
+                refreshChargers();
+            else if (page == 3)
+                refreshUsers();
+        }
+    };
+    if (method == "PUT")
+        api_.putJson(path, body, std::move(callback), true);
+    else
+        api_.postJson(path, body, std::move(callback), true);
+}
+void AdminMainWindow::addStation()
+{
+    if (operationBusy_)
+        return;
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("新增充电站"));
+    dialog.setMinimumWidth(470);
+    auto* form = new QFormLayout(&dialog);
+    form->setContentsMargins(24, 20, 24, 20);
+    form->setSpacing(10);
+    auto field = [&form](const QString& label, int max, const QString& value = QString())
+    {
+        auto* input = new QLineEdit(value);
+        input->setMaxLength(max);
+        form->addRow(label, input);
+        return input;
+    };
+    auto* code = field(QStringLiteral("站点编码"), 16);
+    auto* name = field(QStringLiteral("站点名称"), 64);
+    auto* address = field(QStringLiteral("地址"), 128);
+    auto* adcode = field(QStringLiteral("行政区编码"), 6);
+    auto* latitude = new QDoubleSpinBox;
+    latitude->setDecimals(6);
+    latitude->setRange(-90, 90);
+    latitude->setSuffix(QStringLiteral(" °"));
+    auto* longitude = new QDoubleSpinBox;
+    longitude->setDecimals(6);
+    longitude->setRange(-180, 180);
+    longitude->setSuffix(QStringLiteral(" °"));
+    form->addRow(QStringLiteral("纬度"), latitude);
+    form->addRow(QStringLiteral("经度"), longitude);
+    auto* hours = field(QStringLiteral("营业时间"), 64, QStringLiteral("00:00-24:00"));
+    auto* count = new QSpinBox;
+    count->setRange(1, 100);
+    count->setValue(4);
+    form->addRow(QStringLiteral("初始电桩数量"), count);
+    auto* type = new QComboBox;
+    type->addItem(QStringLiteral("交流慢充"), 0);
+    type->addItem(QStringLiteral("直流快充"), 1);
+    type->setCurrentIndex(1);
+    form->addRow(QStringLiteral("电桩类型"), type);
+    auto* power = new QDoubleSpinBox;
+    power->setDecimals(3);
+    power->setRange(0.001, 1000);
+    power->setValue(60);
+    power->setSuffix(" kW");
+    form->addRow(QStringLiteral("单桩功率"), power);
+    auto* connector = field(QStringLiteral("接口标准"), 32, QStringLiteral("GB/T 20234.3"));
+    auto* error = new QLabel;
+    error->setWordWrap(true);
+    error->setStyleSheet("color:#B42318;");
+    form->addRow(error);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
+    buttons->button(QDialogButtonBox::Save)->setText(QStringLiteral("创建站点"));
+    buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog,
+            [&]
+            {
+                if (code->text().trimmed().size() < 2 || name->text().trimmed().isEmpty() ||
+                    address->text().trimmed().isEmpty() ||
+                    !QRegularExpression("^[0-9]{6}$").match(adcode->text()).hasMatch() ||
+                    hours->text().trimmed().isEmpty() || connector->text().trimmed().isEmpty())
+                {
+                    error->setText(
+                        QStringLiteral("请完整填写站点信息；编码至少 2 位，行政区编码为 6 位数字"));
+                    return;
+                }
+                dialog.accept();
+            });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted || !api_.hasSession())
+        return;
+    mutate("POST", "admin/stations",
+           {{"code", code->text().trimmed()},
+            {"name", name->text().trimmed()},
+            {"address", address->text().trimmed()},
+            {"adcode", adcode->text()},
+            {"latitudeE6", qRound64(latitude->value() * 1000000)},
+            {"longitudeE6", qRound64(longitude->value() * 1000000)},
+            {"businessHours", hours->text().trimmed()},
+            {"initialCharger", QJsonObject{{"count", count->value()},
+                                           {"chargerType", type->currentData().toInt()},
+                                           {"powerWatt", qRound64(power->value() * 1000)},
+                                           {"connectorStandard", connector->text().trimmed()}}}},
+           1);
+}
 void AdminMainWindow::removeStation()
 {
-    const int row = stationTable_->currentRow();
-    if (row < 0) {
-        showApiError(QStringLiteral("请先选择一个充电站"));
+    if (operationBusy_)
+        return;
+    const auto id = selectedId(stationTable_);
+    const auto it = std::find_if(stations_.cbegin(), stations_.cend(),
+                                 [id](const Station& s) { return s.id == id; });
+    if (it == stations_.cend())
+    {
+        notify(QStringLiteral("请先选择站点"), true);
         return;
     }
-    const int id = stationTable_->item(row, 0)->text().toInt();
-    const auto it = std::find_if(stations_.begin(), stations_.end(),
-                                 [id](const Station& station) { return station.id == id; });
-    if (it == stations_.end()) return;
-    const auto confirm = QMessageBox::question(
-        this, QStringLiteral("停用站点"),
-        QStringLiteral("确认停用站点 %1 吗？").arg(it->name),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (confirm != QMessageBox::Yes) return;
-
-    QJsonObject body;
-    body.insert(QStringLiteral("reason"), QStringLiteral("界面停用站点"));
-    body.insert(QStringLiteral("version"), it->version);
-    auto* reply = apiClient_->postJson(QStringLiteral("admin/stations/%1/disable").arg(id), body,
-                                       true);
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
-        const auto bodyBytes = reply->readAll();
-        if (reply->error() != QNetworkReply::NoError) {
-            statusBar()->showMessage(requestFailureText(reply, bodyBytes), 6000);
-            reply->deleteLater();
-            return;
-        }
-        QString error;
-        extractEnvelopeObject(bodyBytes, &error);
-        if (!error.isEmpty()) {
-            statusBar()->showMessage(error, 6000);
-            reply->deleteLater();
-            return;
-        }
-        refreshAllData();
-        statusBar()->showMessage(QStringLiteral("站点已提交停用请求。"), 3000);
-        reply->deleteLater();
-    });
+    const auto station = *it;
+    QString reason;
+    if (!confirmReason(station.enabled ? QStringLiteral("停用站点") : QStringLiteral("启用站点"),
+                       QStringLiteral("确认变更「%1」的运营状态？").arg(station.name), &reason))
+        return;
+    mutate("POST",
+           QStringLiteral("admin/stations/%1/%2")
+               .arg(station.id)
+               .arg(station.enabled ? "disable" : "enable"),
+           {{"version", station.version}, {"reason", reason}}, 1);
 }
-
 void AdminMainWindow::updateChargerStatus()
 {
-    const int row = chargerTable_->currentRow();
-    if (row < 0) {
-        showApiError(QStringLiteral("请先选择一个电桩"));
+    if (operationBusy_)
+        return;
+    const auto id = selectedId(chargerTable_);
+    const auto it = std::find_if(chargers_.cbegin(), chargers_.cend(),
+                                 [id](const Charger& c) { return c.id == id; });
+    if (it == chargers_.cend())
+    {
+        notify(QStringLiteral("请先选择电桩"), true);
         return;
     }
-    const QString code = chargerTable_->item(row, 0)->text();
-    const auto it = std::find_if(chargers_.begin(), chargers_.end(),
-                                 [&code](const Charger& charger) { return charger.code == code; });
-    if (it == chargers_.end()) return;
-    const QStringList states = {QStringLiteral("空闲"), QStringLiteral("使用中"),
-                                QStringLiteral("故障"), QStringLiteral("已停用")};
+    const auto charger = *it;
     bool ok = false;
-    int currentIndex = states.indexOf(it->status);
-    if (currentIndex < 0) currentIndex = 0;
+    const QStringList states{QStringLiteral("空闲"), QStringLiteral("故障"),
+                             QStringLiteral("已停用")};
     const auto selected = QInputDialog::getItem(this, QStringLiteral("修改电桩状态"),
-                                                QStringLiteral("状态"), states,
-                                                currentIndex, false, &ok);
-    if (!ok) return;
-    int targetStatus = 0;
-    if (selected == QStringLiteral("使用中")) targetStatus = 1;
-    if (selected == QStringLiteral("故障")) targetStatus = 2;
-    else if (selected == QStringLiteral("已停用")) targetStatus = 3;
-
-    QJsonObject body;
-    body.insert(QStringLiteral("targetStatus"), targetStatus);
-    body.insert(QStringLiteral("reason"), QStringLiteral("界面修改电桩状态"));
-    body.insert(QStringLiteral("version"), it->version);
-    auto* reply = apiClient_->putJson(QStringLiteral("admin/chargers/%1/status").arg(it->id), body,
-                                      true);
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
-        const auto bodyBytes = reply->readAll();
-        if (reply->error() != QNetworkReply::NoError) {
-            statusBar()->showMessage(requestFailureText(reply, bodyBytes), 6000);
-            reply->deleteLater();
-            return;
-        }
-        QString error;
-        extractEnvelopeObject(bodyBytes, &error);
-        if (!error.isEmpty()) {
-            statusBar()->showMessage(error, 6000);
-            reply->deleteLater();
-            return;
-        }
-        refreshAllData();
-        statusBar()->showMessage(QStringLiteral("电桩状态已提交到后端。"), 3000);
-        reply->deleteLater();
-    });
+                                                QStringLiteral("目标状态"), states, 0, false, &ok);
+    if (!ok || !api_.hasSession())
+        return;
+    const int target = selected == states[0] ? 0 : selected == states[1] ? 2 : 3;
+    QString reason;
+    if (!confirmReason(QStringLiteral("确认状态变更"),
+                       QStringLiteral("将 %1 的状态改为「%2」").arg(charger.code, selected),
+                       &reason))
+        return;
+    mutate("PUT", QStringLiteral("admin/chargers/%1/status").arg(charger.id),
+           {{"targetStatus", target}, {"version", charger.version}, {"reason", reason}}, 2);
 }
-
 void AdminMainWindow::toggleUserStatus()
 {
-    const int row = userTable_->currentRow();
-    if (row < 0) {
-        showApiError(QStringLiteral("请先选择一个用户"));
+    if (operationBusy_)
+        return;
+    const auto id = selectedId(userTable_);
+    if (id <= 0)
+    {
+        notify(QStringLiteral("请先选择用户"), true);
         return;
     }
-    const int id = userTable_->item(row, 0)->text().toInt();
-    const auto it = std::find_if(users_.begin(), users_.end(),
-                                 [id](const User& user) { return user.id == id; });
-    if (it == users_.end()) return;
-
-    const int targetStatus = it->status == QStringLiteral("冻结") ? 1 : 0;
-    QJsonObject body;
-    body.insert(QStringLiteral("status"), targetStatus);
-    body.insert(QStringLiteral("reason"), QStringLiteral("界面修改用户状态"));
-    body.insert(QStringLiteral("version"), it->version);
-    auto* reply = apiClient_->putJson(QStringLiteral("admin/users/%1/status").arg(id), body,
-                                      true);
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
-        const auto bodyBytes = reply->readAll();
-        if (reply->error() != QNetworkReply::NoError) {
-            statusBar()->showMessage(requestFailureText(reply, bodyBytes), 6000);
-            reply->deleteLater();
-            return;
-        }
-        QString error;
-        extractEnvelopeObject(bodyBytes, &error);
-        if (!error.isEmpty()) {
-            statusBar()->showMessage(error, 6000);
-            reply->deleteLater();
-            return;
-        }
-        refreshUsers();
-        statusBar()->showMessage(QStringLiteral("用户状态已提交到后端。"), 3000);
-        reply->deleteLater();
-    });
+    setBusy(true);
+    api_.get(QStringLiteral("admin/users/%1").arg(id), {},
+             [this, id](AdminReply reply)
+             {
+                 if (!reply.ok())
+                 {
+                     setBusy(false);
+                     notify(reply.message, true);
+                     return;
+                 }
+                 const auto data = reply.data.toObject();
+                 const qint64 version = data.value("version").toInteger();
+                 const int status = data.value("status").toInt(-1);
+                 if (version <= 0 || (status != 0 && status != 1))
+                 {
+                     setBusy(false);
+                     notify(QStringLiteral("用户详情不完整，请刷新后重试"), true);
+                     return;
+                 }
+                 const int target = status == 0 ? 1 : 0;
+                 QString reason;
+                 const QString title =
+                     target == 0 ? QStringLiteral("冻结用户") : QStringLiteral("解冻用户");
+                 QString description = QStringLiteral("确认%1 #%2？").arg(title).arg(id);
+                 if (data.value("hasActiveFlow").toBool())
+                     description +=
+                         QStringLiteral("\n该用户有进行中的订单，冻结后仍保留已有订单。");
+                 const bool confirmed = confirmReason(title, description, &reason);
+                 setBusy(false);
+                 if (!confirmed)
+                     return;
+                 mutate("PUT", QStringLiteral("admin/users/%1/status").arg(id),
+                        {{"status", target}, {"version", version}, {"reason", reason}}, 3);
+             });
 }
-
 void AdminMainWindow::restartCharger()
 {
-    const int row = chargerTable_->currentRow();
-    if (row < 0) {
-        showApiError(QStringLiteral("请先选择一个电桩"));
+    if (operationBusy_)
+        return;
+    const auto id = selectedId(chargerTable_);
+    const auto it = std::find_if(chargers_.cbegin(), chargers_.cend(),
+                                 [id](const Charger& c) { return c.id == id; });
+    if (it == chargers_.cend())
+    {
+        notify(QStringLiteral("请先选择电桩"), true);
         return;
     }
-    const int id = chargerTable_->item(row, 0)->text().toInt();
-    const auto it = std::find_if(chargers_.begin(), chargers_.end(),
-                                 [id](const Charger& charger) { return charger.id == id; });
-    if (it == chargers_.end()) return;
-
-    bool ok = false;
-    const auto reason = QInputDialog::getText(this, QStringLiteral("远程重启"),
-                                              QStringLiteral("请输入重启原因"),
-                                              QLineEdit::Normal,
-                                              QStringLiteral("远程恢复测试"), &ok).trimmed();
-    if (!ok || reason.isEmpty()) return;
-
-    QJsonObject body;
-    body.insert(QStringLiteral("confirm"), true);
-    body.insert(QStringLiteral("reason"), reason);
-    auto* reply = apiClient_->postJson(
-        QStringLiteral("admin/chargers/%1/restart-commands").arg(it->id), body, true);
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
-        const auto bodyBytes = reply->readAll();
-        const auto failure = requestFailureText(reply, bodyBytes);
-        if (!failure.isEmpty()) {
-            statusBar()->showMessage(failure, 6000);
-            reply->deleteLater();
-            return;
-        }
-        refreshAllData();
-        statusBar()->showMessage(QStringLiteral("已向后端提交重启请求。"), 3000);
-        reply->deleteLater();
-    });
+    const auto charger = *it;
+    QString reason;
+    if (!confirmReason(QStringLiteral("远程重启"),
+                       QStringLiteral("重启 %1 将暂时中断设备服务，确认继续？").arg(charger.code),
+                       &reason))
+        return;
+    reauthenticate(
+        [this, charger, reason]
+        {
+            setBusy(true);
+            api_.postJson(
+                QStringLiteral("admin/chargers/%1/restart-commands").arg(charger.id),
+                {{"confirm", true}, {"reason", reason}},
+                [this](AdminReply reply)
+                {
+                    if (!reply.ok())
+                    {
+                        setBusy(false);
+                        if (reply.httpStatus == 403)
+                            reauthExpiresAt_ = 0;
+                        notify(reply.message, true);
+                        return;
+                    }
+                    const auto command = reply.data.toObject().value("commandNo").toString();
+                    if (command.isEmpty())
+                    {
+                        setBusy(false);
+                        notify(QStringLiteral("重启已提交，但未返回指令编号；请刷新查看设备状态"),
+                               true);
+                        return;
+                    }
+                    notify(QStringLiteral("重启指令已提交，正在等待设备响应…"));
+                    pollCommand(command, 0);
+                },
+                true);
+        });
 }
-
+void AdminMainWindow::pollCommand(const QString& commandNo, int attempts)
+{
+    api_.get(
+        QStringLiteral("admin/device-commands/%1").arg(commandNo), {},
+        [this, commandNo, attempts](AdminReply reply)
+        {
+            if (!reply.ok())
+            {
+                setBusy(false);
+                notify(QStringLiteral("指令已提交，状态查询失败：%1").arg(reply.message), true);
+                return;
+            }
+            const auto status = reply.data.toObject().value("status").toString();
+            if (status == "SUCCEEDED" || status == "FAILED" || status == "TIMED_OUT")
+            {
+                setBusy(false);
+                notify(status == "SUCCEEDED" ? QStringLiteral("设备重启成功")
+                                             : QStringLiteral("设备重启未成功，请检查设备后重试"),
+                       status != "SUCCEEDED");
+                refreshChargers();
+                return;
+            }
+            if (attempts >= 30)
+            {
+                setBusy(false);
+                notify(QStringLiteral("指令 %1 仍在处理中，请稍后刷新设备状态").arg(commandNo));
+                refreshChargers();
+                return;
+            }
+            const auto session = sessionGeneration_;
+            QTimer::singleShot(1000, this,
+                               [this, commandNo, attempts, session]
+                               {
+                                   if (session == sessionGeneration_ && api_.hasSession())
+                                       pollCommand(commandNo, attempts + 1);
+                               });
+        });
+}
+void AdminMainWindow::runPrediction()
+{
+    if (operationBusy_)
+        return;
+    setBusy(true);
+    api_.postJson(
+        "admin/ml-tasks", {{"taskType", "PREDICT"}, {"horizonHours", QJsonArray{1, 6, 24}}},
+        [this](AdminReply reply)
+        {
+            if (!reply.ok())
+            {
+                setBusy(false);
+                notify(reply.message, true);
+                return;
+            }
+            const auto task = reply.data.toObject().value("taskNo").toString();
+            if (task.isEmpty())
+            {
+                setBusy(false);
+                notify(QStringLiteral("预测请求已提交，但未返回任务编号；请稍后查询结果"), true);
+                return;
+            }
+            notify(QStringLiteral("预测任务已提交，正在生成结果…"));
+            pollPrediction(task, 0);
+        },
+        true);
+}
+void AdminMainWindow::pollPrediction(const QString& taskNo, int attempts)
+{
+    api_.get(QStringLiteral("admin/ml-tasks/%1").arg(taskNo), {},
+             [this, taskNo, attempts](AdminReply reply)
+             {
+                 if (!reply.ok())
+                 {
+                     setBusy(false);
+                     notify(QStringLiteral("任务已提交，状态查询失败：%1").arg(reply.message),
+                            true);
+                     return;
+                 }
+                 const auto status = reply.data.toObject().value("status").toString();
+                 if (status == "SUCCEEDED")
+                 {
+                     setBusy(false);
+                     notify(QStringLiteral("预测已完成，正在更新结果"));
+                     refreshPredictions();
+                     return;
+                 }
+                 if (status == "FAILED" || status == "TIMED_OUT")
+                 {
+                     setBusy(false);
+                     notify(QStringLiteral("预测任务未成功，请检查服务后重试"), true);
+                     return;
+                 }
+                 if (attempts >= 30)
+                 {
+                     setBusy(false);
+                     notify(QStringLiteral("任务 %1 仍在运行，请稍后查询结果").arg(taskNo));
+                     return;
+                 }
+                 const auto session = sessionGeneration_;
+                 QTimer::singleShot(1000, this,
+                                    [this, taskNo, attempts, session]
+                                    {
+                                        if (session == sessionGeneration_ && api_.hasSession())
+                                            pollPrediction(taskNo, attempts + 1);
+                                    });
+             });
+}
 } // namespace ncs::admin

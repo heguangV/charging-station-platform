@@ -1,46 +1,55 @@
 #pragma once
-
 #include <QJsonObject>
+#include <QJsonValue>
+#include <QNetworkReply>
 #include <QObject>
+#include <QSet>
 #include <QUrl>
 #include <QUrlQuery>
-
+#include <functional>
 class QNetworkAccessManager;
-class QNetworkReply;
-class QNetworkRequest;
-class QUrlQuery;
-
 namespace ncs::admin
 {
-
+struct AdminReply
+{
+    QJsonValue data;
+    QString message;
+    int httpStatus = 0;
+    int code = -1;
+    bool ok() const
+    {
+        return httpStatus >= 200 && httpStatus < 300 && code == 0;
+    }
+};
 class AdminApiClient final : public QObject
 {
     Q_OBJECT
-
   public:
-    explicit AdminApiClient(QObject* parent = nullptr);
-
-    void setBaseUrl(const QUrl& baseUrl);
-    void setAccessToken(const QString& accessToken);
-    const QString& accessToken() const noexcept;
-    void login(const QString& username, const QString& password, const QString& deviceId);
-    QNetworkReply* get(const QString& relativePath, const QUrlQuery& query = {});
-    QNetworkReply* postJson(const QString& relativePath, const QJsonObject& body,
-                            bool idempotent = false);
-    QNetworkReply* putJson(const QString& relativePath, const QJsonObject& body,
-                           bool idempotent = false);
-
+    using Handler = std::function<void(AdminReply)>;
+    explicit AdminApiClient(QUrl baseUrl, QObject* parent = nullptr);
+    void setAccessToken(const QString& token);
+    void clearSession();
+    bool hasSession() const
+    {
+        return !accessToken_.isEmpty();
+    }
+    void get(const QString& path, const QUrlQuery& query, Handler done);
+    void postJson(const QString& path, const QJsonObject& body, Handler done,
+                  bool idempotent = false);
+    void putJson(const QString& path, const QJsonObject& body, Handler done,
+                 bool idempotent = false);
+    static AdminReply parseReply(int status, QNetworkReply::NetworkError error,
+                                 const QByteArray& body);
   signals:
-    void loginSucceeded(const QString& token);
-    void requestFailed(const QString& message);
+    void sessionExpired();
 
   private:
-    QNetworkRequest buildRequest(const QString& relativePath, bool idempotent) const;
-    QNetworkReply* sendJson(const QString& relativePath, const QByteArray& method,
-                            const QJsonObject& body, bool idempotent);
+    void send(const QByteArray& method, const QString& path, const QUrlQuery& query,
+              const QJsonObject& body, Handler done, bool idempotent);
     QNetworkAccessManager* manager_;
     QUrl baseUrl_;
     QString accessToken_;
+    QSet<QNetworkReply*> pending_;
+    quint64 sessionGeneration_ = 0;
 };
-
 } // namespace ncs::admin

@@ -1,354 +1,312 @@
 #include "admin_main_window.h"
-
-#include "admin_api_client.h"
+#include "admin_charts.h"
 #include "admin_main_window_utils.h"
+#include "admin_page_status.h"
 #include "login_widget.h"
-
+#include <QApplication>
 #include <QComboBox>
-#include <QDialog>
-#include <QDialogButtonBox>
-#include <QDoubleSpinBox>
-#include <QFormLayout>
-#include <QGroupBox>
+#include <QDateTime>
+#include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
-#include <QHeaderView>
-#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
-#include <QMessageBox>
-#include <QNetworkReply>
+#include <QPainter>
 #include <QPushButton>
-#include <QSpinBox>
+#include <QScrollArea>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QTableWidget>
+#include <QTimer>
 #include <QVBoxLayout>
-
-#include <algorithm>
-
 namespace ncs::admin
 {
-
-AdminMainWindow::AdminMainWindow(QWidget* parent)
-    : QMainWindow(parent), loginPage_(nullptr), pages_(nullptr), workspacePages_(nullptr),
-      navigation_(nullptr),
-      stationTable_(nullptr), chargerTable_(nullptr), userTable_(nullptr),
-      stationSearch_(nullptr), chargerSearch_(nullptr), userSearch_(nullptr),
-      chargerStatus_(nullptr), statusLabel_(nullptr), dashboardTodayRevenue_(nullptr),
-      dashboardMonthRevenue_(nullptr), dashboardOnlineCharger_(nullptr),
-      dashboardRegisteredUser_(nullptr), dashboardIdleCharger_(nullptr),
-      dashboardInUseCharger_(nullptr), dashboardFaultCharger_(nullptr),
-      dashboardHealthScore_(nullptr), dashboardRevenueTable_(nullptr),
-      predictionTable_(nullptr), apiClient_(new AdminApiClient(this))
+namespace
 {
-    setWindowFlags(Qt::Window | Qt::WindowMinimizeButtonHint | Qt::WindowMaximizeButtonHint |
-                   Qt::WindowCloseButtonHint);
-    setWindowTitle(QStringLiteral("NCS 充电桩运营管理端"));
-    setMinimumSize(960, 600);
-    resize(1440, 900);
+QIcon navIcon(int index)
+{
+    QPixmap pix(44, 44);
+    pix.setDevicePixelRatio(2);
+    pix.fill(Qt::transparent);
+    QPainter p(&pix);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(QColor("#4C7160"), 1.5));
+    if (index == 0)
+    {
+        for (int i = 0; i < 4; ++i)
+            p.drawRoundedRect(QRectF(3 + (i % 2) * 9, 3 + (i / 2) * 9, 6, 6), 1.5, 1.5);
+    }
+    else if (index == 1)
+    {
+        p.drawRoundedRect(QRectF(4, 3, 13, 16), 2, 2);
+        p.drawLine(7, 7, 14, 7);
+        p.drawLine(7, 11, 14, 11);
+    }
+    else if (index == 2)
+    {
+        p.drawRoundedRect(QRectF(5, 2, 11, 18), 2, 2);
+        p.drawLine(12, 6, 9, 11);
+        p.drawLine(9, 11, 13, 11);
+        p.drawLine(13, 11, 10, 16);
+    }
+    else if (index == 3)
+    {
+        p.drawEllipse(QRectF(7, 3, 8, 8));
+        p.drawArc(QRectF(3, 12, 16, 13), 0, 180 * 16);
+    }
+    else
+    {
+        p.drawLine(3, 18, 19, 18);
+        p.drawLine(3, 18, 3, 3);
+        p.drawPolyline(QPolygonF{{4, 14}, {9, 10}, {13, 12}, {18, 5}});
+    }
+    return QIcon(pix);
+}
+QPushButton* secondary(const QString& text)
+{
+    auto* b = new QPushButton(text);
+    b->setObjectName("secondaryButton");
+    return b;
+}
+} // namespace
+AdminMainWindow::AdminMainWindow(AdminApiClient& api, const QString& environment, QWidget* parent)
+    : QMainWindow(parent), api_(api)
+{
+    setWindowTitle(QStringLiteral("NCS 充电运营中心"));
+    setMinimumSize(1040, 680);
+    resize(1360, 880);
     styleApplication();
-    buildLoginPage();
-    connect(apiClient_, &AdminApiClient::loginSucceeded, this, [this](const QString& token) {
-        apiClient_->setAccessToken(token);
-        openWorkspace();
-    });
-    connect(apiClient_, &AdminApiClient::requestFailed, this, [this](const QString& message) {
-        loginPage_->setBusy(false);
-        loginPage_->showError(message);
-    });
-    buildWorkspace();
-    setCentralWidget(pages_);
+    loginPage_ = new LoginWidget;
+    connect(loginPage_, &LoginWidget::loginRequested, this, &AdminMainWindow::handleLogin);
+    buildWorkspace(environment);
+    connect(&api_, &AdminApiClient::sessionExpired, this,
+            [this] { returnToLogin(QStringLiteral("登录已过期，请重新登录")); });
     pages_->setCurrentIndex(0);
 }
-
 void AdminMainWindow::styleApplication()
 {
     setStyleSheet(QStringLiteral(R"(
-        QMainWindow, QWidget { background: #f4f7fb; color: #1f2937; font-size: 14px; }
-        #loginPage { background: #f4f7fb; }
-        #loginTitle { color: #12355b; font-size: 28px; font-weight: 700; }
-        #loginSubtitle { color: #64748b; font-size: 15px; }
-        #loginError { color: #b42318; min-height: 22px; }
-        #sidebar { background: #12355b; }
-        #brand { color: white; font-size: 20px; font-weight: 700; padding: 18px 12px; }
-        QListWidget { border: none; background: transparent; color: #dce8f5; outline: none; }
-        QListWidget::item { padding: 14px 16px; border-radius: 5px; }
-        QListWidget::item:selected { background: #1e6a9e; color: white; }
-        #pageTitle { color: #12355b; font-size: 24px; font-weight: 700; }
-        #metricCard { background: white; border: 1px solid #e2e8f0; border-radius: 7px; }
-        #metricTitle { color: #64748b; }
-        #metricValue { color: #12355b; font-size: 26px; font-weight: 700; }
-        QLineEdit, QComboBox, QDoubleSpinBox, QSpinBox { background: white; border: 1px solid #cbd5e1;
-            border-radius: 5px; padding: 8px; }
-        QPushButton { background: #1769aa; color: white; border: none; border-radius: 5px;
-            padding: 9px 16px; }
-        QPushButton:hover { background: #125486; }
-        QPushButton#danger { background: #c9372c; }
-        QTableWidget { background: white; border: 1px solid #dbe3ec; gridline-color: #edf1f5; }
-        QHeaderView::section { background: #eef4f9; color: #334155; padding: 9px; border: none; }
-        QTableWidget::item { padding: 7px; }
-    )"));
+QWidget {font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif;font-size:14px;color:#182B39;background:transparent;}
+QMainWindow,QDialog {background:#F5F6F8;} QLabel {background:transparent;} QLabel#muted {color:#75828B;font-size:12px;}
+QFrame#sidebar,QFrame#loginPanel {background:#FFFFFF;border:1px solid #E6EBEE;border-radius:20px;}
+QFrame#loginPanel {border-radius:24px;} QLabel#brandMark {background:#EF8B3A;color:white;border-radius:8px;padding:8px 12px;font-weight:800;font-size:18px;}
+QLabel#loginTitle {font-size:28px;font-weight:800;} QLabel#loginHeroTitle {font-size:34px;font-weight:800;}
+QLabel#loginBrand {color:#23794E;font-size:16px;font-weight:700;} QLabel#loginError {color:#B42318;font-size:13px;}
+QLabel#pageTitle {font-size:26px;font-weight:800;} QLabel#metricTitle {font-size:13px;color:#65717B;}
+QLabel#metricValue {font-size:28px;font-weight:800;color:#123347;} QFrame#card {background:white;border:1px solid #E5EAEE;border-radius:18px;}
+QListWidget {border:0;background:transparent;outline:none;font-size:14px;} QListWidget::item {padding:14px 10px;margin:3px 0;border-radius:12px;}
+QListWidget::item:selected {background:#EDF5E7;color:#23794E;} QListWidget::item:hover {background:#F5F8F1;}
+QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox {background:#F7F8FA;border:1px solid #E2E7EA;border-radius:10px;padding:10px 12px;selection-background-color:#23794E;}
+QLineEdit:focus,QComboBox:focus,QAbstractSpinBox:focus {border-color:#23794E;} QComboBox::down-arrow {image:url(:/admin/chevron.svg);width:12px;height:8px;} QComboBox::drop-down {border:0;width:22px;}
+QPushButton {background:#123347;color:white;border:1px solid #123347;border-radius:11px;padding:9px 16px;font-weight:600;min-height:22px;}
+QPushButton:hover {background:#20465B;} QPushButton:focus {border:1px solid #70AE62;} QPushButton:disabled {background:#EDF0F2;border-color:#EDF0F2;color:#9AA5AD;}
+QPushButton#secondaryButton {background:white;color:#344653;border:1px solid #DCE4E7;} QPushButton#secondaryButton:hover {background:#F1F6EC;border-color:#A8BFA8;}
+QPushButton#dangerButton {background:#FFF4EE;color:#AB432E;border-color:#F2D4C9;}
+QTableWidget {background:white;alternate-background-color:#FAFBFC;border:1px solid #E5EAEE;border-radius:12px;selection-background-color:#ECF5E5;selection-color:#183328;outline:0;}
+QTableWidget::item {padding:9px 8px;border-bottom:1px solid #F0F3F5;} QHeaderView::section {background:#F6F8F9;color:#6A7984;border:0;padding:12px 8px;font-size:12px;font-weight:600;}
+QScrollArea {border:0;} QScrollBar:vertical {background:#F2F4F5;width:8px;margin:0;} QScrollBar::handle:vertical {background:#CBD6D3;border-radius:4px;min-height:24px;}
+QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical {height:0;} QProgressBar {border:0;background:#E7EFE3;border-radius:2px;} QProgressBar::chunk {background:#70AE62;border-radius:2px;}
+QStatusBar {color:#72808B;background:#F5F6F8;font-size:12px;} QDialogButtonBox QPushButton {min-width:72px;} QToolTip {background:#203E30;color:white;padding:6px;border:0;}
+)"));
 }
-
-void AdminMainWindow::buildLoginPage()
+void AdminMainWindow::buildWorkspace(const QString& environment)
 {
-    loginPage_ = new LoginWidget(this);
-    connect(loginPage_, &LoginWidget::loginRequested, this, &AdminMainWindow::handleLogin);
-}
-
-void AdminMainWindow::buildWorkspace()
-{
-    pages_ = new QStackedWidget(this);
+    pages_ = new QStackedWidget;
     pages_->addWidget(loginPage_);
-
     auto* workspace = new QWidget;
-    auto* layout = new QHBoxLayout(workspace);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
-
-    auto* sidebar = new QWidget;
-    sidebar->setObjectName(QStringLiteral("sidebar"));
-    sidebar->setFixedWidth(230);
-    auto* sidebarLayout = new QVBoxLayout(sidebar);
-    sidebarLayout->setContentsMargins(12, 20, 12, 16);
-    auto* brand = new QLabel(QStringLiteral("NCS 运营中心"));
-    brand->setObjectName(QStringLiteral("brand"));
+    auto* outer = new QHBoxLayout(workspace);
+    outer->setContentsMargins(18, 18, 18, 8);
+    outer->setSpacing(18);
+    auto* sidebar = new QFrame;
+    sidebar->setObjectName("sidebar");
+    sidebar->setFixedWidth(190);
+    auto* side = new QVBoxLayout(sidebar);
+    side->setContentsMargins(14, 24, 14, 18);
+    side->setSpacing(14);
+    auto* logo = new QLabel(QStringLiteral("NCS"));
+    logo->setObjectName("brandMark");
+    side->addWidget(logo, 0, Qt::AlignLeft);
+    auto* subtitle = new QLabel(QStringLiteral("充电运营中心"));
+    subtitle->setObjectName("muted");
+    side->addWidget(subtitle);
+    side->addSpacing(18);
     navigation_ = new QListWidget;
-    navigation_->addItems({QStringLiteral("运营总览"), QStringLiteral("充电站管理"),
-                           QStringLiteral("充电桩管理"), QStringLiteral("用户管理"),
-                           QStringLiteral("智能预测")});
-    navigation_->setCurrentRow(0);
-    sidebarLayout->addWidget(brand);
-    sidebarLayout->addWidget(navigation_);
-    sidebarLayout->addStretch();
-    sidebarLayout->addWidget(new QLabel(QStringLiteral("管理员 · 联调环境")));
-
-    workspacePages_ = new QStackedWidget(workspace);
+    navigation_->setObjectName("adminNavigation");
+    const QStringList names{QStringLiteral("运营总览"), QStringLiteral("充电站"),
+                            QStringLiteral("充电桩"), QStringLiteral("用户管理"),
+                            QStringLiteral("智能预测")};
+    for (int i = 0; i < names.size(); ++i)
+        navigation_->addItem(new QListWidgetItem(navIcon(i), names[i]));
+    side->addWidget(navigation_, 1);
+    const QHash<QString, QString> environments{{"development", QStringLiteral("开发环境")},
+                                               {"test", QStringLiteral("测试环境")},
+                                               {"acceptance", QStringLiteral("验收环境")},
+                                               {"production", QStringLiteral("正式环境")}};
+    auto* env = new QLabel(environments.value(environment, environment));
+    env->setObjectName("muted");
+    side->addWidget(env);
+    auto* right = new QVBoxLayout;
+    right->setSpacing(6);
+    auto* tools = new QHBoxLayout;
+    accountLabel_ = new QLabel;
+    accountLabel_->setTextFormat(Qt::PlainText);
+    accountLabel_->setObjectName("adminAccountLabel");
+    tools->addWidget(accountLabel_, 1);
+    auto* refresh = secondary(QStringLiteral("刷新"));
+    refresh->setObjectName("refreshCurrentPage");
+    auto* password = secondary(QStringLiteral("修改密码"));
+    auto* exit = secondary(QStringLiteral("退出登录"));
+    exit->setObjectName("adminLogoutButton");
+    tools->addWidget(refresh);
+    tools->addWidget(password);
+    tools->addWidget(exit);
+    right->addLayout(tools);
+    operationMessage_ = new QLabel;
+    operationMessage_->setTextFormat(Qt::PlainText);
+    operationMessage_->setWordWrap(true);
+    operationMessage_->setObjectName("operationMessage");
+    operationMessage_->hide();
+    right->addWidget(operationMessage_);
+    workspacePages_ = new QStackedWidget;
+    workspacePages_->setObjectName("adminWorkspacePages");
     workspacePages_->addWidget(createDashboardPage());
     workspacePages_->addWidget(createStationsPage());
     workspacePages_->addWidget(createChargersPage());
     workspacePages_->addWidget(createUsersPage());
     workspacePages_->addWidget(createPredictionsPage());
-    connect(navigation_, &QListWidget::currentRowChanged, this,
-            [this](int row) { setPage(row); });
-
-    layout->addWidget(sidebar);
-    layout->addWidget(workspacePages_, 1);
+    right->addWidget(workspacePages_, 1);
+    outer->addWidget(sidebar);
+    outer->addLayout(right, 1);
     pages_->addWidget(workspace);
+    pages_->setObjectName("adminRootPages");
+    setCentralWidget(pages_);
+    connect(navigation_, &QListWidget::currentRowChanged, this,
+            [this](int row)
+            {
+                if (row < 0)
+                    return;
+                workspacePages_->setCurrentIndex(row);
+                if (api_.hasSession())
+                    refreshCurrentPage();
+            });
+    navigation_->setCurrentRow(0);
+    connect(refresh, &QPushButton::clicked, this, &AdminMainWindow::refreshCurrentPage);
+    connect(password, &QPushButton::clicked, this, &AdminMainWindow::changePassword);
+    connect(exit, &QPushButton::clicked, this, &AdminMainWindow::logout);
+    connectionLabel_ = new QLabel(QStringLiteral("未登录"));
+    statusBar()->addWidget(connectionLabel_, 1);
+    auto* clock = new QLabel;
+    statusBar()->addPermanentWidget(clock);
+    auto* timer = new QTimer(this);
+    connect(timer, &QTimer::timeout, clock,
+            [clock]
+            {
+                clock->setText(
+                    dateTimeText(QDateTime::currentSecsSinceEpoch(), "yyyy/MM/dd HH:mm:ss") +
+                    QStringLiteral("  北京时间"));
+            });
+    timer->start(1000);
 }
-
-QWidget* AdminMainWindow::createMetricCard(const QString& title, const QString& value,
-                                           const QString& detail, QLabel** valueLabelOut)
-{
-    auto* card = new QWidget;
-    card->setObjectName(QStringLiteral("metricCard"));
-    auto* layout = new QVBoxLayout(card);
-    layout->setContentsMargins(18, 16, 18, 16);
-    auto* titleLabel = new QLabel(title);
-    titleLabel->setObjectName(QStringLiteral("metricTitle"));
-    auto* valueLabel = new QLabel(value);
-    valueLabel->setObjectName(QStringLiteral("metricValue"));
-    auto* detailLabel = new QLabel(detail);
-    detailLabel->setStyleSheet(QStringLiteral("color:#64748b;"));
-    if (valueLabelOut != nullptr) *valueLabelOut = valueLabel;
-    layout->addWidget(titleLabel);
-    layout->addWidget(valueLabel);
-    layout->addWidget(detailLabel);
-    return card;
-}
-
-QWidget* AdminMainWindow::createDashboardPage()
+QWidget* AdminMainWindow::newPage(int index, const QString& title, const QString& subtitle,
+                                  QVBoxLayout** output)
 {
     auto* page = new QWidget;
     auto* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(30, 26, 30, 26);
-    layout->setSpacing(18);
-    layout->addWidget(heading(QStringLiteral("运营总览")));
-    auto* metrics = new QHBoxLayout;
-    metrics->setSpacing(14);
-    metrics->addWidget(createMetricCard(QStringLiteral("今日营收"), QStringLiteral("--"),
-                                        QStringLiteral("来自 /admin/stats/revenue"),
-                                        &dashboardTodayRevenue_));
-    metrics->addWidget(createMetricCard(QStringLiteral("本月营收"), QStringLiteral("--"),
-                                        QStringLiteral("来自 /admin/stats/revenue"),
-                                        &dashboardMonthRevenue_));
-    metrics->addWidget(createMetricCard(QStringLiteral("在线电桩"), QStringLiteral("--"),
-                                        QStringLiteral("来自 /admin/stats/charger-status"),
-                                        &dashboardOnlineCharger_));
-    metrics->addWidget(createMetricCard(QStringLiteral("注册用户"), QStringLiteral("--"),
-                                        QStringLiteral("来自 /admin/users"),
-                                        &dashboardRegisteredUser_));
-    layout->addLayout(metrics);
-
-    auto* body = new QHBoxLayout;
-    auto* revenueBox = new QGroupBox(QStringLiteral("近 7 日营收与订单"));
-    auto* revenueLayout = new QVBoxLayout(revenueBox);
-    dashboardRevenueTable_ =
-        makeTable({QStringLiteral("日期"), QStringLiteral("营收"), QStringLiteral("订单量")});
-    revenueLayout->addWidget(dashboardRevenueTable_);
-    auto* statusBox = new QGroupBox(QStringLiteral("电桩状态"));
-    auto* statusLayout = new QVBoxLayout(statusBox);
-    dashboardIdleCharger_ = new QLabel(QStringLiteral("--"));
-    dashboardInUseCharger_ = new QLabel(QStringLiteral("--"));
-    dashboardFaultCharger_ = new QLabel(QStringLiteral("--"));
-    dashboardHealthScore_ = new QLabel(QStringLiteral("--"));
-    statusLayout->addWidget(dashboardIdleCharger_);
-    statusLayout->addWidget(dashboardInUseCharger_);
-    statusLayout->addWidget(dashboardFaultCharger_);
-    statusLayout->addSpacing(12);
-    statusLayout->addWidget(dashboardHealthScore_);
-    statusLayout->addStretch();
-    body->addWidget(revenueBox, 2);
-    body->addWidget(statusBox, 1);
-    layout->addLayout(body, 1);
+    layout->setContentsMargins(6, 14, 6, 8);
+    layout->setSpacing(12);
+    layout->addWidget(heading(title));
+    auto* text = new QLabel(subtitle);
+    text->setObjectName("muted");
+    text->setWordWrap(true);
+    layout->addWidget(text);
+    states_[index] = new AdminPageStatus;
+    states_[index]->setObjectName(QStringLiteral("pageStatus%1").arg(index));
+    connect(states_[index], &AdminPageStatus::retryRequested, this,
+            &AdminMainWindow::refreshCurrentPage);
+    layout->addWidget(states_[index]);
+    *output = layout;
     return page;
 }
-
-QWidget* AdminMainWindow::createStationsPage()
+void AdminMainWindow::addPager(QVBoxLayout* layout, int page)
 {
-    auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(30, 26, 30, 26);
-    auto* toolbar = new QHBoxLayout;
-    stationSearch_ = new QLineEdit;
-    stationSearch_->setPlaceholderText(QStringLiteral("搜索站点名称或地址"));
-    auto* search = new QPushButton(QStringLiteral("搜索"));
-    auto* add = new QPushButton(QStringLiteral("新增充电站"));
-    auto* remove = new QPushButton(QStringLiteral("停用选中"));
-    remove->setObjectName(QStringLiteral("danger"));
-    toolbar->addWidget(stationSearch_, 1);
-    toolbar->addWidget(search);
-    toolbar->addStretch();
-    toolbar->addWidget(add);
-    toolbar->addWidget(remove);
-    stationTable_ = makeTable({QStringLiteral("编号"), QStringLiteral("站点名称"), QStringLiteral("地址"),
-                               QStringLiteral("单价/度"), QStringLiteral("总桩数"), QStringLiteral("空闲桩")});
-    layout->addWidget(heading(QStringLiteral("充电站管理")));
-    layout->addLayout(toolbar);
-    layout->addWidget(stationTable_, 1);
-    connect(search, &QPushButton::clicked, this, &AdminMainWindow::refreshStations);
-    connect(stationSearch_, &QLineEdit::returnPressed, this, &AdminMainWindow::refreshStations);
-    connect(add, &QPushButton::clicked, this, &AdminMainWindow::addStation);
-    connect(remove, &QPushButton::clicked, this, &AdminMainWindow::removeStation);
-    fillStationTable();
-    return page;
+    auto* row = new QHBoxLayout;
+    pageLabels_[page] = new QLabel;
+    pageLabels_[page]->setObjectName("muted");
+    previous_[page] = secondary(QStringLiteral("上一页"));
+    next_[page] = secondary(QStringLiteral("下一页"));
+    previous_[page]->setObjectName(QStringLiteral("previousPage%1").arg(page));
+    next_[page]->setObjectName(QStringLiteral("nextPage%1").arg(page));
+    row->addWidget(pageLabels_[page], 1);
+    row->addWidget(previous_[page]);
+    row->addWidget(next_[page]);
+    layout->addLayout(row);
+    connect(previous_[page], &QPushButton::clicked, this,
+            [this, page]
+            {
+                if (pageNumbers_[page] > 1)
+                    --pageNumbers_[page];
+                refreshCurrentPage();
+            });
+    connect(next_[page], &QPushButton::clicked, this,
+            [this, page]
+            {
+                ++pageNumbers_[page];
+                refreshCurrentPage();
+            });
+    updatePager(page, 0);
 }
-
-QWidget* AdminMainWindow::createChargersPage()
+void AdminMainWindow::updatePager(int page, int total)
 {
-    auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(30, 26, 30, 26);
-    auto* toolbar = new QHBoxLayout;
-    chargerSearch_ = new QLineEdit;
-    chargerSearch_->setPlaceholderText(QStringLiteral("搜索电桩编号或所属站点"));
-    chargerStatus_ = new QComboBox;
-    chargerStatus_->addItems({QStringLiteral("全部状态"), QStringLiteral("空闲"),
-                              QStringLiteral("使用中"), QStringLiteral("故障"),
-                              QStringLiteral("已停用"), QStringLiteral("重启中")});
-    auto* search = new QPushButton(QStringLiteral("筛选"));
-    auto* status = new QPushButton(QStringLiteral("修改状态"));
-    auto* restart = new QPushButton(QStringLiteral("远程重启"));
-    toolbar->addWidget(chargerSearch_, 1);
-    toolbar->addWidget(chargerStatus_);
-    toolbar->addWidget(search);
-    toolbar->addStretch();
-    toolbar->addWidget(status);
-    toolbar->addWidget(restart);
-    chargerTable_ = makeTable({QStringLiteral("编号"), QStringLiteral("站点"), QStringLiteral("类型"),
-                               QStringLiteral("功率"), QStringLiteral("状态"), QStringLiteral("累计次数")});
-    layout->addWidget(heading(QStringLiteral("充电桩管理")));
-    layout->addLayout(toolbar);
-    layout->addWidget(chargerTable_, 1);
-    connect(search, &QPushButton::clicked, this, &AdminMainWindow::refreshChargers);
-    connect(status, &QPushButton::clicked, this, &AdminMainWindow::updateChargerStatus);
-    connect(restart, &QPushButton::clicked, this, &AdminMainWindow::restartCharger);
-    fillChargerTable();
-    return page;
+    if (!pageLabels_[page])
+        return;
+    pageLabels_[page]->setText(
+        QStringLiteral("共 %1 条 · 第 %2 页").arg(total).arg(pageNumbers_[page]));
+    previous_[page]->setEnabled(pageNumbers_[page] > 1);
+    next_[page]->setEnabled(pageNumbers_[page] * 50 < total);
 }
-
-QWidget* AdminMainWindow::createUsersPage()
+void AdminMainWindow::refreshCurrentPage()
 {
-    auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(30, 26, 30, 26);
-    auto* toolbar = new QHBoxLayout;
-    userSearch_ = new QLineEdit;
-    userSearch_->setPlaceholderText(QStringLiteral("按手机号或昵称搜索"));
-    auto* search = new QPushButton(QStringLiteral("搜索"));
-    auto* toggle = new QPushButton(QStringLiteral("冻结/解冻"));
-    toolbar->addWidget(userSearch_, 1);
-    toolbar->addWidget(search);
-    toolbar->addStretch();
-    toolbar->addWidget(toggle);
-    userTable_ = makeTable({QStringLiteral("编号"), QStringLiteral("手机号"), QStringLiteral("昵称"),
-                            QStringLiteral("余额"), QStringLiteral("状态")});
-    layout->addWidget(heading(QStringLiteral("用户管理")));
-    layout->addLayout(toolbar);
-    layout->addWidget(userTable_, 1);
-    connect(search, &QPushButton::clicked, this, &AdminMainWindow::refreshUsers);
-    connect(toggle, &QPushButton::clicked, this, &AdminMainWindow::toggleUserStatus);
-    fillUserTable();
-    return page;
-}
-
-QWidget* AdminMainWindow::createPredictionsPage()
-{
-    auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(30, 26, 30, 26);
-    layout->addWidget(heading(QStringLiteral("智能负荷预测")));
-    auto* hint = new QLabel(QStringLiteral("预测数据来自 /api/v1/admin/predictions。"));
-    hint->setStyleSheet(QStringLiteral("color:#64748b;"));
-    layout->addWidget(hint);
-    predictionTable_ = makeTable({QStringLiteral("目标时段"), QStringLiteral("站点"), QStringLiteral("预测充电量"),
-                                  QStringLiteral("预测空闲桩"), QStringLiteral("峰值标记")});
-    layout->addWidget(predictionTable_, 1);
-    auto* run = new QPushButton(QStringLiteral("触发预测任务"));
-    layout->addWidget(run, 0, Qt::AlignLeft);
-    connect(run, &QPushButton::clicked, this, [this] {
+    if (!api_.hasSession() || passwordChangeRequired_)
+        return;
+    if (catalog_.isEmpty() && !catalogLoading_)
+        loadCatalog();
+    switch (workspacePages_->currentIndex())
+    {
+    case 0:
+        refreshOverview();
+        break;
+    case 1:
+        refreshStations();
+        break;
+    case 2:
+        refreshChargers();
+        break;
+    case 3:
+        refreshUsers();
+        break;
+    case 4:
         refreshPredictions();
-        statusBar()->showMessage(QStringLiteral("正在从后端刷新预测结果。"), 4000);
-    });
-    return page;
+        break;
+    }
 }
-
-void AdminMainWindow::setPage(int index)
+void AdminMainWindow::notify(const QString& text, bool error)
 {
-    if (workspacePages_ != nullptr && index >= 0 && index < workspacePages_->count())
-        workspacePages_->setCurrentIndex(index);
+    operationMessage_->setText(text);
+    operationMessage_->setStyleSheet(
+        error ? "color:#B42318;padding:8px;background:#FFF1EB;border-radius:8px;"
+              : "color:#23794E;padding:8px;background:#EEF5E7;border-radius:8px;");
+    operationMessage_->setVisible(!text.isEmpty());
 }
-
-void AdminMainWindow::handleLogin(const QString& username, const QString& password,
-                                  const QString& deviceId)
+void AdminMainWindow::setBusy(bool busy)
 {
-    loginPage_->setBusy(true);
-    loginPage_->showError({});
-    apiClient_->login(username, password, deviceId);
+    operationBusy_ = busy;
+    for (auto* b : mutationButtons_)
+        b->setEnabled(!busy);
 }
-
-void AdminMainWindow::refreshAllData()
+qint64 AdminMainWindow::selectedId(QTableWidget* table) const
 {
-    refreshOverview();
-    refreshStations();
-    refreshChargers();
-    refreshUsers();
-    refreshPredictions();
+    auto* item = table->item(table->currentRow(), 0);
+    return item ? item->data(Qt::UserRole).toLongLong() : 0;
 }
-
-void AdminMainWindow::openWorkspace()
-{
-    loginPage_->setBusy(false);
-    pages_->setCurrentIndex(1);
-    if (workspacePages_ != nullptr) workspacePages_->setCurrentIndex(0);
-    statusBar()->showMessage(QStringLiteral("后端连接成功，正在加载真实数据。"));
-    refreshAllData();
-}
-
-void AdminMainWindow::showApiError(const QString& message)
-{
-    QMessageBox::warning(this, QStringLiteral("操作提示"), message);
-}
-
 } // namespace ncs::admin

@@ -1,59 +1,37 @@
 #pragma once
-
 #include <QString>
-
 namespace ncs::admin
 {
-
 struct Station
 {
-    int id = 0;
-    QString code;
-    QString name;
-    QString address;
-    double price = 0.0;
-    int totalChargers = 0;
-    int idleChargers = 0;
-    int version = 0;
+    qint64 id = 0;
+    QString code, name, adcode;
+    bool enabled = false;
+    qint64 version = 0;
 };
-
 struct Charger
 {
-    int id = 0;
-    int stationId = 0;
-    QString code;
-    QString stationName;
-    QString type;
-    double power = 0.0;
-    QString status;
-    int totalCount = 0;
-    int version = 0;
+    qint64 id = 0, stationId = 0;
+    QString code, type, status;
+    qint64 powerWatt = 0, totalCount = 0, totalMinutes = 0, version = 0;
+    int statusCode = -1;
 };
-
 struct User
 {
-    int id = 0;
-    QString phone;
-    QString nickname;
-    QString balance;
-    QString status;
-    int version = 0;
+    qint64 id = 0, balanceCent = 0, registeredAt = 0;
+    QString phone, nickname, status;
+    int statusCode = -1;
 };
-
 struct RevenuePoint
 {
-    QString date;
-    QString revenue;
+    qint64 bucketStart = 0, amountCent = 0;
     int orders = 0;
 };
-
 struct PredictionPoint
 {
-    QString targetTime;
-    QString stationName;
-    QString energy;
-    int freeCount = 0;
+    qint64 stationId = 0, targetAt = 0, energyMwh = 0;
+    int idleCount = 0;
     QString peakFlag;
+    bool stale = false;
 };
-
 } // namespace ncs::admin

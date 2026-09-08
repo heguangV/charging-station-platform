@@ -1,3 +1,15 @@
+add_executable(ncs_order_review_tests order_review_test.cpp)
+set_target_properties(ncs_order_review_tests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+target_link_libraries(ncs_order_review_tests PRIVATE ncs::server_controller ncs::infrastructure_sqlite Qt6::Core)
+add_test(NAME ncs_order_review COMMAND ncs_order_review_tests)
+set_tests_properties(ncs_order_review PROPERTIES LABELS "contract;integration" TIMEOUT 120)
+
+add_executable(ncs_sqlite_avatar_repository_tests sqlite_avatar_repository_test.cpp)
+set_target_properties(ncs_sqlite_avatar_repository_tests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+target_link_libraries(ncs_sqlite_avatar_repository_tests PRIVATE ncs::infrastructure_sqlite Qt6::Core)
+add_test(NAME ncs_sqlite_avatar_repository COMMAND ncs_sqlite_avatar_repository_tests)
+set_tests_properties(ncs_sqlite_avatar_repository PROPERTIES LABELS "unit;repository" TIMEOUT 60)
+
 add_executable(ncs_admin_routes_tests
     admin_routes_test.cpp
 )
@@ -523,3 +535,28 @@ if(UNIX)
         set_tests_properties(ncs_check_script PROPERTIES LABELS "unit;repository")
     endif()
 endif()
+
+qt_add_executable(ncs_admin_ui_contract_tests admin_ui_contract_test.cpp admin_http_fixture.h)
+target_link_libraries(ncs_admin_ui_contract_tests PRIVATE ncs_admin_ui)
+ncs_add_admin_resources(ncs_admin_ui_contract_tests)
+ncs_set_project_warnings(ncs_admin_ui_contract_tests)
+add_test(NAME ncs_admin_ui_contract COMMAND ncs_admin_ui_contract_tests)
+set_tests_properties(ncs_admin_ui_contract PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 45 LABELS "integration;admin;ui;contract")
+add_test(NAME ncs_admin_api_smoke COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/admin_api_smoke_test.py
+    $<TARGET_FILE:ncs_server> $<TARGET_FILE:ncs_admin>)
+set_tests_properties(ncs_admin_api_smoke PROPERTIES
+    TIMEOUT 90 RUN_SERIAL TRUE LABELS "integration;admin;http;tls")
+
+add_executable(ncs_user_navigation_origin_tests
+    user_navigation_origin_test.cpp
+    ../apps/user/net/api_client.cpp
+    ../apps/user/net/api_client.h
+    ../apps/user/net/user_api.cpp
+)
+target_include_directories(ncs_user_navigation_origin_tests PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(ncs_user_navigation_origin_tests PRIVATE Qt6::Core Qt6::Network)
+set_target_properties(ncs_user_navigation_origin_tests PROPERTIES AUTOMOC ON AUTOUIC OFF AUTORCC OFF)
+add_test(NAME ncs_user_navigation_origin COMMAND ncs_user_navigation_origin_tests)
+set_tests_properties(ncs_user_navigation_origin PROPERTIES LABELS "unit;user;navigation")
