@@ -1,3 +1,6 @@
+// Outbox 事件投递器：轮询 outbox_event 待投递行，把冻结的事件载荷经 EventHub 发布给 WebSocket
+// 订阅者并标记已投递。 只在阻塞线程池运行（SQLite 不进 Crow 事件循环）；投递与落库标记非原子，以
+// publishedThisRun_ 防同进程重复投递（契约 13.5）。
 #pragma once
 
 #include "core/application/charging_repository.h"
@@ -9,7 +12,8 @@
 #include <memory>
 #include <unordered_set>
 
-namespace ncs::server::websocket {
+namespace ncs::server::websocket
+{
 
 // Polls pending outbox rows, serializes the frozen WebSocket event payloads
 // and publishes them through the hub. Runs only on a blocking-executor
@@ -21,19 +25,20 @@ namespace ncs::server::websocket {
 // retried on a later tick WITHOUT republishing: no event is delivered twice
 // within one process run (13.5), while a crash before the mark still redelivers
 // after restart (also per 13.5).
-class OutboxDispatcher final {
-public:
-    OutboxDispatcher(core::application::ChargingRepository &repository,
+class OutboxDispatcher final
+{
+  public:
+    OutboxDispatcher(core::application::ChargingRepository& repository,
                      std::shared_ptr<core::application::EventHub> hub);
 
     // Returns the number of rows marked delivered in this batch.
     std::size_t dispatchOnce(std::chrono::system_clock::time_point now);
 
-private:
+  private:
     static constexpr int kBatchLimit = 256;
     static constexpr std::chrono::seconds kRefreshThrottle{5};
 
-    core::application::ChargingRepository &repository_;
+    core::application::ChargingRepository& repository_;
     std::shared_ptr<core::application::EventHub> hub_;
     std::chrono::system_clock::time_point lastRefreshAt_{};
     std::unordered_set<std::int64_t> publishedThisRun_;

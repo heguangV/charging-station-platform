@@ -1,12 +1,17 @@
+// 结构化应用日志：按“UTC 时间、级别、模块、请求 ID”输出结构化日志行，并通过
+// sanitizeSensitiveData 过滤敏感字段；RequestLogScope 在线程内绑定请求 ID 作用域。
+// 日志按 Options.retentionDays（默认 30 天）保留，cleanupExpired() 负责清理过期文件。
 #pragma once
 
 #include <memory>
 #include <string>
 #include <string_view>
 
-namespace ncs::infrastructure::files {
+namespace ncs::infrastructure::files
+{
 
-enum class LogLevel {
+enum class LogLevel
+{
     Debug,
     Info,
     Warning,
@@ -17,23 +22,26 @@ enum class LogLevel {
 std::string_view logLevelName(LogLevel level);
 std::string sanitizeSensitiveData(std::string_view message);
 
-class RequestLogScope final {
-public:
+class RequestLogScope final
+{
+  public:
     explicit RequestLogScope(std::string requestId);
     ~RequestLogScope();
 
-    RequestLogScope(const RequestLogScope &) = delete;
-    RequestLogScope &operator=(const RequestLogScope &) = delete;
+    RequestLogScope(const RequestLogScope&) = delete;
+    RequestLogScope& operator=(const RequestLogScope&) = delete;
 
-private:
+  private:
     std::string previousRequestId_;
 };
 
 std::string_view currentRequestId();
 
-class StructuredLogger final {
-public:
-    struct Options {
+class StructuredLogger final
+{
+  public:
+    struct Options
+    {
         std::string directory;
         LogLevel minimumLevel = LogLevel::Info;
         int retentionDays = 30;
@@ -43,17 +51,14 @@ public:
     explicit StructuredLogger(Options options);
     ~StructuredLogger();
 
-    StructuredLogger(const StructuredLogger &) = delete;
-    StructuredLogger &operator=(const StructuredLogger &) = delete;
+    StructuredLogger(const StructuredLogger&) = delete;
+    StructuredLogger& operator=(const StructuredLogger&) = delete;
 
-    void log(
-        LogLevel level,
-        std::string_view module,
-        std::string_view message,
-        std::string_view requestId = {});
+    void log(LogLevel level, std::string_view module, std::string_view message,
+             std::string_view requestId = {});
     void cleanupExpired();
 
-private:
+  private:
     class Impl;
     std::unique_ptr<Impl> impl_;
 };

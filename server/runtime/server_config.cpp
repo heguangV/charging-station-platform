@@ -106,6 +106,8 @@ std::string normalizePath(const std::string_view value, const std::string_view s
     return utf8Path(QFileInfo(pathFromUtf8(value)).absoluteFilePath());
 }
 
+// 解析 CORS 白名单：逗号分隔，每项必须是仅含 scheme+host 的 http/https 源（禁止 userinfo、
+// path、query、fragment），排序后检查重复，任何违规直接抛 ConfigError 中止启动。
 std::vector<std::string> parseCorsOrigins(const std::string_view value,
                                           const std::string_view source)
 {
@@ -186,6 +188,8 @@ bool parseBoolean(const std::string_view value, const std::string_view source)
     throw ConfigError("invalid boolean value for " + std::string(source));
 }
 
+// 解析监听地址：必须是可解析的数字 IP，并拒绝未指定地址与多播地址，防止服务意外暴露在
+// 不受控的网络接口上。
 std::string parseListenAddress(const std::string_view value, const std::string_view source)
 {
     asio::error_code error;
@@ -344,6 +348,8 @@ EnvironmentLookup processEnvironment()
 
 } // namespace
 
+// 默认配置：从可执行文件位置向上最多 8 层探测 ml/worker.py 以定位资产目录，据此推导
+// 日志、数据库、TLS 证书/私钥、看板快照与 ML 模型的默认路径，不依赖 shell 启动目录。
 ServerConfig::ServerConfig()
 {
     QDir baseDirectory = QDir::current();
@@ -392,6 +398,9 @@ bool ServerConfig::demoCredentialsEnabled() const
     return environment == DeploymentEnvironment::Development;
 }
 
+// 分层解析启动配置：.env 文件提供默认值，进程环境变量覆盖，命令行参数优先级最高且同名
+// 选项不允许重复。充电倍率未显式指定时开发环境取 60、其余取 1；开发演示凭据仅允许回环
+// 监听，明文 HTTP 仅在开发环境回环地址下放行，其余组合一律拒绝启动。
 StartupOptions parseStartupOptions(const std::vector<std::string>& arguments,
                                    const EnvironmentLookup& environmentLookup)
 {
@@ -515,6 +524,7 @@ StartupOptions parseStartupOptions(const int argc, char* const argv[])
     return parseStartupOptions(arguments, processEnvironment());
 }
 
+// 校验 TLS 证书与私钥文件：两者都必须存在、可读且不得是同一文件，否则抛 ConfigError。
 void validateTlsFiles(const ServerConfig& config)
 {
     const QFileInfo certificate(pathFromUtf8(config.tlsCertificatePath));

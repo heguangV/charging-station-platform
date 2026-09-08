@@ -1,3 +1,7 @@
+// 应用配置值对象（用户端/管理端客户端共用）：按“进程环境变量 > .env 文件 > 开发默认值”
+// 的优先级解析运行环境、服务端地址/端口、数据库路径、日志目录、TLS 证书、计费时间倍率、
+// 模拟短信与 Dashboard 快照开关、腾讯地图 Key 等配置项，通过 load() 以 Result 返回只读实例。
+// .env 中的服务端地图 Key（TENCENT_MAP_SERVER_KEY）会被拒绝读取，避免密钥进入客户端配置。
 #pragma once
 
 #include "ncs/core/result.h"

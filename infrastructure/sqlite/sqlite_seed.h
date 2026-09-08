@@ -1,3 +1,6 @@
+// 演示种子（v8 迁移）对外接口：applyFullDemoSeed 灌入 UC-D-02 完整演示数据集，
+// removeLegacyStations 是每次打开数据库都会重放的遗留站清理策略。
+// 详细的执行语义、冲突处理与幂等保证见下方英文注释与 docs/database-design.md §7.1。
 #pragma once
 
 #include <cstdint>

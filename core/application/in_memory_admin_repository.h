@@ -1,3 +1,8 @@
+// AdminRepository 的内存实现（测试/演示适配器）：管理员账号、审计、调价、设备命令、ML
+// 任务与备份均存于进程内存。 站点、充电桩、资费、用户与流程类读写委托给共享的
+// ChargingRepository/UserAccountRepository，与生产保持同一数据源。 约束：recursive_mutex
+// 保护内部映射，可注入演示管理员；进程重启即丢失。
+
 #pragma once
 
 #include "core/application/admin_repository.h"

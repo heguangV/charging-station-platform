@@ -38,6 +38,7 @@ crow::response timeoutResponse()
                          "request deadline exceeded", "请求处理超时，请重试");
 }
 
+// 包装业务操作：任何异常都不得逃逸出 worker 线程，统一降级为 InternalError 错误响应。
 crow::response safeOperation(std::function<crow::response()>& operation)
 {
     try
@@ -53,6 +54,9 @@ crow::response safeOperation(std::function<crow::response()>& operation)
 
 } // namespace
 
+// 阻塞任务派发：把 operation 提交到有界阻塞线程池，与按路径确定的超时定时器竞速，
+// claimed 原子标志保证超时响应与正常响应只有一方送达（超时映射 ExternalServiceUnavailable）；
+// 无 io_context 时同步执行兜底，队列已满时以 RateLimited（附 Retry-After:1）短路。
 void dispatchBlocking(const crow::request& request, crow::response& response,
                       core::application::BoundedExecutor& executor,
                       std::function<crow::response()> operation)

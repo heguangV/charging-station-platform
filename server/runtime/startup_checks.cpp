@@ -77,6 +77,7 @@ PrivateKeyPointer parsePrivateKey(const QByteArray& pem)
     return privateKey;
 }
 
+// 检查私钥文件权限：Unix 下组/其他用户具备读、写或执行权限任一即判定不安全并中止启动。
 void checkPrivateKeyPermissions(const ServerConfig& config)
 {
 #ifdef Q_OS_UNIX
@@ -93,6 +94,8 @@ void checkPrivateKeyPermissions(const ServerConfig& config)
 #endif
 }
 
+// 完整校验 TLS 材料：解析 PEM 后要求证书在有效期内、与私钥匹配，且 SAN 覆盖配置的监听
+// 地址，任何一项不满足都拒绝启动。
 void checkTlsMaterial(const ServerConfig& config)
 {
     validateTlsFiles(config);
@@ -119,6 +122,8 @@ void checkTlsMaterial(const ServerConfig& config)
     }
 }
 
+// 预检监听端点：以 SO_REUSEADDR 尝试绑定配置的地址与端口后立即关闭，端口被占用或地址
+// 不可用时在启动阶段即报错，避免运行中才发现。
 void checkListenEndpoint(const ServerConfig& config)
 {
     asio::error_code error;
@@ -149,6 +154,8 @@ void checkListenEndpoint(const ServerConfig& config)
 
 } // namespace
 
+// 启动安全检查总入口：重申明文 HTTP 仅限开发环境回环地址；启用 TLS 时执行完整证书/私钥
+// 校验；最后预检监听端点。
 void runStartupChecks(const ServerConfig& config)
 {
     asio::error_code error;
@@ -165,6 +172,8 @@ void runStartupChecks(const ServerConfig& config)
     checkListenEndpoint(config);
 }
 
+// 构建 TLS 服务端上下文：禁用 SSLv2/v3 与 TLS1.0/1.1（最低 TLS1.2），密码套件限定
+// ECDHE+AESGCM/CHACHA20；安全策略配置失败视为致命错误。
 asio::ssl::context createTlsContext(const ServerConfig& config)
 {
     asio::ssl::context context(asio::ssl::context::tls_server);

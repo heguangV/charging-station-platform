@@ -50,6 +50,8 @@ std::optional<std::int64_t> positiveInteger(const std::string_view value)
     return result;
 }
 
+// 领域错误码到中文用户提示的统一映射：账号冲突/冻结、验证码错误/过期、版本冲突等各给出
+// 可操作的文案，未列出的错误码回退为通用校验失败提示。
 crow::response serviceError(const ErrorCode code)
 {
     switch (code)
@@ -75,6 +77,7 @@ crow::response serviceError(const ErrorCode code)
     }
 }
 
+// 用户端鉴权快捷封装：仅接受 User 令牌与 User 角色，失败时把映射后的错误写入 failure 响应。
 std::optional<AuthContext> userAuth(const crow::request& request,
                                     core::application::SessionManager& sessions,
                                     crow::response& failure)
@@ -87,6 +90,7 @@ std::optional<AuthContext> userAuth(const crow::request& request,
     return result.context;
 }
 
+// 判断客户端地址是否为回环地址：开发模式下仅回环客户端才允许拿到 developmentCode。
 bool loopback(const std::string_view addressText)
 {
     asio::error_code error;
@@ -114,6 +118,8 @@ UserIdentityRoutes::UserIdentityRoutes(ApiRoutes& routes,
                                        core::application::BoundedExecutor& blockingExecutor,
                                        const bool developmentMode)
 {
+    // POST /user/auth/sms/code：签发短信验证码；开发模式且客户端为回环地址时附带
+    // developmentCode 便于联调；触发冷却时返回 RateLimited 并附 Retry-After 头。
     routes.route("/user/auth/sms/code")
         .methods(crow::HTTPMethod::POST)(
             [&identity, developmentMode](const crow::request& request)
@@ -152,6 +158,8 @@ UserIdentityRoutes::UserIdentityRoutes(ApiRoutes& routes,
                 return successResponse(std::move(data));
             });
 
+    // POST /user/auth/register：注册成功即返回 201 与登录令牌；密码/验证码校验等阻塞工作
+    // 经 dispatchBlocking 移交线程池，不阻塞 Crow 事件循环。
     routes.route("/user/auth/register")
         .methods(crow::HTTPMethod::POST)(
             [&identity, &blockingExecutor](const crow::request& request, crow::response& response)
@@ -350,6 +358,8 @@ UserIdentityRoutes::UserIdentityRoutes(ApiRoutes& routes,
                                  });
             });
 
+    // GET /user/me/avatar/content：输出头像二进制；If-None-Match 命中 ETag 时回 304，
+    // 正常响应附带私有缓存与 nosniff 头，防止内容被浏览器误判为可执行类型。
     routes.route("/user/me/avatar/content")
         .methods(crow::HTTPMethod::GET)(
             [&identity, &sessions](const crow::request& request)

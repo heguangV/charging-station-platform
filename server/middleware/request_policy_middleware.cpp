@@ -49,6 +49,8 @@ std::string logRoute(const std::string_view path)
                                                       : nextSlash - prefix.size()));
 }
 
+// 限流客户端键：IPv4 直接使用地址；IPv6 聚合到 /64 前缀，防止同一子网用大量地址绕过限流；
+// 解析失败统一记为 unknown。
 std::string clientRateLimitKey(const std::string_view addressText)
 {
     asio::error_code error;
@@ -87,6 +89,9 @@ void setEnvelopeRequestId(crow::response& response, const std::string_view reque
 
 } // namespace
 
+// 令牌桶限流判定：按流逝时间补充令牌（上限 burstCapacity），有令牌则放行并扣减 1 个，
+// 拒绝时返回按速率换算的等待秒数；桶数达到上限时淘汰最久未使用的桶，补充与淘汰均在
+// 同一把互斥锁内完成。
 RateLimiter::Decision RateLimiter::allow(const std::string_view clientKey,
                                          const std::chrono::steady_clock::time_point now)
 {
@@ -187,6 +192,9 @@ void RequestPolicyMiddleware::configure(infrastructure::files::StructuredLogger&
     passwordRateLimiter.configure(0.2, 5.0, 4096, std::chrono::minutes(15));
 }
 
+// before 钩子：校验/补发 X-Request-ID，依次执行 Origin 白名单、URL 凭证拦截、请求体上限
+// 与按客户端的令牌桶限流，密码登录路径另有更严格的独立限流；任一检查不过即以
+// 403/400/413/429 短路响应，不进入路由处理。
 void RequestPolicyMiddleware::before_handle(crow::request& request, crow::response& response,
                                             context& context)
 {
@@ -253,6 +261,9 @@ void RequestPolicyMiddleware::before_handle(crow::request& request, crow::respon
     }
 }
 
+// after 钩子：兜底初始化缺失的上下文并复查 Origin，超过截止时间的请求改写为超时错误响应；
+// 统一回写 X-Request-ID、HSTS（启用 TLS 时）与公开安全头，补 CORS 头，把 JSON 信封内的
+// requestId 同步为本次请求 ID，最后输出带路由类别/状态码/耗时的访问日志。
 void RequestPolicyMiddleware::after_handle(crow::request& request, crow::response& response,
                                            context& context)
 {
@@ -334,6 +345,7 @@ std::size_t RequestPolicyMiddleware::bodyLimitForPath(const std::string_view pat
     return 1024 * 1024;
 }
 
+// 按路径返回请求处理截止时间：统计类 /stats/ 路径放宽到 30 秒，其余统一 10 秒。
 std::chrono::seconds RequestPolicyMiddleware::deadlineForPath(const std::string_view path)
 {
     return path.find("/stats/") != std::string_view::npos ? std::chrono::seconds(30)

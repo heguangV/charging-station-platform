@@ -1,3 +1,6 @@
+// 管理端路由装配（/admin/auth、/admin/users、/admin/stations、/admin/chargers、/admin/tariffs、/admin/flows
+// 等）。 位于 controller 层：校验入参并委托 Admin*Service 应用服务；写操作经 BoundedExecutor
+// 异步执行，破坏性命令受 Idempotency-Key 幂等约束。
 #pragma once
 
 #include "core/application/admin_account_service.h"

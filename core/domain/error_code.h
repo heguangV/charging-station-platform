@@ -1,10 +1,17 @@
+// 领域层公开错误码：26 个错误码（含成功）与 docs/database-api.md §1.10
+// 的错误码表一一对应，规则“只增不改”。 httpStatus() 与 errorCodeName() 提供 错误码→HTTP
+// 状态、错误码→稳定字符串码 的 constexpr 映射，供控制器与序列化使用。
+// 服务端与各端共享同一枚举取值；对外响应只暴露字符串码，不得泄漏内部细节。
+
 #pragma once
 
 #include <string_view>
 
-namespace ncs::core::domain {
+namespace ncs::core::domain
+{
 
-enum class ErrorCode : int {
+enum class ErrorCode : int
+{
     Ok = 0,
     InvalidArgument = 1,
     ValidationFailed = 2,
@@ -35,16 +42,22 @@ enum class ErrorCode : int {
 
 constexpr int httpStatus(const ErrorCode code)
 {
-    switch (code) {
-    case ErrorCode::Ok: return 200;
-    case ErrorCode::InvalidArgument: return 400;
+    switch (code)
+    {
+    case ErrorCode::Ok:
+        return 200;
+    case ErrorCode::InvalidArgument:
+        return 400;
     case ErrorCode::ValidationFailed:
     case ErrorCode::CodeInvalid:
-    case ErrorCode::CodeExpired: return 422;
+    case ErrorCode::CodeExpired:
+        return 422;
     case ErrorCode::DatabaseError:
     case ErrorCode::TransactionFailed:
-    case ErrorCode::ExternalServiceUnavailable: return 503;
-    case ErrorCode::NotFound: return 404;
+    case ErrorCode::ExternalServiceUnavailable:
+        return 503;
+    case ErrorCode::NotFound:
+        return 404;
     case ErrorCode::AlreadyExists:
     case ErrorCode::InsufficientBalance:
     case ErrorCode::ChargerUnavailable:
@@ -55,46 +68,78 @@ constexpr int httpStatus(const ErrorCode code)
     case ErrorCode::QuoteExpired:
     case ErrorCode::ReservationExpired:
     case ErrorCode::DebtOutstanding:
-    case ErrorCode::VersionConflict: return 409;
+    case ErrorCode::VersionConflict:
+        return 409;
     case ErrorCode::UserFrozen:
-    case ErrorCode::Forbidden: return 403;
-    case ErrorCode::InternalError: return 500;
-    case ErrorCode::RateLimited: return 429;
+    case ErrorCode::Forbidden:
+        return 403;
+    case ErrorCode::InternalError:
+        return 500;
+    case ErrorCode::RateLimited:
+        return 429;
     case ErrorCode::ReauthRequired:
-    case ErrorCode::Unauthorized: return 401;
+    case ErrorCode::Unauthorized:
+        return 401;
     }
     return 500;
 }
 
 constexpr std::string_view errorCodeName(const ErrorCode code)
 {
-    switch (code) {
-    case ErrorCode::Ok: return "OK";
-    case ErrorCode::InvalidArgument: return "INVALID_ARGUMENT";
-    case ErrorCode::ValidationFailed: return "VALIDATION_FAILED";
-    case ErrorCode::DatabaseError: return "DATABASE_ERROR";
-    case ErrorCode::NotFound: return "NOT_FOUND";
-    case ErrorCode::AlreadyExists: return "ALREADY_EXISTS";
-    case ErrorCode::UserFrozen: return "USER_FROZEN";
-    case ErrorCode::InsufficientBalance: return "INSUFFICIENT_BALANCE";
-    case ErrorCode::ChargerUnavailable: return "CHARGER_UNAVAILABLE";
-    case ErrorCode::ActiveFlowExists: return "ACTIVE_FLOW_EXISTS";
-    case ErrorCode::AllocationConflict: return "ALLOCATION_CONFLICT";
-    case ErrorCode::TransactionFailed: return "TRANSACTION_FAILED";
-    case ErrorCode::ExternalServiceUnavailable: return "EXTERNAL_SERVICE_UNAVAILABLE";
-    case ErrorCode::InternalError: return "INTERNAL_ERROR";
-    case ErrorCode::IdempotencyConflict: return "IDEMPOTENCY_CONFLICT";
-    case ErrorCode::InvalidStateTransition: return "INVALID_STATE_TRANSITION";
-    case ErrorCode::QuoteExpired: return "QUOTE_EXPIRED";
-    case ErrorCode::ReservationExpired: return "RESERVATION_EXPIRED";
-    case ErrorCode::DebtOutstanding: return "DEBT_OUTSTANDING";
-    case ErrorCode::RateLimited: return "RATE_LIMITED";
-    case ErrorCode::CodeInvalid: return "CODE_INVALID";
-    case ErrorCode::CodeExpired: return "CODE_EXPIRED";
-    case ErrorCode::VersionConflict: return "VERSION_CONFLICT";
-    case ErrorCode::ReauthRequired: return "REAUTH_REQUIRED";
-    case ErrorCode::Unauthorized: return "UNAUTHORIZED";
-    case ErrorCode::Forbidden: return "FORBIDDEN";
+    switch (code)
+    {
+    case ErrorCode::Ok:
+        return "OK";
+    case ErrorCode::InvalidArgument:
+        return "INVALID_ARGUMENT";
+    case ErrorCode::ValidationFailed:
+        return "VALIDATION_FAILED";
+    case ErrorCode::DatabaseError:
+        return "DATABASE_ERROR";
+    case ErrorCode::NotFound:
+        return "NOT_FOUND";
+    case ErrorCode::AlreadyExists:
+        return "ALREADY_EXISTS";
+    case ErrorCode::UserFrozen:
+        return "USER_FROZEN";
+    case ErrorCode::InsufficientBalance:
+        return "INSUFFICIENT_BALANCE";
+    case ErrorCode::ChargerUnavailable:
+        return "CHARGER_UNAVAILABLE";
+    case ErrorCode::ActiveFlowExists:
+        return "ACTIVE_FLOW_EXISTS";
+    case ErrorCode::AllocationConflict:
+        return "ALLOCATION_CONFLICT";
+    case ErrorCode::TransactionFailed:
+        return "TRANSACTION_FAILED";
+    case ErrorCode::ExternalServiceUnavailable:
+        return "EXTERNAL_SERVICE_UNAVAILABLE";
+    case ErrorCode::InternalError:
+        return "INTERNAL_ERROR";
+    case ErrorCode::IdempotencyConflict:
+        return "IDEMPOTENCY_CONFLICT";
+    case ErrorCode::InvalidStateTransition:
+        return "INVALID_STATE_TRANSITION";
+    case ErrorCode::QuoteExpired:
+        return "QUOTE_EXPIRED";
+    case ErrorCode::ReservationExpired:
+        return "RESERVATION_EXPIRED";
+    case ErrorCode::DebtOutstanding:
+        return "DEBT_OUTSTANDING";
+    case ErrorCode::RateLimited:
+        return "RATE_LIMITED";
+    case ErrorCode::CodeInvalid:
+        return "CODE_INVALID";
+    case ErrorCode::CodeExpired:
+        return "CODE_EXPIRED";
+    case ErrorCode::VersionConflict:
+        return "VERSION_CONFLICT";
+    case ErrorCode::ReauthRequired:
+        return "REAUTH_REQUIRED";
+    case ErrorCode::Unauthorized:
+        return "UNAUTHORIZED";
+    case ErrorCode::Forbidden:
+        return "FORBIDDEN";
     }
     return "INTERNAL_ERROR";
 }

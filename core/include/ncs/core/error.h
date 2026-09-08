@@ -1,3 +1,7 @@
+// Qt 侧共享错误模型：ErrorCode 枚举与 AppError 结构（诊断信息、用户文案、请求 ID）。
+// 枚举值与 core/domain/error_code.h 的公开错误码保持同一取值表（只增不改），供 Qt 客户端解释 REST
+// 错误响应。 使用 QString 承载展示与日志文本；errorCodeName() 返回稳定字符串码。
+
 #pragma once
 
 #include <QString>

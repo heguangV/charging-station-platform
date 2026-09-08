@@ -1,3 +1,6 @@
+// WebSocket 传输适配器：把 crow::websocket::connection 适配为 EventHub 的 WebSocketPeer
+// 接口（sendText/close）。 连接指针自 onopen 起有效、至 onclose 注销；close 可能同步重入 onclose
+// 故用递归锁，已 detach 后的发送由 Crow 的弱锚点丢弃。
 #pragma once
 
 #include "core/application/event_hub.h"

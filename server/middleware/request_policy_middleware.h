@@ -1,3 +1,6 @@
+// 请求策略中间件：每个请求生成/校验 X-Request-ID、按路径应用请求体上限与处理
+// deadline、令牌桶限流（普通与密码接口双档）。 after_handle 统一附加安全响应头（HSTS、CORS
+// 白名单、Retry-After 等），是全部 HTTP 请求进入 controller 前的全局策略层。
 #pragma once
 
 #include "infrastructure/files/structured_logger.h"
@@ -14,6 +17,7 @@
 namespace ncs::server::middleware
 {
 
+// 令牌桶限流器：按客户端键分桶，LRU + 空闲回收限制桶数量，防止内存无限增长。
 class RateLimiter final
 {
   public:

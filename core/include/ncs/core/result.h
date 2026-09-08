@@ -1,3 +1,8 @@
+// Qt 侧通用 Result<T>：以 variant 持有“成功值或 AppError
+// 失败”，用于客户端本地服务/网络层的返回值传递。 与 ncs/core/error.h 配套；经静态
+// success()/failure() 构造，用 hasValue()/operator bool 判定后取值。 Result<void>
+// 特化表达无载荷操作；失败时取 value() 会触发 std::get 抛异常，须先判定。
+
 #pragma once
 
 #include "ncs/core/error.h"
