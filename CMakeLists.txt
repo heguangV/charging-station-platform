@@ -19,7 +19,7 @@ if(MSVC)
 endif()
 
 set(PROJECT_MINIMUM_QT_VERSION 6.2)
-option(NCS_BUILD_ANDROID_EXPERIMENT "Build the future QML/Android experiment" OFF)
+option(NCS_BUILD_ANDROID_EXPERIMENT "Build the Qt Quick Android user client" OFF)
 option(NCS_BUILD_LEGACY_DEMO "Build the original Qt learning demo" OFF)
 option(NCS_ENABLE_STRICT_WARNINGS "Treat project warnings as errors" ON)
 
@@ -135,7 +135,7 @@ if(NCS_BUILD_LEGACY_DEMO)
 endif()
 
 if(NCS_BUILD_ANDROID_EXPERIMENT)
-    find_package(Qt6 ${PROJECT_MINIMUM_QT_VERSION} REQUIRED COMPONENTS Quick WebView)
+    find_package(Qt6 ${PROJECT_MINIMUM_QT_VERSION} REQUIRED COMPONENTS Quick)
     add_subdirectory(apps/mobile)
 endif()
 
