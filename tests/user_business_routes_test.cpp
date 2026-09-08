@@ -263,6 +263,23 @@ int main()
              "/api/v1/user/stations/1/route?latitudeE6=39977680&longitudeE6=116316417&mode=driving",
              {}, token);
     const QJsonObject routeData = envelope(route).value("data").toObject();
+    tests.check(routeData.value("originLatitudeE6").toInteger() == 39977680 &&
+                    routeData.value("originLongitudeE6").toInteger() == 116316417,
+                "explicit origin is preserved independently of station destination");
+    for (const auto query : {"coordinateType=bad&mode=driving", "coordinateType=wgs84&mode=driving",
+                             "coordinateType=wgs84&latitudeE6=39900000&mode=driving"})
+        tests.check(call(app, crow::HTTPMethod::GET,
+                         std::string("/api/v1/user/stations/1/route?") + query, {}, token)
+                            .code == 422,
+                    "invalid coordinate contract rejected");
+    tests.check(
+        call(app, crow::HTTPMethod::GET,
+             "/api/v1/user/stations/1/"
+             "route?coordinateType=wgs84&latitudeE6=39900000&longitudeE6=116450000&mode=driving",
+             {}, token)
+                .code == 503,
+        "GPS conversion unavailable is explicit and never invents an origin");
+
     tests.check(route.code == 200 &&
                     routeData.value("provider").toString() == QStringLiteral("LOCAL_FALLBACK") &&
                     routeData.value("routeFallback").toBool() &&

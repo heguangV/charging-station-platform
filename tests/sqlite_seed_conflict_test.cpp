@@ -148,7 +148,8 @@ void resetToPreV8(const std::string& path)
                "'ZGC-AC-03','ZGC-AC-04');"
                "DELETE FROM station WHERE code IN ('CYGY','BJN','SJS','TZYH');"
                "DELETE FROM region_tariff WHERE adcode IN ('110106','110107','110112');"
-               "DELETE FROM schema_version WHERE version=8;");
+               "DROP TABLE IF EXISTS order_review;"
+               "DELETE FROM schema_version WHERE version>=8;");
 }
 
 bool openThrows(const std::string& path, std::string& message)

@@ -1,3 +1,10 @@
+// SqliteRepository 实现。文件分四部分阅读：
+// 1) 连接/语句封装与事务上下文（文件开头）；
+// 2) initialize() 中的 v1..v9 迁移与种子（v9 增加订单评价）；
+// 3) 各业务域的参数化 SQL（用户、钱包、流程、订单、幂等、管理员、ML、备份等，
+//    按文内分段注释定位）；
+// 4) 通用约定：写事务一律 BEGIN IMMEDIATE、失败整体回滚；全部 SQL 参数化，
+//    动态排序仅从代码白名单拼接；并发占用由部分唯一索引兜底，version 列做乐观锁。
 #include "infrastructure/sqlite/sqlite_repository.h"
 #include "infrastructure/sqlite/sqlite_seed.h"
 
@@ -26,9 +33,11 @@ namespace
 
 using namespace ncs::core::application;
 
-constexpr int kLatestSchemaVersion = 8;
-constexpr const char* kLatestSchemaChecksum = "ncs-v8-full-demo-seed";
+constexpr int kLatestSchemaVersion = 9;
+constexpr const char* kLatestSchemaChecksum = "ncs-v9-order-review";
 
+// 连接封装：RAII 持有单个 sqlite3 句柄。每个连接只属于打开它的线程，
+// 打开即启用外键、关闭 trusted_schema；busy_timeout 兜底锁竞争（5 秒）。
 class Connection final
 {
   public:
@@ -76,6 +85,8 @@ class Connection final
     sqlite3* database_ = nullptr;
 };
 
+// 语句封装：prepare/bind/step 每步都校验返回码并抛出，杜绝静默失败。
+// 所有 SQL 都通过 bind 参数化，值不进 SQL 文本（防注入的第一道防线）。
 class Statement final
 {
   public:
@@ -190,6 +201,9 @@ class Statement final
     sqlite3_stmt* statement_ = nullptr;
 };
 
+// 线程本地事务上下文：withTransaction() 打开连接并登记在此，
+// 事务内嵌套调用的仓储方法经 useDatabase() 复用同一连接，
+// 从而把多个仓储写入并入应用服务声明的一个原生事务。
 struct TransactionContext
 {
     const SqliteRepository* owner = nullptr;
@@ -248,6 +262,9 @@ std::optional<std::string> optionalText(const Statement& statement, const int co
                                     : std::optional<std::string>(statement.text(column));
 }
 
+// ---- 行映射辅助：把查询结果的固定列序搬运到领域结构体 ----
+// userSelect 联结 user_account/user_credential/user_avatar 三表，列序由
+// readUser() 的下标一一对应；流程与订单同样使用共享列清单 + 专用读函数。
 UserAccount readUser(Statement& statement)
 {
     UserAccount account;
@@ -580,6 +597,7 @@ MlTask readMlTask(Statement& statement)
     return task;
 }
 
+// 工具函数：备份文件 SHA-256 摘要与数据目录权限收紧（仅属主可读写）。
 std::string fileSha256(const std::filesystem::path& path)
 {
     std::ifstream input(path, std::ios::binary);
@@ -644,6 +662,11 @@ SqliteRepository::SqliteRepository(std::string databasePath)
 
 SqliteRepository::~SqliteRepository() = default;
 
+// ---- 初始化与迁移：每次打开数据库时按序补跑缺失版本 ----
+// v1 建表+遗留演示种子（每次打开都原样重放，靠 INSERT OR IGNORE 保持幂等）；
+// v2 管理控制面、v3 设备重启态（含外键复检）、v4 演示管理员、v5 查询索引、
+// v6 Dashboard/ML、v7 订单分析索引；v8 演示种子只执行一次（见 sqlite_seed.cpp）。
+// 迁移只追加不修改，checksum 标签与代码常量不一致即拒绝。
 void SqliteRepository::initialize()
 {
     const std::filesystem::path path(databasePath_);
@@ -1007,8 +1030,28 @@ COMMIT;
             throw;
         }
     }
+    Statement reviewMigration(connection.get(), "SELECT 1 FROM schema_version WHERE version=9");
+    if (!reviewMigration.row())
+    {
+        connection.execute(R"SQL(
+BEGIN IMMEDIATE;
+CREATE TABLE order_review(
+  order_no TEXT PRIMARY KEY REFERENCES charging_order(order_no),
+  user_id INTEGER NOT NULL REFERENCES user_account(id),
+  rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+  content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 500),
+  created_at INTEGER NOT NULL CHECK(created_at > 0)
+);
+CREATE INDEX ix_order_review_user ON order_review(user_id,created_at);
+INSERT INTO schema_version VALUES(9,'order-review','ncs-v9-order-review',strftime('%s','now'));
+COMMIT;
+)SQL");
+    }
 }
 
+// ---- 用户账户域：查询/注册/资料/凭据/头像/注销 ----
+// 注册在一个事务内写入 user_account + user_credential + wallet_account；
+// 注销走匿名化（不可逆占位 + 删除凭据头像），不删主键以保历史订单引用。
 std::optional<UserAccount> SqliteRepository::findById(const std::int64_t id) const
 {
     return useDatabase(
@@ -1050,6 +1093,8 @@ std::optional<UserAccount> SqliteRepository::findByLoginName(const std::string_v
         });
 }
 
+// 注册：同一事务写 user_account + user_credential + wallet_account；
+// 失败后回查区分 UsernameExists/PhoneExists，无法归因则原样抛出。
 AccountWriteResult SqliteRepository::create(UserAccount& account)
 {
     try
@@ -1189,6 +1234,7 @@ AccountWriteResult SqliteRepository::updateCredential(const std::int64_t id, std
     return AccountWriteResult::Success;
 }
 
+// 改密（CAS）：仅当传入的当前哈希与库中一致才更新——并发改密时后到者失败。
 AccountWriteResult SqliteRepository::replacePasswordHash(const std::int64_t id,
                                                          const std::string_view expectedCurrentHash,
                                                          const std::string_view newPasswordHash)
@@ -1237,6 +1283,8 @@ AccountWriteResult SqliteRepository::updateAvatar(const std::int64_t id, AvatarD
     return AccountWriteResult::Success;
 }
 
+// 注销（UC-U-13）：有活动流程时拒绝（ActiveFlowExists）；成功则用户名/手机号
+// 换成不可逆占位 deleted_user_<id> 并删除凭据与头像，主键保留供历史订单引用。
 AccountWriteResult SqliteRepository::anonymize(const std::int64_t id, UserAccount& updated)
 {
     AccountWriteResult result = AccountWriteResult::NotFound;
@@ -1308,6 +1356,10 @@ void SqliteRepository::setActiveFlowFlag(const std::int64_t userId, const bool h
                 });
 }
 
+// ---- 事务入口 ----
+// 写事务 BEGIN IMMEDIATE（缩小写竞争窗口），读事务普通 BEGIN；
+// work 抛出任何异常即 ROLLBACK 并原样上抛，保证"失败不部分成功"。
+// 已在事务内时直接执行（嵌套并入外层事务）。
 void SqliteRepository::withTransaction(const std::function<void()>& work)
 {
     if (transactionContext.owner == this)
@@ -1368,6 +1420,9 @@ void SqliteRepository::withReadTransaction(const std::function<void()>& work)
     }
 }
 
+// ---- 钱包域：当前值 + 不可变账本 + 充值单 ----
+// wallet_account 存当前余额/欠费（真相），wallet_transaction 逐笔append账本，
+// user_account 的余额/欠费列只是镜像；充值/结算由服务层在同一事务内三处同写。
 WalletAccount SqliteRepository::wallet(const std::int64_t userId)
 {
     return useDatabase(
@@ -1482,6 +1537,8 @@ void SqliteRepository::addRechargeOrder(const RechargeOrder& value)
                 });
 }
 
+// ---- 站点/设备/费率域（读取路径）----
+// 设备当前状态以 charger.status 为真相；生效费率按 adcode+时间窗取最新版本。
 std::vector<Station> SqliteRepository::stations()
 {
     return useDatabase(this, databasePath_,
@@ -1596,6 +1653,8 @@ void SqliteRepository::saveCharger(const Charger& value)
                 });
 }
 
+// 生效费率：取 adcode 命中 [effective_from, effective_to] 时间窗的最新版本；
+// 无命中返回 nullopt，由调用方决定报错或回退。
 std::optional<RegionTariff> SqliteRepository::effectiveTariff(const std::string& adcode,
                                                               const std::int64_t at)
 {
@@ -1619,6 +1678,9 @@ std::optional<RegionTariff> SqliteRepository::effectiveTariff(const std::string&
                        });
 }
 
+// ---- 充电流程域：流程状态机 + 状态事件 + Outbox + 排队 ----
+// addFlowEvent 同事务写 flow_event（证据）与 outbox_event（投递），
+// 投递失败按指数退避重试、10 次转死信（markOutboxAttempted）。
 void SqliteRepository::addFlow(const ChargingFlow& value)
 {
     useDatabase(this, databasePath_,
@@ -1693,6 +1755,8 @@ std::optional<ChargingFlow> SqliteRepository::flow(const std::string& flowNo)
                        });
 }
 
+// 活动流程查询：状态集合固定为 10/20/30/40/50/80（未完成+待恢复），
+// 与部分唯一索引、注销拦截、/flows/active 使用同一口径。
 std::optional<ChargingFlow> SqliteRepository::activeFlow(const std::int64_t userId)
 {
     return useDatabase(
@@ -1780,6 +1844,7 @@ void SqliteRepository::addChargerStatusEvent(const ChargerStatusEvent& value)
                 });
 }
 
+// 投递器轮询：取已到期（available_at<=now）的待投递事件，按 id 升序限量返回。
 std::vector<OutboxEvent> SqliteRepository::pollOutbox(const std::int64_t now, const int limit)
 {
     std::vector<OutboxEvent> result;
@@ -1836,6 +1901,8 @@ void SqliteRepository::markOutboxDelivered(const std::vector<std::int64_t>& ids)
                 });
 }
 
+// 投递失败记账：attempts+1 并按 5*2^n 秒（封顶 300s）推迟下次投递，
+// 累计 10 次在 SQL 内原子转死信（delivery_status=2）。
 void SqliteRepository::markOutboxAttempted(const std::vector<std::int64_t>& ids)
 {
     if (ids.empty())
@@ -1932,6 +1999,8 @@ std::deque<std::string> SqliteRepository::queue(const std::int64_t stationId,
                        });
 }
 
+// ---- 订单域：业务凭证（价格/功率/倍率快照 + 结算结余字段）----
+// 历史计费以本表快照为准，费率后续变化不影响已有订单。
 void SqliteRepository::addOrder(const ChargingOrder& value)
 {
     useDatabase(this, databasePath_,
@@ -1944,6 +2013,64 @@ void SqliteRepository::addOrder(const ChargingOrder& value)
                     bindOrder(insert, value);
                     insert.execute();
                 });
+}
+
+std::optional<OrderReview> SqliteRepository::orderReview(const std::string& orderNo)
+{
+    return useDatabase(
+        this, databasePath_,
+        [&](sqlite3* database) -> std::optional<OrderReview>
+        {
+            Statement query(database, "SELECT order_no,user_id,rating,content,created_at FROM "
+                                      "order_review WHERE order_no=?");
+            query.bind(1, orderNo);
+            if (!query.row())
+                return std::nullopt;
+            return OrderReview{query.text(0), query.integer(1), static_cast<int>(query.integer(2)),
+                               query.text(3), query.integer(4)};
+        });
+}
+
+void SqliteRepository::addOrderReview(const OrderReview& review)
+{
+    useDatabase(this, databasePath_,
+                [&](sqlite3* database)
+                {
+                    Statement insert(
+                        database,
+                        "INSERT INTO order_review(order_no,user_id,rating,content,created_at) "
+                        "VALUES(?,?,?,?,?)");
+                    insert.bind(1, review.orderNo);
+                    insert.bind(2, review.userId);
+                    insert.bind(3, review.rating);
+                    insert.bind(4, review.content);
+                    insert.bind(5, review.createdAt);
+                    insert.execute();
+                });
+}
+
+std::vector<StationReviewRow> SqliteRepository::stationReviewRows(const std::int64_t stationId,
+                                                                  const std::size_t limit)
+{
+    return useDatabase(this, databasePath_,
+                       [&](sqlite3* database) -> std::vector<StationReviewRow>
+                       {
+                           // 评论墙视图：评价经订单归属到场站，联账号表取展示名；脱敏在应用服务完成。
+                           Statement query(
+                               database, "SELECT r.user_id,u.nickname,u.phone,r.rating,r.content,"
+                                         "r.created_at FROM order_review r "
+                                         "JOIN charging_order o ON o.order_no=r.order_no "
+                                         "LEFT JOIN user_account u ON u.id=r.user_id "
+                                         "WHERE o.station_id=? ORDER BY r.created_at DESC LIMIT ?");
+                           query.bind(1, stationId);
+                           query.bind(2, static_cast<std::int64_t>(limit));
+                           std::vector<StationReviewRow> rows;
+                           while (query.row())
+                               rows.push_back({query.integer(0), query.text(1), query.text(2),
+                                               static_cast<int>(query.integer(3)), query.text(4),
+                                               query.integer(5)});
+                           return rows;
+                       });
 }
 
 void SqliteRepository::saveOrder(const ChargingOrder& value)
@@ -2064,6 +2191,8 @@ std::vector<UserAccount> SqliteRepository::listAccounts()
                        });
 }
 
+// 新建站点：先查编码占用，id 显式取 MAX(id)+1（与种子分配规则一致）；
+// 仅插入，不做事务——由调用方（服务层）负责整体事务。
 bool SqliteRepository::addStation(Station& station)
 {
     return useDatabase(this, databasePath_,
@@ -2096,6 +2225,7 @@ bool SqliteRepository::addStation(Station& station)
                        });
 }
 
+// 站点更新（乐观锁）：WHERE 同时匹配 id 与 version-1，0 行受影响即并发冲突。
 bool SqliteRepository::saveStation(const Station& station)
 {
     return useDatabase(this, databasePath_,
@@ -2132,6 +2262,7 @@ bool SqliteRepository::stationCodeExists(const std::string& code)
                        });
 }
 
+// 新建设备：编码唯一，id 显式取 MAX(id)+1；失败抛异常触发外层事务回滚。
 bool SqliteRepository::addCharger(Charger& charger)
 {
     return useDatabase(this, databasePath_,
@@ -2266,6 +2397,8 @@ void SqliteRepository::refreshReadiness()
     readiness_ = latest;
 }
 
+// 就绪探针：核对 schema 版本与 checksum、WAL 是否开启，并用
+// BEGIN IMMEDIATE + 空更新 + ROLLBACK 验证可写；任何异常返回全未就绪。
 ReadinessStatus SqliteRepository::probeDatabase()
 {
     ReadinessStatus status;
@@ -2294,6 +2427,9 @@ ReadinessStatus SqliteRepository::probeDatabase()
     return status;
 }
 
+// ---- 业务编号与幂等域 ----
+// 序号用 UPSERT...RETURNING 原子自增（前缀+UTC 日唯一）；幂等记录含请求摘要、
+// 结果重放、租约与 permanent 标记，与业务写入同事务落库。
 std::int64_t SqliteRepository::nextBusinessSequence(const std::string_view prefix,
                                                     const std::int64_t utcDay)
 {
@@ -2313,6 +2449,8 @@ std::int64_t SqliteRepository::nextBusinessSequence(const std::string_view prefi
                        });
 }
 
+// 读取幂等记录：返回请求摘要、已存结果（重放用）、租约与 permanent 标记；
+// 无记录返回 nullopt（首次请求）。
 std::optional<PersistedIdempotencyRecord>
 SqliteRepository::loadIdempotencyRecord(const std::string_view scope, const std::string_view key)
 {
@@ -2403,6 +2541,8 @@ void SqliteRepository::removeIdempotencyRecord(const std::string_view scope,
                 });
 }
 
+// 幂等记录清理：未完成记录按租约到期、已完成非永久记录按 expires_at 删除；
+// 充值/结算等 permanent=1 的记录不清理（契约要求业务唯一性永久保留）。
 void SqliteRepository::cleanupIdempotencyRecords(const std::int64_t now)
 {
     useDatabase(this, databasePath_,
@@ -2430,6 +2570,10 @@ std::size_t SqliteRepository::idempotencyRecordCount()
                        });
 }
 
+// ---- 管理员域：演示管理员、账号 CRUD、托管用户、审计（ops_log）----
+// 管理员变更全部走乐观锁 version + 变更与审计事件同事务提交。
+// 演示管理员（仅开发模式）：enabled=false 时停用所有 is_demo 账号；
+// enabled=true 时缺失才创建 admin/123456（OPERATOR+OWNER，is_demo=1）。
 void SqliteRepository::ensureDevelopmentAdmin(const bool enabled)
 {
     if (!enabled)
@@ -2505,6 +2649,8 @@ std::optional<AdminAccount> SqliteRepository::findAdminById(const std::int64_t i
         });
 }
 
+// 托管用户分页：排序仅从代码白名单映射（registeredAt/balanceCent 及其降序）；
+// 手机号只支持完整精确匹配或后四位（substr(phone,8)），不提供模糊扫描。
 AdminUserPage SqliteRepository::listManagedUsers(const AdminUserQuery& query)
 {
     return useDatabase(
@@ -2561,6 +2707,7 @@ std::optional<UserAccount> SqliteRepository::findManagedUser(const std::int64_t 
     return findById(id);
 }
 
+// 冻结/解冻（乐观锁）：version 匹配才更新，成功同事务写 USER_FROZEN/UNFROZEN 审计。
 AccountWriteResult SqliteRepository::updateManagedUserStatus(
     const std::int64_t actorAdminId, const std::int64_t userId, const int status,
     const std::string_view reason, const std::int64_t expectedVersion, const std::int64_t at,
@@ -2648,6 +2795,9 @@ std::vector<AuditEvent> SqliteRepository::auditEvents(const AuditEventQuery& que
         });
 }
 
+// ---- 建站事务与价格调整 ----
+// createStationWithChargers 由服务层包在 withTransaction 内调用：
+// 任一设备创建失败抛异常，站点与设备整体回滚，不产生半座电站。
 bool SqliteRepository::createStationWithChargers(Station& station, const InitialChargerSpec& spec)
 {
     std::vector<Charger> chargers;
@@ -2727,6 +2877,8 @@ void SqliteRepository::addTariffVersion(const RegionTariff& tariff)
     addTariff(tariff);
 }
 
+// 费率区间重叠检查（应用层校验）：数据库 UNIQUE(adcode, effective_from)
+// 只保证起始点唯一，区间相交由这里在写入前拒绝。
 bool SqliteRepository::tariffOverlaps(const std::string& adcode, const std::int64_t from,
                                       const std::int64_t to)
 {
@@ -2743,6 +2895,8 @@ bool SqliteRepository::tariffOverlaps(const std::string& adcode, const std::int6
                        });
 }
 
+// 新增调价版本（只追加）：ML_APPROVED 或 MANUAL，adjustment_bp 限 ±2000；
+// 返回自增 id。
 std::int64_t SqliteRepository::addPriceAdjustment(const PriceAdjustment& adjustment)
 {
     return useDatabase(this, databasePath_,
@@ -2764,6 +2918,7 @@ std::int64_t SqliteRepository::addPriceAdjustment(const PriceAdjustment& adjustm
                        });
 }
 
+// 生效调价：命中时间窗的最新一条（id 最大者胜）；无则返回 nullopt（用基础价）。
 std::optional<PriceAdjustment>
 SqliteRepository::effectivePriceAdjustment(const std::int64_t stationId, const int chargerType,
                                            const std::int64_t at)
@@ -2793,6 +2948,7 @@ SqliteRepository::effectivePriceAdjustment(const std::int64_t stationId, const i
         });
 }
 
+// ---- 设备命令域：重启/受控释放等运维指令的状态跟踪 ----
 void SqliteRepository::addDeviceCommand(const DeviceCommand& command)
 {
     useDatabase(this, databasePath_,
@@ -2858,6 +3014,7 @@ void SqliteRepository::saveDeviceCommand(const DeviceCommand& command)
                 });
 }
 
+// 到期命令扫描：取 PENDING 且 execute_at<=now 的前 100 条，交由运维任务执行。
 std::vector<DeviceCommand> SqliteRepository::dueDeviceCommands(const std::int64_t now)
 {
     return useDatabase(
@@ -2918,6 +3075,7 @@ bool SqliteRepository::stationHasActiveFlow(const std::int64_t stationId)
                        });
 }
 
+// 管理端流程分页查询：状态/站点/设备/用户可组合过滤，游标按创建时间倒序。
 AdminFlowPage SqliteRepository::flows(const AdminFlowQuery& query)
 {
     return useDatabase(
@@ -2981,6 +3139,7 @@ SqliteRepository::settledOrders(const std::int64_t fromAt, const std::int64_t to
         });
 }
 
+// ---- ML 任务域：训练/预测任务的互斥、登记与超时回收 ----
 std::optional<MlTask> SqliteRepository::runningMlTask(const std::string& taskType)
 {
     return useDatabase(
@@ -3078,6 +3237,8 @@ void SqliteRepository::saveMlTask(const MlTask& task)
                 });
 }
 
+// 任务完成（CAS）：仅当任务仍处于 PENDING/RUNNING（allowTimedOut 时含
+// TIMED_OUT）才允许写入终态，返回 false 表示被并发抢先或已超时。
 bool SqliteRepository::tryFinishMlTask(const MlTask& task, const bool allowTimedOut)
 {
     return useDatabase(this, databasePath_,
@@ -3105,6 +3266,9 @@ bool SqliteRepository::tryFinishMlTask(const MlTask& task, const bool allowTimed
                        });
 }
 
+// ---- 备份域：元数据记录 + Online Backup 快照 + 校验 ----
+// createBackupSnapshot 走 SQLite Online Backup API（禁止运行时直接拷文件），
+// verifyBackupSnapshot 在隔离副本上跑 integrity_check 并比对 SHA-256 与大小。
 void SqliteRepository::addBackup(const BackupRecord& record)
 {
     useDatabase(this, databasePath_,
@@ -3200,6 +3364,9 @@ void SqliteRepository::saveBackup(const BackupRecord& record)
                 });
 }
 
+// 在线备份：备份号做白名单校验后落到 <库文件>.backups/ 目录（权限收紧），
+// 经 SQLite Online Backup API 分步复制（BUSY 重试上限），完成后记 SHA-256 与大小；
+// 任一步失败删除半成品并返回 false。
 bool SqliteRepository::createBackupSnapshot(BackupRecord& record)
 {
     if (record.backupNo.empty() ||
@@ -3290,6 +3457,8 @@ bool SqliteRepository::createBackupSnapshot(BackupRecord& record)
     }
 }
 
+// 备份验证：先校验路径必须位于受控备份目录（防篡改记录误删任意文件）、
+// 大小与 SHA-256 一致，再复制到隔离临时副本上跑 PRAGMA integrity_check。
 bool SqliteRepository::verifyBackupSnapshot(const BackupRecord& record)
 {
     if (record.storagePath.empty() || record.checksum.empty() || record.sizeBytes <= 0)
@@ -3330,6 +3499,7 @@ bool SqliteRepository::verifyBackupSnapshot(const BackupRecord& record)
     }
 }
 
+// ---- 保留清理域：审计/命令 180 天、已投递 Outbox 7 天、死信 30 天（NFR-R-03）----
 void SqliteRepository::cleanupAdminRecords(const std::int64_t now)
 {
     constexpr std::int64_t retention = 180LL * 24 * 3600;
@@ -3360,6 +3530,9 @@ void SqliteRepository::cleanupAdminRecords(const std::int64_t now)
     pruneBackups();
 }
 
+// ---- 大屏小时聚合重建：可重建数据，不直接种子化 ----
+// 按天分块 UPSERT（避免长事务长期持有写锁导致并发写 SQLITE_BUSY），
+// 每个桶在重建期间始终可读。
 void SqliteRepository::refreshHourlyMetrics(const std::int64_t fromAt, const std::int64_t toAt)
 {
     if (fromAt < 0 || toAt <= fromAt)
@@ -3428,6 +3601,8 @@ void SqliteRepository::refreshHourlyMetrics(const std::int64_t fromAt, const std
     }
 }
 
+// 小时聚合查询：bucket+station 复合游标分页（limit+1 探测下一页），
+// 同时返回该站当前可运营（非故障非停用）设备数。
 HourlyMetricPage SqliteRepository::hourlyMetrics(const std::int64_t fromAt, const std::int64_t toAt,
                                                  const std::optional<std::int64_t> stationId,
                                                  const std::string_view cursor, const int limit)
@@ -3500,6 +3675,7 @@ HourlyMetricPage SqliteRepository::hourlyMetrics(const std::int64_t fromAt, cons
         });
 }
 
+// ---- 大屏版本与负荷预测域：预测按站点+模型+目标时间唯一，可标记过期 ----
 std::int64_t SqliteRepository::nextDashboardVersion()
 {
     return useDatabase(this, databasePath_,
@@ -3714,6 +3890,8 @@ void SqliteRepository::cleanupAnalytics(const std::int64_t now)
         });
 }
 
+// 备份保留（NFR-R-03）：每天最新一份留 7 天、每周最新一份留 4 周，
+// 失败备份留 1 周诊断；文件删除前必须通过目录+文件名双重校验。
 void SqliteRepository::pruneBackups()
 {
     // NFR-R-03: keep the newest backup of each of the last seven days plus the
@@ -3780,6 +3958,8 @@ void SqliteRepository::pruneBackups()
     }
 }
 
+// UC-A-09 管理员账号管理（中文导读）：账号列表、创建、停用/启用与改密。
+// 每个变更都递增资源 version、并在同一事务写审计事件；除并发 CAS 失败外可安全重试。
 // UC-A-09 管理员账号管理: newest-first listing plus create / status /
 // password mutations. Every mutation bumps the resource version, writes its
 // audit event in the same transaction and is idempotent under retry except
@@ -3851,6 +4031,8 @@ AdminAccountWriteResult SqliteRepository::createAdminAccount(const std::int64_t 
     }
 }
 
+// 一次性 OWNER 引导（--bootstrap-owner 离线模式）：已存在任何非演示 OWNER
+// 则返回 nullopt（one-shot）；演示 OWNER 不阻塞引导。用户名被占用直接抛错。
 std::optional<AdminAccount>
 SqliteRepository::bootstrapOwnerAccount(const std::string_view username,
                                         const std::string_view passwordHash, const std::int64_t at)

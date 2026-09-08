@@ -32,13 +32,19 @@ class UserApi final
     void recharge(qint64 amountCent, ApiClient::Handler done);
     void orders(int page, int pageSize, ApiClient::Handler done);
     void order(const QString& orderNo, ApiClient::Handler done);
+    void orderReview(const QString& orderNo, ApiClient::Handler done);
+    // The caller owns the Idempotency-Key so that resubmitting after a failure is idempotent.
+    void submitOrderReview(const QString& orderNo, int rating, const QString& content,
+                           const QByteArray& idempotencyKey, ApiClient::Handler done);
     void deleteAccount(const QString& smsCode, ApiClient::Handler done);
     void stations(qint64 latitudeE6, qint64 longitudeE6, const QString& keyword,
                   ApiClient::Handler done);
     void chargers(qint64 stationId, ApiClient::Handler done);
+    // UC-U-12 场站评论墙：只读，作者已在服务端脱敏。
+    void stationReviews(qint64 stationId, ApiClient::Handler done);
     void navigationRoute(qint64 stationId, std::optional<qint64> latitudeE6,
                          std::optional<qint64> longitudeE6, const QString& keyword,
-                         const QString& mode, ApiClient::Handler done);
+                         const QString& mode, ApiClient::Handler done, bool gpsOrigin = false);
     void requestFlow(qint64 stationId, int chargerType, qint64 preferredChargerId,
                      ApiClient::Handler done);
     void activeFlow(ApiClient::Handler done);

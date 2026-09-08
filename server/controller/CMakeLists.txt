@@ -19,6 +19,8 @@ add_library(ncs_server_controller STATIC
     idempotent_response.h
     request_validation.cpp
     request_validation.h
+    order_review_routes.cpp
+    order_review_routes.h
     station_routes.cpp
     station_routes.h
     user_auth.h

@@ -49,6 +49,7 @@ bool MockUserClientService::configureScenario(const QString& name, QString* user
                         0,
                         0,
                         QStringLiteral("充电中")});
+        orderStationIds_.insert(activeOrderNo_, selectedStationId_);
         *userMessage = QStringLiteral("Mock 场景：存在充电中订单");
         return true;
     }
@@ -70,6 +71,8 @@ void MockUserClientService::resetScenario()
     elapsedSeconds_ = 0;
     activeOrderNo_.clear();
     orders_.clear();
+    orderReviews_.clear();
+    orderStationIds_.clear();
     noAvailableChargers_ = false;
 }
 
@@ -157,6 +160,29 @@ QVector<OrderSummary> MockUserClientService::orders() const
     return orders_;
 }
 
+bool MockUserClientService::orderReview(const QString& orderNo, OrderReviewRecord* review) const
+{
+    const auto it = orderReviews_.constFind(orderNo);
+    if (it == orderReviews_.constEnd())
+        return false;
+    *review = it.value();
+    return true;
+}
+
+bool MockUserClientService::submitOrderReview(const QString& orderNo, int rating,
+                                              const QString& content, QString* userMessage)
+{
+    if (orderReviews_.contains(orderNo))
+    {
+        if (userMessage)
+            *userMessage = QStringLiteral("该订单已评价，评价内容不可修改");
+        return false;
+    }
+    orderReviews_.insert(orderNo, {rating, content, orderStationIds_.value(orderNo),
+                                   QDateTime::currentSecsSinceEpoch()});
+    return true;
+}
+
 NavigationRoute MockUserClientService::route(int stationId, const QString& mode) const
 {
     const StationSummary station = stations().at(qBound(0, stationId - 1, stations().size() - 1));
@@ -173,12 +199,13 @@ NavigationRoute MockUserClientService::route(int stationId, const QString& mode)
 
 QVector<StationSummary> MockUserClientService::stations() const
 {
+    // 演示站坐标与真实地点对齐（中关村/望京/国贸），保证内嵌真实地图与导航演示可用。
     return {{1, QStringLiteral("NCS 中关村充电站"), QStringLiteral("海淀区中关村大街 27 号"), 140,
-             5, 12, QStringLiteral("1.8 km")},
+             5, 12, QStringLiteral("1.8 km"), 39.977680, 116.316417, 99, 41},
             {2, QStringLiteral("望京智充站"), QStringLiteral("朝阳区阜通东大街 6 号"), 135, 3, 10,
-             QStringLiteral("4.6 km")},
+             QStringLiteral("4.6 km"), 39.995600, 116.481800, 92, 43},
             {3, QStringLiteral("国贸商务区站"), QStringLiteral("朝阳区建国门外大街 1 号"), 150, 2,
-             8, QStringLiteral("7.2 km")}};
+             8, QStringLiteral("7.2 km"), 39.908372, 116.457658, 105, 45}};
 }
 
 QVector<ChargerSummary> MockUserClientService::chargers(int stationId) const
@@ -199,6 +226,45 @@ QVector<ChargerSummary> MockUserClientService::chargers(int stationId) const
          176},
         {QStringLiteral("ZGC-AC-03"), QStringLiteral("交流慢充"), 7, QStringLiteral("空闲"), 93},
         {QStringLiteral("ZGC-DC-04"), QStringLiteral("直流快充"), 60, QStringLiteral("故障"), 61}};
+}
+
+QVector<StationReview> MockUserClientService::stationReviews(int stationId) const
+{
+    // 演示样例评论：仅存在于内存中的展示数据，用于演示详情页评论板块与“更多”收纳。
+    static const QVector<StationReview> pool = {
+        {QStringLiteral("充电**"), 5, QStringLiteral("充电速度快，桩位好找，到场直接插枪开充。"),
+         QStringLiteral("08-30")},
+        {QStringLiteral("李**"), 5, QStringLiteral("位置就在停车场入口，导航精准不绕路。"),
+         QStringLiteral("08-27")},
+        {QStringLiteral("王**"), 4, QStringLiteral("价格透明，电费服务费分得清清楚楚。"),
+         QStringLiteral("08-25")},
+        {QStringLiteral("EV**"), 5, QStringLiteral("周末来也没排队，充电功率很稳定。"),
+         QStringLiteral("08-21")},
+        {QStringLiteral("赵**"), 4, QStringLiteral("场地干净，夜间照明充足，充电很放心。"),
+         QStringLiteral("08-18")},
+        {QStringLiteral("孙**"), 3, QStringLiteral("高峰时段要等位，建议错峰来充电。"),
+         QStringLiteral("08-15")},
+        {QStringLiteral("周**"), 5, QStringLiteral("扫码即充，结算秒到账，体验很顺。"),
+         QStringLiteral("08-12")}};
+    QVector<StationReview> reviews;
+    // 本人提交的评价按时间倒序排在最前，与在线模式的评论墙排序一致。
+    for (auto it = orderReviews_.constBegin(); it != orderReviews_.constEnd(); ++it)
+    {
+        if (it.value().stationId != stationId)
+            continue;
+        reviews.append({nickname_.isEmpty() ? QStringLiteral("我") : nickname_, it.value().rating,
+                        it.value().content,
+                        QDateTime::fromSecsSinceEpoch(it.value().createdAt)
+                            .date()
+                            .toString(QStringLiteral("MM-dd"))});
+    }
+    std::sort(reviews.begin(), reviews.end(),
+              [](const StationReview& a, const StationReview& b) { return a.time > b.time; });
+    const int offset = qBound(0, stationId - 1, static_cast<int>(pool.size()) - 1);
+    const int count = qBound(3, 5 + (qAbs(stationId) % 3), static_cast<int>(pool.size()));
+    for (int index = 0; index < count; ++index)
+        reviews.append(pool[(offset + index) % pool.size()]);
+    return reviews;
 }
 
 bool MockUserClientService::reserve(int stationId, const QString& chargerCode, QString* userMessage)
@@ -242,6 +308,7 @@ bool MockUserClientService::reserve(int stationId, const QString& chargerCode, Q
          0,
          0,
          QStringLiteral("已预约")});
+    orderStationIds_.insert(activeOrderNo_, stationId);
     *userMessage = QStringLiteral("已为你保留 %1，15 分钟内可开始充电").arg(chargerCode);
     return true;
 }

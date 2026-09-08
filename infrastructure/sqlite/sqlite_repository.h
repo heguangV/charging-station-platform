@@ -1,3 +1,9 @@
+// SqliteRepository：平台唯一的 SQLite 持久化适配器（物理模型见 docs/database-design.md）。
+// 同时实现 core/application 中的全部仓储接口：用户账户、钱包、充电流程、订单、
+// 排队、幂等、管理员、审计、设备命令、备份与 ML 分析。只有 ncs_server 通过这些
+// 接口访问数据库，客户端与大屏一律走 REST/WebSocket。
+// 连接模型：连接由调用线程现开现关、不跨线程复用；事务由应用服务通过
+// withTransaction()/withReadTransaction() 编排，事务内嵌套的仓储调用复用同一连接。
 #pragma once
 
 #include "core/application/admin_repository.h"
@@ -5,6 +11,7 @@
 #include "core/application/business_numbers.h"
 #include "core/application/charging_repository.h"
 #include "core/application/idempotency_service.h"
+#include "core/application/order_review_service.h"
 #include "core/application/readiness_probe.h"
 #include "core/application/user_account_repository.h"
 
@@ -25,6 +32,7 @@ namespace ncs::infrastructure::sqlite
 class SqliteRepository final : public core::application::UserAccountRepository,
                                public core::application::WalletMirror,
                                public core::application::ChargingRepository,
+                               public core::application::OrderReviewRepository,
                                public core::application::ReadinessProbe,
                                public core::application::BusinessNumberSequenceStore,
                                public core::application::IdempotencyPersistence,
@@ -106,6 +114,10 @@ class SqliteRepository final : public core::application::UserAccountRepository,
                                   core::application::ChargerType type) override;
 
     void addOrder(const core::application::ChargingOrder& order) override;
+    std::optional<core::application::OrderReview> orderReview(const std::string& orderNo) override;
+    void addOrderReview(const core::application::OrderReview& review) override;
+    std::vector<core::application::StationReviewRow> stationReviewRows(std::int64_t stationId,
+                                                                       std::size_t limit) override;
     void saveOrder(const core::application::ChargingOrder& order) override;
     std::optional<core::application::ChargingOrder> order(const std::string& orderNo) override;
     std::optional<core::application::ChargingOrder> orderByFlow(const std::string& flowNo) override;

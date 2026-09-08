@@ -34,5 +34,35 @@ int main()
         std::cerr << "FAIL: malformed Tencent responses must be rejected\n";
         return 1;
     }
+    for (const auto mode : {TravelMode::Driving, TravelMode::Walking, TravelMode::Transit})
+    {
+        for (
+            const auto payload :
+            {R"({"status":0,"result":{"routes":[{"distance":1,"duration":1,"polyline":[]}]}})",
+             R"({"status":0,"result":{"routes":[{"distance":100,"duration":1,"polyline":[]}]}})",
+             R"({"status":0,"result":{"routes":[{"distance":100,"duration":1,"polyline":[39,116,0,0]}]}})"})
+        {
+            if (TencentRoutePlanner::parseResponse(payload, mode))
+            {
+                std::cerr << "FAIL: status zero with unusable geometry must be rejected\n";
+                return 1;
+            }
+        }
+    }
+    const auto gps = TencentRoutePlanner::parseGpsResponse(
+        R"({"status":0,"locations":[{"lat":39.908372,"lng":116.457658}]})");
+    if (!gps || gps->latitudeE6 != 39908372 || gps->longitudeE6 != 116457658)
+        return 1;
+    for (const auto invalid : {"not-json", R"({"status":0,"locations":[]})",
+                               R"({"status":0,"locations":[{"lat":91,"lng":116}]})",
+                               R"({"status":0,"locations":[{"lat":39}]})",
+                               R"({"status":110,"locations":[{"lat":39,"lng":116}]})"})
+    {
+        if (TencentRoutePlanner::parseGpsResponse(invalid))
+        {
+            std::cerr << "FAIL: invalid coordinate conversion response must be rejected\n";
+            return 1;
+        }
+    }
     return 0;
 }

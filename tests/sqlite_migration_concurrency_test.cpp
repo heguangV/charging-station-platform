@@ -162,6 +162,7 @@ int main()
         // test-local SQL so the fixture is an honest pre-v8 database
         // (production has no cleanup path; it aborts and asks for a backup).
         executeSql(upgradeDatabase.path(), "DELETE FROM schema_version WHERE version>=6");
+        executeSql(upgradeDatabase.path(), "DROP TABLE IF EXISTS order_review");
         executeSql(upgradeDatabase.path(), "DROP INDEX IF EXISTS ux_ml_task_one_running_type");
         executeSql(upgradeDatabase.path(), "DROP TABLE IF EXISTS load_prediction");
         executeSql(upgradeDatabase.path(), "DROP TABLE IF EXISTS model_version");
@@ -192,7 +193,7 @@ int main()
         {
             SqliteRepository repository(upgradeDatabase.path());
             tests.check(queryInteger(upgradeDatabase.path(),
-                                     "SELECT MAX(version) FROM schema_version") == 8 &&
+                                     "SELECT MAX(version) FROM schema_version") == 9 &&
                             queryInteger(upgradeDatabase.path(),
                                          "SELECT COUNT(*) FROM dashboard_state") == 1 &&
                             repository.findById(upgradeUserId).has_value() &&

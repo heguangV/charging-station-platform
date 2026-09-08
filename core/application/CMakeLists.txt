@@ -32,6 +32,8 @@ add_library(ncs_core_application STATIC
     in_memory_user_account_repository.h
     navigation_service.cpp
     navigation_service.h
+    order_review_service.cpp
+    order_review_service.h
     pricing.cpp
     pricing.h
     readiness_probe.h

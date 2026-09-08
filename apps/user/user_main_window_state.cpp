@@ -109,9 +109,13 @@ void UserMainWindow::showDetail(int stationId)
         detailTitle_->setText(station->name);
         const QString distance =
             selectedStationDistance_.isEmpty() ? station->distance : selectedStationDistance_;
-        detailMeta_->setText(station->address + QStringLiteral("\n") + distance +
-                             QStringLiteral(" · ") + money(station->priceCentPerKwh) +
-                             QStringLiteral(" / 度"));
+        detailMeta_->setText(QStringLiteral("空闲 %1/%2 · 距您 %3")
+                                 .arg(station->idleCount)
+                                 .arg(station->totalCount)
+                                 .arg(distance));
+        detailAddress_->setText(station->address);
+        updateFeeCard(*station);
+        renderStationReviews(stationId);
         chargerTable_->setChargers({});
         pages_->setCurrentIndex(kDetailPage);
         userApi_->chargers(
@@ -149,8 +153,13 @@ void UserMainWindow::showDetail(int stationId)
     detailTitle_->setText(station.name);
     const QString distance =
         selectedStationDistance_.isEmpty() ? station.distance : selectedStationDistance_;
-    detailMeta_->setText(station.address + QStringLiteral("\n") + distance + QStringLiteral(" · ") +
-                         money(station.priceCentPerKwh) + QStringLiteral(" / 度"));
+    detailMeta_->setText(QStringLiteral("空闲 %1/%2 · 距您 %3")
+                             .arg(station.idleCount)
+                             .arg(station.totalCount)
+                             .arg(distance));
+    detailAddress_->setText(station.address);
+    updateFeeCard(station);
+    renderStationReviews(stationId);
     chargerTable_->setChargers(service_.chargers(stationId));
     pages_->setCurrentIndex(kDetailPage);
 }

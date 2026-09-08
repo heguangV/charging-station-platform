@@ -2,6 +2,7 @@
 
 #include "net/user_api.h"
 #include "ui/bottom_navigation.h"
+#include "ui/review_dialog.h"
 
 #include <QDateTime>
 #include <QFrame>
@@ -10,6 +11,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QMessageBox>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QStackedWidget>
@@ -106,7 +108,7 @@ void UserMainWindow::showOrders()
 
 void UserMainWindow::refreshOrders()
 {
-    if (userApi_)
+    if (userApi_ && onlineSession_)
     {
         const int requestId = ++ordersRequestId_;
         ordersScroll_->hide();
@@ -197,6 +199,21 @@ void UserMainWindow::renderOrders(const QVector<OrderSummary>& records)
         energy->setStyleSheet(QStringLiteral("font-size:13px;color:#475467;"));
         auto* amount = new QLabel(money(order.amountCent));
         amount->setStyleSheet(QStringLiteral("font-size:16px;font-weight:700;color:#23794E;"));
+        QPushButton* reviewEntryRaw = nullptr;
+        if (order.status == QStringLiteral("已完成"))
+        {
+            reviewEntryRaw = new QPushButton(QStringLiteral("写评价  ›"));
+            reviewEntryRaw->setCursor(Qt::PointingHandCursor);
+            reviewEntryRaw->setStyleSheet(
+                QStringLiteral("QPushButton{background:transparent;color:#23794E;border:0;font-"
+                               "size:12px;font-weight:600;padding:3px;}"
+                               "QPushButton:hover{color:#174F34;}"));
+            connect(reviewEntryRaw, &QPushButton::clicked, this,
+                    [this, order, entry = QPointer<QPushButton>(reviewEntryRaw)]
+                    { openReviewDialog(order.orderNo, order.stationName, entry); });
+            details->addWidget(reviewEntryRaw);
+        }
+        const QPointer<QPushButton> reviewEntry(reviewEntryRaw);
         auto* receipt = new QPushButton(QStringLiteral("查看小票  ›"));
         receipt->setCursor(Qt::PointingHandCursor);
         receipt->setStyleSheet(
@@ -210,13 +227,13 @@ void UserMainWindow::renderOrders(const QVector<OrderSummary>& records)
         cardLayout->addLayout(details);
         connect(
             receipt, &QPushButton::clicked, this,
-            [this, order]
+            [this, order, reviewEntry]
             {
                 if (userApi_)
                 {
                     userApi_->order(
                         order.orderNo,
-                        [this](ApiReply reply)
+                        [this, order, reviewEntry](ApiReply reply)
                         {
                             if (!reply.ok())
                             {
@@ -231,8 +248,8 @@ void UserMainWindow::renderOrders(const QVector<OrderSummary>& records)
                                     .toLocalTime()
                                     .toString(QStringLiteral("yyyy-MM-dd HH:mm"));
                             };
-                            QMessageBox::information(
-                                this, QStringLiteral("订单小票"),
+                            QMessageBox receiptBox(
+                                QMessageBox::Information, QStringLiteral("订单小票"),
                                 QStringLiteral("订单号  %1\n电站  %2\n电桩  %3\n开始  %4\n结束  "
                                                "%5\n充电时长  %6 分钟\n电量  %7 kWh\n电费  %8 / "
                                                "度\n服务费  %9 / 度\n实付  %10\n状态  %11")
@@ -256,23 +273,55 @@ void UserMainWindow::renderOrders(const QVector<OrderSummary>& records)
                                         money(value.value(QStringLiteral("servicePriceCentPerKwh"))
                                                   .toInt()),
                                         money(value.value(QStringLiteral("paidCent")).toInt()),
-                                        value.value(QStringLiteral("statusText")).toString()));
+                                        value.value(QStringLiteral("statusText")).toString()),
+                                QMessageBox::Ok, this);
+                            QPushButton* writeReview = nullptr;
+                            if (value.value(QStringLiteral("statusText")).toString() ==
+                                QStringLiteral("已完成"))
+                                writeReview = receiptBox.addButton(QStringLiteral("写评价"),
+                                                                   QMessageBox::ActionRole);
+                            receiptBox.exec();
+                            if (writeReview && receiptBox.clickedButton() == writeReview)
+                                openReviewDialog(order.orderNo, order.stationName, reviewEntry);
                         });
                     return;
                 }
-                QMessageBox::information(
-                    this, QStringLiteral("订单小票"),
+                QMessageBox receiptBox(
+                    QMessageBox::Information, QStringLiteral("订单小票"),
                     QStringLiteral("订单号  %1\n电站  %2\n电桩  %3\n开始  %4\n结束  %5\n电量  %6 "
                                    "kWh\n金额  %7\n状态  %8")
                         .arg(order.orderNo, order.stationName, order.chargerCode,
                              order.startTime.isEmpty() ? QStringLiteral("--") : order.startTime,
                              order.endTime.isEmpty() ? QStringLiteral("--") : order.endTime,
                              QString::number(order.energyMwh / 1000000.0, 'f', 3),
-                             money(order.amountCent), order.status));
+                             money(order.amountCent), order.status),
+                    QMessageBox::Ok, this);
+                QPushButton* writeReview = nullptr;
+                if (order.status == QStringLiteral("已完成"))
+                    writeReview =
+                        receiptBox.addButton(QStringLiteral("写评价"), QMessageBox::ActionRole);
+                receiptBox.exec();
+                if (writeReview && receiptBox.clickedButton() == writeReview)
+                    openReviewDialog(order.orderNo, order.stationName, reviewEntry);
             });
         ordersCards_->addWidget(card);
     }
     ordersCards_->addStretch();
+}
+
+void UserMainWindow::openReviewDialog(const QString& orderNo, const QString& stationName,
+                                      QPushButton* cardButton)
+{
+    const QPointer<QPushButton> button(cardButton);
+    auto* dialog = new ReviewDialog(userApi_, &service_, orderNo, stationName, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &ReviewDialog::reviewed, this,
+            [button]
+            {
+                if (button)
+                    button->setText(QStringLiteral("查看评价  ›"));
+            });
+    dialog->exec();
 }
 
 } // namespace ncs::user

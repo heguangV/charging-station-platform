@@ -1,3 +1,8 @@
+// 导航应用服务：为指定充电站规划路线（驾车/步行/公交），返回距离、耗时、折线与分步指引。
+// 依赖 ChargingRepository（站点坐标）与 Geocoder/RoutePlanner 端口（腾讯地图适配器）。
+// 约束：外部地图失败必须降级——起点缺失回退默认坐标（locationFallback），路线失败回退 Haversine
+// 直线（routeFallback），不得让请求失败。
+
 #pragma once
 
 #include "core/application/charging_repository.h"
@@ -45,6 +50,10 @@ class RoutePlanner
 {
   public:
     virtual ~RoutePlanner() = default;
+    virtual std::optional<RoutePoint> normalizeGps(RoutePoint)
+    {
+        return std::nullopt;
+    }
     virtual std::optional<PlannedRoute> plan(RoutePoint origin, RoutePoint destination,
                                              TravelMode mode) = 0;
 };
@@ -74,10 +83,13 @@ class NavigationService final
     {
     }
 
+    // 规划到站路线：起点缺省时用关键词地理编码，仍缺失回退默认坐标（locationFallback=true）；外部路线规划失败回退
+    // Haversine 直线与起终点折线（routeFallback=true），不使请求失败；站点不存在返回 NotFound。
     ServiceResult<NavigationResult> routeToStation(std::int64_t stationId,
                                                    std::optional<std::int64_t> latitudeE6,
                                                    std::optional<std::int64_t> longitudeE6,
-                                                   const std::string& keyword, TravelMode mode);
+                                                   const std::string& keyword, TravelMode mode,
+                                                   bool gpsOrigin = false);
 
   private:
     ChargingRepository& repository_;

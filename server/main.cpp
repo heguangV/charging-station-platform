@@ -1,3 +1,8 @@
+// ncs_server 进程入口：按「配置加载 → 启动检查 → SQLite 仓储初始化/迁移种子 → 中间件与服务装配 →
+// 路由注册 → HTTPS 监听」组装整个服务端。 串联 controller 各路由、websocket 推送与 runtime
+// 周期调度；阻塞工作一律经 BoundedExecutor，SQLite 不进 Crow 事件循环。
+// 仅开发模式（allowInsecureHttp）允许回环 HTTP，正式环境强制 TLS；一次性 bootstrap OWNER 需经
+// NCS_ADMIN_BOOTSTRAP_KEY 注入初始密码。
 #include <crow.h>
 
 #include "core/application/admin_account_service.h"
@@ -26,6 +31,7 @@
 #include "server/controller/health_routes.h"
 #include "server/controller/ml_routes.h"
 #include "server/controller/navigation_routes.h"
+#include "server/controller/order_review_routes.h"
 #include "server/controller/station_routes.h"
 #include "server/controller/user_identity_routes.h"
 #include "server/controller/wallet_routes.h"
@@ -126,6 +132,8 @@ int runBootstrapOwner(const ncs::server::runtime::ServerConfig& config, const st
 
 } // namespace
 
+// main() 阶段：解析参数（help/version/bootstrap-owner 即刻返回）→ 日志与中间件 → 服务与路由装配 →
+// 周期任务注册 → 监听与优雅停机。
 int main(int argc, char* argv[])
 {
     QCoreApplication qtApplication(argc, argv);
@@ -172,6 +180,9 @@ int main(int argc, char* argv[])
             logger->log(LogLevel::Warning, "server.transport",
                         "INSECURE DEVELOPMENT HTTP ENABLED on loopback; traffic is not encrypted");
         }
+        // ——
+        // 服务装配：按依赖顺序构造中间件、领域服务与路由；声明顺序即析构逆序，被工作线程捕获的依赖必须存活到最后
+        // ——
         ncs::server::ServerApp app;
         auto& requestPolicy =
             app.get_middleware<ncs::server::middleware::RequestPolicyMiddleware>();
@@ -207,6 +218,7 @@ int main(int argc, char* argv[])
         ncs::server::controller::HealthRoutes healthRoutes(apiRoutes, repository, sessions);
 
         ncs::core::application::BusinessNumbers businessNumbers(&repository);
+        ncs::core::application::OrderReviewService orderReviewService(repository, repository);
         ncs::core::application::WalletService walletService(repository, repository,
                                                             businessNumbers);
         ncs::infrastructure::map::TencentGeocoder geocoder(
@@ -279,6 +291,8 @@ int main(int argc, char* argv[])
                                                                    sessions, blockingExecutor);
         ncs::server::controller::FlowRoutes flowRoutes(apiRoutes, chargeFlowService, sessions,
                                                        blockingExecutor, idempotency);
+        ncs::server::controller::OrderReviewRoutes reviewRoutes(
+            apiRoutes, orderReviewService, sessions, blockingExecutor, idempotency);
         ncs::server::controller::UserIdentityRoutes userIdentityRoutes(
             apiRoutes, userIdentity, sessions, blockingExecutor,
             startup.config.demoCredentialsEnabled());

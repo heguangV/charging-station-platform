@@ -229,11 +229,11 @@ int main()
         }
         DatabaseReader reader(db);
 
-        tests.check(reader.integer("SELECT MAX(version) FROM schema_version") == 8 &&
+        tests.check(reader.integer("SELECT MAX(version) FROM schema_version") == 9 &&
                         reader.rows("SELECT name||'|'||checksum FROM schema_version WHERE "
                                     "version=8")
                                 .front() == "full-demo-seed|ncs-v8-full-demo-seed" &&
-                        reader.integer("SELECT COUNT(*) FROM schema_version") == 8 &&
+                        reader.integer("SELECT COUNT(*) FROM schema_version") == 9 &&
                         reader.integer("SELECT COUNT(*) FROM outbox_event") == 0,
                     "v8 full-demo-seed migration row exists once with no outbox events");
         checkIntegerIn(tests, reader,
@@ -545,7 +545,7 @@ int main()
                         "upgrading a v1-v7 database re-runs v8, keeps business data and "
                         "removes the unreferenced XEQ/CBD leftovers");
             DatabaseReader reader(db);
-            tests.check(reader.integer("SELECT COUNT(*) FROM schema_version") == 8 &&
+            tests.check(reader.integer("SELECT COUNT(*) FROM schema_version") == 9 &&
                             reader.integer("SELECT COUNT(*) FROM charging_flow") ==
                                 reader.integer("SELECT COUNT(*) FROM charging_order") &&
                             reader.integer("SELECT COUNT(*) FROM charging_order") >= 8600,

@@ -116,6 +116,19 @@ void UserApi::order(const QString& orderNo, ApiClient::Handler done)
     client_.get(kUserBase + QStringLiteral("/orders/%1").arg(orderNo), {}, std::move(done));
 }
 
+void UserApi::orderReview(const QString& orderNo, ApiClient::Handler done)
+{
+    client_.get(kUserBase + QStringLiteral("/orders/%1/review").arg(orderNo), {}, std::move(done));
+}
+
+void UserApi::submitOrderReview(const QString& orderNo, int rating, const QString& content,
+                                const QByteArray& idempotencyKey, ApiClient::Handler done)
+{
+    client_.postJson(kUserBase + QStringLiteral("/orders/%1/review").arg(orderNo),
+                     {{"rating", rating}, {"content", content}}, std::move(done),
+                     {{"Idempotency-Key", idempotencyKey}});
+}
+
 void UserApi::deleteAccount(const QString& smsCode, ApiClient::Handler done)
 {
     client_.deleteJson(kUserBase + "/me",
@@ -142,9 +155,15 @@ void UserApi::chargers(qint64 stationId, ApiClient::Handler done)
                 std::move(done));
 }
 
+void UserApi::stationReviews(qint64 stationId, ApiClient::Handler done)
+{
+    client_.get(kUserBase + QStringLiteral("/stations/%1/reviews").arg(stationId), {},
+                std::move(done));
+}
+
 void UserApi::navigationRoute(qint64 stationId, std::optional<qint64> latitudeE6,
                               std::optional<qint64> longitudeE6, const QString& keyword,
-                              const QString& mode, ApiClient::Handler done)
+                              const QString& mode, ApiClient::Handler done, bool gpsOrigin)
 {
     QUrlQuery query;
     if (latitudeE6 && longitudeE6)
@@ -155,6 +174,8 @@ void UserApi::navigationRoute(qint64 stationId, std::optional<qint64> latitudeE6
     if (!keyword.trimmed().isEmpty())
         query.addQueryItem(QStringLiteral("keyword"), keyword.trimmed());
     query.addQueryItem(QStringLiteral("mode"), mode);
+    if (gpsOrigin)
+        query.addQueryItem(QStringLiteral("coordinateType"), QStringLiteral("wgs84"));
     client_.get(kUserBase + QStringLiteral("/stations/%1/route").arg(stationId), query,
                 std::move(done));
 }

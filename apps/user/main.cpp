@@ -19,6 +19,13 @@
 
 int main(int argc, char* argv[])
 {
+#ifdef NCS_HAS_WEBENGINE
+    // Chromium 在虚拟机/软件渲染环境下 GPU 合成会出现局部黑白块（历史验收记录同样要求）。
+    // 默认关闭 GPU 合成走软件合成；用户显式设置的 QTWEBENGINE_CHROMIUM_FLAGS 优先，不覆盖。
+    if (!qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS"))
+        qputenv("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu-compositing");
+    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+#endif
     QApplication app(argc, argv);
     ncs::user::AppTheme::apply(app);
     QCoreApplication::setOrganizationName(QStringLiteral("NCS"));

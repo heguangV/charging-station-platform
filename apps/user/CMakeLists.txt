@@ -10,20 +10,26 @@ qt_add_executable(ncs_user
     ui/bottom_navigation.h
     ui/charge_soc_gauge.cpp
     ui/charge_soc_gauge.h
+    ui/review_dialog.cpp
+    ui/review_dialog.h
     ui/charger_table.cpp
     ui/charger_table.h
     ui/station_card.cpp
     ui/station_card.h
     ui/station_list_widget.cpp
     ui/station_list_widget.h
+    ui/station_map_bridge.h
     ui/station_map_widget.cpp
     ui/station_map_widget.h
     user_demo_service.cpp
     user_demo_service.h
     user_main_window.cpp
     user_main_window.h
+    user_main_window_detail.cpp
     user_main_window_login.cpp
+    user_main_window_map.cpp
     user_main_window_navigation.cpp
+    user_main_window_location.cpp
     user_main_window_orders.cpp
     user_main_window_profile.cpp
     user_main_window_state.cpp
@@ -39,11 +45,27 @@ target_link_libraries(ncs_user
 if(TARGET Qt6::WebEngineWidgets)
     target_link_libraries(ncs_user PRIVATE Qt6::WebEngineWidgets)
     target_compile_definitions(ncs_user PRIVATE NCS_HAS_WEBENGINE=1)
+    find_package(Qt6 ${PROJECT_MINIMUM_QT_VERSION} QUIET COMPONENTS WebChannel)
+    if(TARGET Qt6::WebChannel)
+        target_link_libraries(ncs_user PRIVATE Qt6::WebChannel)
+    endif()
 endif()
 
 ncs_set_project_warnings(ncs_user)
 
 qt_add_resources(ncs_user user_visual_assets
     PREFIX "/ncs"
-    FILES resources/charging-scene.png
+    FILES resources/charging-scene.png resources/navigation-chevron.svg
 )
+
+find_package(Qt6 ${PROJECT_MINIMUM_QT_VERSION} QUIET COMPONENTS Positioning)
+if(TARGET Qt6::Positioning)
+    target_link_libraries(ncs_user PRIVATE Qt6::Positioning)
+    target_compile_definitions(ncs_user PRIVATE NCS_HAS_POSITIONING=1)
+endif()
+
+find_package(Qt6 ${PROJECT_MINIMUM_QT_VERSION} QUIET COMPONENTS Multimedia MultimediaWidgets)
+if(TARGET Qt6::Multimedia AND TARGET Qt6::MultimediaWidgets)
+    target_link_libraries(ncs_user PRIVATE Qt6::Multimedia Qt6::MultimediaWidgets)
+    target_compile_definitions(ncs_user PRIVATE NCS_HAS_MULTIMEDIA=1)
+endif()

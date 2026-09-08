@@ -3,6 +3,7 @@
 #include "net/api_client.h"
 #include "net/user_api.h"
 
+#include <QBuffer>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -11,13 +12,74 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QtMath>
 
+#if defined(NCS_HAS_MULTIMEDIA)
+#include <QCamera>
+#include <QCameraDevice>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QImageCapture>
+#include <QMediaCaptureSession>
+#include <QMediaDevices>
+#include <QVideoWidget>
+#endif
+
 namespace ncs::user
 {
+
+#if defined(NCS_HAS_MULTIMEDIA)
+namespace
+{
+QImage captureAvatar(QWidget* parent)
+{
+    const auto devices = QMediaDevices::videoInputs();
+    if (devices.isEmpty())
+        return {};
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QStringLiteral("拍摄头像"));
+    dialog.setMinimumSize(420, 360);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* preview = new QVideoWidget(&dialog);
+    layout->addWidget(preview, 1);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("拍摄并使用"));
+    buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));
+    layout->addWidget(buttons);
+    QCamera camera(devices.front());
+    QMediaCaptureSession session;
+    QImageCapture capture;
+    session.setCamera(&camera);
+    session.setVideoOutput(preview);
+    session.setImageCapture(&capture);
+    QImage result;
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
+                     [&]
+                     {
+                         buttons->setEnabled(false);
+                         QObject::connect(
+                             &capture, &QImageCapture::imageCaptured, &dialog,
+                             [&](int, const QImage& image)
+                             {
+                                 result = image;
+                                 dialog.accept();
+                             },
+                             Qt::SingleShotConnection);
+                         capture.capture();
+                     });
+    camera.start();
+    if (dialog.exec() != QDialog::Accepted)
+        result = {};
+    camera.stop();
+    return result;
+}
+} // namespace
+#endif
 
 QWidget* UserMainWindow::createProfilePage()
 {
@@ -71,8 +133,43 @@ QWidget* UserMainWindow::createProfilePage()
     layout->addWidget(deleteAccount);
     layout->addStretch();
     connect(avatar, &QPushButton::clicked, this,
-            [this]
+            [this, avatar]
             {
+#if defined(NCS_HAS_MULTIMEDIA)
+                QMenu menu;
+                auto* cameraAction = menu.addAction(QStringLiteral("拍照"));
+                auto* fileAction = menu.addAction(QStringLiteral("从本地选择"));
+                QAction* selected = menu.exec(avatar->mapToGlobal(QPoint(0, avatar->height())));
+                if (!selected)
+                    return;
+                if (selected == cameraAction)
+                {
+                    const QImage image = captureAvatar(this);
+                    if (image.isNull())
+                    {
+                        notify(QStringLiteral("没有获取到照片，请检查摄像头权限或设备状态"), true);
+                        return;
+                    }
+                    QBuffer buffer;
+                    buffer.open(QIODevice::WriteOnly);
+                    image.scaled(512, 512, Qt::KeepAspectRatio, Qt::SmoothTransformation)
+                        .save(&buffer, "JPEG", 85);
+                    if (userApi_)
+                        userApi_->uploadAvatar(buffer.data(), QStringLiteral("camera.jpg"),
+                                               QByteArrayLiteral("image/jpeg"),
+                                               [this](ApiReply reply)
+                                               {
+                                                   if (!reply.ok())
+                                                       notify(reply.message, true);
+                                                   else
+                                                   {
+                                                       refreshProfile();
+                                                       notify(QStringLiteral("头像已更新"));
+                                                   }
+                                               });
+                    return;
+                }
+#endif
                 const QString file =
                     QFileDialog::getOpenFileName(this, QStringLiteral("选择头像"), {},
                                                  QStringLiteral("图片 (*.png *.jpg *.jpeg *.bmp)"));

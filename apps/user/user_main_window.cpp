@@ -29,7 +29,6 @@
 #include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
-#include <QtMath>
 
 #include <algorithm>
 #include <functional>
@@ -246,6 +245,10 @@ QWidget* UserMainWindow::createHomePage()
                             station.address = item.value(QStringLiteral("address")).toString();
                             station.priceCentPerKwh =
                                 item.value(QStringLiteral("totalPriceCentPerKwh")).toInt();
+                            station.electricityPriceCentPerKwh =
+                                item.value(QStringLiteral("electricityPriceCentPerKwh")).toInt();
+                            station.servicePriceCentPerKwh =
+                                item.value(QStringLiteral("servicePriceCentPerKwh")).toInt();
                             station.idleCount = item.value(QStringLiteral("idleCount")).toInt();
                             station.totalCount = item.value(QStringLiteral("totalCount")).toInt();
                             station.latitude =
@@ -265,6 +268,7 @@ QWidget* UserMainWindow::createHomePage()
                         for (const StationSummary& station : stations)
                             stationsById_.insert(station.id, station);
                         stationMap_->setStations(stations);
+                        renderStationMap();
                         stationList_->setStations(std::move(stations));
                     });
             });
@@ -278,116 +282,6 @@ QWidget* UserMainWindow::createHomePage()
                 showDetail(station.id);
             });
     connect(stationList_, &StationListWidget::mapRequested, this, &UserMainWindow::showStationMap);
-    return page;
-}
-
-QWidget* UserMainWindow::createStationMapPage()
-{
-    auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(0, 8, 0, 0);
-    layout->setSpacing(10);
-    auto* title = label(QStringLiteral("电站地图"), 23);
-    title->setStyleSheet(QStringLiteral("font-size:23px;color:#243F30;font-weight:700;"));
-    auto* hint = label(QStringLiteral("绿色标记表示有空闲电桩；点击标记查看并预约"), 13);
-    hint->setStyleSheet(QStringLiteral("font-size:13px;color:#607362;"));
-    stationMap_ = new StationMapWidget;
-    auto* back = button(
-        QStringLiteral("返回站点列表"),
-        QStringLiteral("QPushButton{background:#E4F0DC;color:#23794E;border:0;border-radius:10px;"
-                       "font-size:15px;font-weight:600;}"));
-    layout->addWidget(title);
-    layout->addWidget(hint);
-    layout->addWidget(stationMap_, 1);
-    layout->addWidget(back);
-    connect(back, &QPushButton::clicked, this, &UserMainWindow::showHome);
-    stationMap_->setOnStationSelected(
-        [this](int stationId)
-        {
-            const auto station = stationsById_.constFind(stationId);
-            if (station == stationsById_.cend())
-            {
-                notify(QStringLiteral("站点信息已更新，请返回列表刷新"), true);
-                return;
-            }
-            selectedStationDistance_ = station->distance;
-            showDetail(stationId);
-        });
-    return page;
-}
-
-void UserMainWindow::showStationMap()
-{
-    bottomNavigation_->hide();
-    stationMap_->setStations(stationsById_.values().toVector());
-    pages_->setCurrentIndex(8);
-}
-
-QWidget* UserMainWindow::createDetailPage()
-{
-    auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(0, 8, 0, 0);
-    layout->setSpacing(10);
-    auto* back = button(QStringLiteral("‹ 返回附近电站"),
-                        QStringLiteral("QPushButton{color:#23794E;border:0;background:transparent;"
-                                       "text-align:left;font-size:14px;padding:0;}"));
-    back->setFixedHeight(32);
-    layout->addWidget(back);
-    detailTitle_ = label({}, 22);
-    detailTitle_->setStyleSheet(QStringLiteral("font-size:22px;color:#243F30;font-weight:700;"));
-    detailMeta_ = label({}, 13);
-    detailMeta_->setStyleSheet(QStringLiteral("font-size:13px;color:#607362;line-height:1.5;"));
-    layout->addWidget(detailTitle_);
-    layout->addWidget(detailMeta_);
-    auto* chargerHeading = label(QStringLiteral("选择可用电桩"), 16);
-    chargerHeading->setStyleSheet(
-        QStringLiteral("font-size:16px;color:#243F30;font-weight:700;padding-top:4px;"));
-    layout->addWidget(chargerHeading);
-    chargerTable_ = new ChargerTable;
-    layout->addWidget(chargerTable_, 1);
-    auto* navigate = button(QStringLiteral("一键导航"));
-    navigate->setObjectName(QStringLiteral("secondaryButton"));
-    auto* reserve = button(QStringLiteral("预约所选电桩"));
-    auto* actions = new QHBoxLayout;
-    actions->setSpacing(10);
-    actions->addWidget(navigate, 1);
-    actions->addWidget(reserve, 2);
-    layout->addLayout(actions);
-    connect(back, &QPushButton::clicked, this, &UserMainWindow::showHome);
-    connect(navigate, &QPushButton::clicked, this, &UserMainWindow::showNavigation);
-    connect(reserve, &QPushButton::clicked, this,
-            [this]
-            {
-                if (userApi_)
-                {
-                    beginFlowRequest();
-                    return;
-                }
-                if (service_.hasUnfinishedOrder())
-                {
-                    QMessageBox::information(this, QStringLiteral("未完成订单"),
-                                             QStringLiteral("您有未完成的充电订单，请先结算。"));
-                    showCharge();
-                    return;
-                }
-                QString message;
-                selectedChargerCode_ = chargerTable_->selectedChargerCode();
-                if (service_.reserve(selectedStationId_, selectedChargerCode_, &message))
-                {
-                    chargingStarted_ = false;
-                    startButton_->setEnabled(true);
-                    cancelButton_->setEnabled(true);
-                    settleButton_->setEnabled(false);
-                    chargeState_->setText(QStringLiteral("已预约 · %1").arg(selectedChargerCode_));
-                    notify(message);
-                    showCharge();
-                }
-                else
-                {
-                    notify(message, true);
-                }
-            });
     return page;
 }
 

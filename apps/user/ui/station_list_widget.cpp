@@ -142,6 +142,15 @@ StationListWidget::StationListWidget(const QVector<StationSummary>& stations, QW
     refresh();
 }
 
+QString StationListWidget::navigationOriginText() const
+{
+    if (!searchEdit_->text().trimmed().isEmpty())
+        return searchEdit_->text().trimmed();
+    const QString location = locationBox_->currentText();
+    return (location == QStringLiteral("附近") ? QStringLiteral("中关村") : location) +
+           QStringLiteral("（模拟位置）");
+}
+
 void StationListWidget::setStations(QVector<StationSummary> stations)
 {
     setLoading(false);
