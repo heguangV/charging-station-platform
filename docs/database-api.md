@@ -494,7 +494,9 @@ Idempotency-Key: <uuid>
 
 ### 4.5 GET `/stations/{stationId}/route` — 腾讯地图路线规划
 
-需要用户会话。参数：`latitudeE6`、`longitudeE6`、`keyword`、`mode`。`mode` 必填且仅允许 `driving`、`walking`、`transit`；经纬度必须成对出现。客户端已有有效坐标时优先使用坐标，否则服务端尝试地理编码 `keyword`，最后才使用演示默认位置。
+需要用户会话。参数：`latitudeE6`、`longitudeE6`、`keyword`、`mode`、可选 `coordinateType`（`gcj02` 默认，或 `wgs84`）。`mode` 必填且仅允许 `driving`、`walking`、`transit`；经纬度必须成对出现。这里的坐标和 `keyword` 均代表起点，禁止填入目标电站坐标或地址。客户端选择预设模拟位置时传坐标，输入自定义地址时省略经纬度并只传 `keyword`。服务端已有有效坐标时优先使用坐标，否则尝试地理编码 `keyword`，最后才使用演示默认位置。
+
+系统自动定位必须传成对坐标与 `coordinateType=wgs84`；服务端先调用腾讯固定 HTTPS 坐标转换端点（type=1），将 WGS84 转为 GCJ-02 后规划。响应与浏览器 URL 均使用转换后的坐标。坐标类型非法或 WGS84 缺少坐标返回 422；转换失败返回 503（错误码 12），客户端提示重新定位或输入地址，不使用默认位置掩盖转换失败。
 
 服务端使用 `TENCENT_MAP_SERVER_KEY` 请求固定的腾讯地图 HTTPS 路线规划端点；Key 不得出现在响应、URL 日志或客户端配置中。腾讯调用在有界阻塞工作队列执行，超时、无 Key、配额或响应异常时返回成功的降级结果，而不阻断导航页面。
 
@@ -516,7 +518,8 @@ Idempotency-Key: <uuid>
   "locationFallback": false,
   "routeFallback": false,
   "polyline": [
-    {"latitudeE6": 39977680, "longitudeE6": 116316417}
+    {"latitudeE6": 39977680, "longitudeE6": 116316417},
+    {"latitudeE6": 39983700, "longitudeE6": 116315200}
   ],
   "steps": [
     {"instruction": "向东行驶", "distanceMeter": 300, "durationSecond": 60}
@@ -525,7 +528,7 @@ Idempotency-Key: <uuid>
 }
 ```
 
-腾讯路线成功时 `provider=TENCENT_MAP`、`routeFallback=false`。腾讯能力不可用时返回 `provider=LOCAL_FALLBACK`、`routeFallback=true`、`durationSecond=0`，`polyline` 只含起终点并以 Haversine 计算 `distanceMeter`；`browserUrl` 仅作为最终用户操作入口。`locationFallback` 只表示起点定位是否退回默认坐标，与路线服务是否降级相互独立。
+腾讯路线有效时 `provider=TENCENT_MAP`、`routeFallback=false`。起终点直线距离 ≤5 米，或返回距离 ≤1 米、预计时长 ≤0、折线不足两个有效且不同的点，均视为退化结果，按下述本地降级返回，不能仅凭第三方 status=0 标记成功。腾讯能力不可用时返回 `provider=LOCAL_FALLBACK`、`routeFallback=true`、`durationSecond=0`，`polyline` 只含起终点并以 Haversine 计算 `distanceMeter`；`browserUrl` 仅作为最终用户操作入口。`locationFallback` 只表示起点定位是否退回默认坐标，与路线服务是否降级相互独立。
 
 ## 5. 充电流程接口（`/api/v1/user`）
 
@@ -724,6 +727,22 @@ Idempotency-Key: <uuid>
 ```
 
 订单、钱包、欠费、钱包流水、设备释放、设备累计值、流程状态和通知 outbox 必须在同一事务完成。重复请求返回同一小票。
+
+### 5.9 订单评价（UC-U-12）
+
+`GET /api/v1/user/orders/{orderNo}/review`：Bearer 用户令牌必填，仅可查询本人订单。成功 `data` 为 `{"review":null}`（尚未评价），或 `{"review":{"orderNo":"OR...","rating":5,"content":"充电方便","createdAt":1788825600}}`。不存在或非本人订单均返回 `404 / code=4`。
+
+`POST /api/v1/user/orders/{orderNo}/review`：Bearer 与 UUID `Idempotency-Key` 必填，JSON 白名单仅 `rating`（必填整数 1～5）、`content`（必填字符串，首尾空白移除后 1～500 个 Unicode 码点，不允许 NUL）。业务资格、可见范围和不可修改规则见 SRS `UC-U-12`。
+
+成功 `data` 直接为 `{orderNo,rating,content,createdAt}`，不含 `userId` 等内部信息。使用统一信封、请求 ID 和错误映射。非法字段 `422 / code=2`；状态不允许 `409 / code=15`；已评价且内容不同 `409 / code=5`；相同幂等键的请求体不同 `409 / code=14`。同单相同星级和标准化文字，无论是否换键均返回原记录和原时间。
+
+幂等作用域为 `u{userId}:review:{orderNo}`，永久保存成功响应。写入在 `BEGIN IMMEDIATE` 内核查订单、读取已有评价并插入，数据库主键保证每单唯一；读取和写入均交给阻塞线程池，不占用 Crow 事件循环。评价文本按纯文本显示，不解释为 HTML。
+
+### 5.10 场站评论墙（UC-U-12）
+
+`GET /api/v1/user/stations/{id}/reviews`：Bearer 用户令牌必填。成功 `data` 为 `{"items":[{"author":"张**","rating":5,"content":"充电方便","createdAt":1788825600}]}`，按 `createdAt` 倒序，只读展示所属场站已完成订单的评价，服务端最多返回最新 200 条。`author` 为作者昵称；昵称为空或账号已注销时返回掩码手机号或“已注销用户”。响应不含 `userId`、`orderNo`、完整手机号等个人信息。
+
+场站不存在返回 `404 / code=4`；未登录返回 `401`。查询在阻塞线程池执行，不占用 Crow 事件循环；评价文本按纯文本显示，不解释为 HTML。评论墙为只读视图，不提供编辑、删除或独立写入入口。
 
 ## 6. 管理员认证、账号与用户管理（`/api/v1/admin`）
 

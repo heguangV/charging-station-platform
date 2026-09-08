@@ -40,9 +40,10 @@
 
 | 项目 | 依据 | 产物 | 验证 | 状态 |
 | --- | --- | --- | --- | --- |
-| 用户端界面 | UC-U-01~UC-U-10 | `apps/user`（验证码/短信登录、登出、导航路线、部分资料走真实 REST；首页、充电、订单等业务数据仍来自演示服务） | `ncs_user_net_tests`、`ncs_user_smoke`；服务端侧由 `ncs_user_business_routes` 覆盖 | 部分完成：缺真实服务端联调与 UI 验收证据 |
-| 腾讯地图导航 | UC-U-02、UC-U-04 | 服务端地理编码/路线规划、用户端路线摘要/内嵌地图及最终降级 | 路线应用服务、腾讯响应解析、REST 契约与 UI 烟雾测试；2026-09-05 图形会话验收：登录后驾车（3.3 km/10 分钟）、步行（3.2 km/48 分钟）、公交（4.1 km/30 分钟）均取得腾讯路线并在内嵌腾讯地图绘出折线截图，空 Server Key 时展示本地最终降级、直线距离与浏览器导航入口 | 完成（内嵌地图渲染依赖软件合成，VM 内需 `--disable-gpu-compositing`） |
-| 拍照上传头像 | UC-U-11 | 规划 `apps/user/avatar`、拍照对话框、可选 Multimedia 构建与真实 REST 头像闭环 | 规划图片处理、二进制网络、无设备 UI、有/无 Multimedia 构建和实机验收 | 未开始；必须先完成 UC-U-05 客户端真实头像链路 |
+| 用户端界面 | UC-U-01~UC-U-10 | `apps/user`（默认启动下首页、充电、订单、资料、头像、充值、登出、注销、导航均走真实 REST；`--mock-scenario` 才启用演示服务） | `ncs_user_net_tests`、`ncs_user_smoke`；服务端侧由 `ncs_user_business_routes` 覆盖；真实 REST GUI 证据待归档 | 部分完成：缺真实服务端联调与 UI 验收证据 |
+| 腾讯地图导航 | UC-U-02、UC-U-04 | 系统定位优先、WGS84 坐标转换、手动起点、退化路线检查、导航页与明确降级提示 | 2026-09-07：7 项导航/契约/烟雾测试通过；420×760 Qt 页面验证定位失败、模拟起点、路线摘要与空折线状态，见 [验证记录](navigation-fix-2026-09-07.md)。2026-09-05 的真实腾讯地图验收保留为历史证据 | 部分完成：修复与状态回归已验证；VM GeoClue 禁用定位，系统定位成功至真实腾讯底图的整条链路待实机验收 |
+| 拍照上传头像 | UC-U-11 | `apps/user` 已有头像 REST 链路；拍照对话框和 Qt Multimedia 采集仍待实现 | 图片处理、二进制网络、无设备 UI、有/无 Multimedia 构建和实机验收 | 部分完成：前置头像 REST 已就绪，仍缺摄像头采集 |
+| 订单评价与场站评论墙 | UC-U-12 | 后端 v9 `order_review` 迁移、`OrderReviewService`、`GET/POST /api/v1/user/orders/{orderNo}/review`（幂等作用域 `u{userId}:review:{orderNo}`）及 `GET /api/v1/user/stations/{id}/reviews` 评论墙（作者脱敏、倒序限量）；桌面端订单卡/小票评价入口、`ReviewDialog` 与场站详情评论板块在线拉取；安卓端订单评价入口与对话框及 `StationDetail` 评论板块（复用同一 REST 契约）；演示模式评论墙含本人评价 | `ncs_order_review_tests`（迁移、所有权、状态、唯一性、幂等、评论墙分组/隔离/排序/脱敏/注销展示/重启持久，标签 contract+integration）；安卓 arm64 debug APK 已重建（含评论墙），真机交互与 UI 验收证据待归档 | 部分完成：后端、桌面端与安卓端实现完成；安卓端待真机验收 |
 
 ## 阶段五：管理端（部分完成）
 
@@ -50,7 +51,7 @@
 | --- | --- | --- | --- | --- |
 | 管理服务端 | UC-A-01~UC-A-08 | `server/controller` 管理路由（站点/设备/价格/用户/流程/统计/备份/ML）、登录锁定与二次验证 | `ncs_admin_routes` | 完成 |
 | 管理服务端（管理员账号） | UC-A-09 | 管理员账号列表、创建（OPERATOR）、启用/停用、本人改密，及首个 OWNER 一次性引导（`--bootstrap-owner` + `NCS_ADMIN_BOOTSTRAP_KEY`） | `ncs_admin_account_routes`、`ncs_sqlite_admin_accounts` | 后端部分完成（管理端界面未实现） |
-| 管理端界面 | UC-A-01~UC-A-08 | `apps/admin` 占位骨架 | `ncs_admin_smoke`（仅启动） | 未开始 |
+| 管理端界面 | UC-A-01~UC-A-08 | `apps/admin`（登录、总览、站点、充电桩、用户、预测五页；真实 REST、Bearer、幂等键、请求 ID、响应信封校验） | `ncs_admin_smoke`、`ncs_admin_ui_contract`、`ncs_admin_api_smoke` | 部分完成：缺独立状态表、部分站点/电桩管理动作、订单历史、历史预测对比图和总营收卡 |
 
 ## 阶段六：大屏与机器学习（部分完成）
 

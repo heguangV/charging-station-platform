@@ -5,7 +5,7 @@
 | 用途 | 定义 SQLite 物理模型、约束、事务和迁移方式 |
 | 需求来源 | SRS 的 `BR-*`、`UC-D-*` 及相关用例 |
 | 接口契约 | [REST / WebSocket 接口](database-api.md) |
-| 版本 | 1.3 |
+| 版本 | 1.6 |
 
 本文不重复业务流程、错误码、性能指标或数据保留期限。业务语义以 [SRS](01-requirements-specification.md) 为准，公开字段与错误响应以接口文档为准。
 
@@ -187,10 +187,19 @@ v8 在 v7 之后以与既有迁移相同的守卫模式执行一次：`schema_ve
 
 性能与容量阈值不在本文重复，测试直接使用 SRS 的 `NFR-P-*`。
 
+### 8.1 订单评价存储（v9）
+
+新增 `order_review`，不改写已有订单和计费数据。`order_no TEXT PRIMARY KEY` 外键引用 `charging_order(order_no)`；`user_id INTEGER NOT NULL` 引用 `user_account(id)`；`rating` 约束 1～5；`content TEXT NOT NULL` 约束长度 1～500；`created_at` 为正整数 UTC 秒。`ix_order_review_user(user_id,created_at)` 支持按用户检索。
+
+应用服务在同一写事务内校验订单归属和结算状态、检查已有记录并插入；`BEGIN IMMEDIATE` 串行化并发检查，唯一主键作为最终保护。相同内容重试读取原结果，事务异常整体回滚。客户端不直接访问此表。
+
+v9 在 v8 之后事务化建立表、索引及 `9/order-review/ncs-v9-order-review` 迁移标记。已是 v9 的数据库再次启动不会清空评价。升级前按运行手册备份；旧版程序的就绪检查不识别 v9，回退必须使用升级前备份，不能只删除迁移标记。自动化验证见 `tests/order_review_test.cpp`。
+
 ## 9. 变更记录
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 1.6 | 2026-09-08 | UC-U-12：新增 v9 订单评价表、唯一性和事务约束；已有订单保持不变 |
 | 1.1 | 2026-09-02 | 初版物理模型 |
 | 1.2 | 2026-09-03 | 与实现对齐：身份表更名 `user_account`/`admin_account`，审计表更名 `ops_log`，充值表更名 `recharge_order`；补充 `user_avatar`、`flow_queue`、`business_sequence`；会话/验证码明确为内存态不落库（SRS `UC-D-01` 同步）；移除 `app_config`、`auth_session`、`sms_code`、`charger_status_history`、`settlement_attempt`（设备状态证据由 `ops_log`/`device_command`/`flow_event`/`outbox_event` 承担，结算重试由状态 80 + 版本 + 幂等记录承担）；更新种子范围、迁移版本与验证清单 |
 | 1.3 | 2026-09-05 | 与实现对齐：表清单补充 `dashboard_state`；迁移版本更新到 v7 并澄清 `checksum` 列保存的是版本名称标签；验证清单同步顺序升级与并发唯一性的既有测试口径 |
