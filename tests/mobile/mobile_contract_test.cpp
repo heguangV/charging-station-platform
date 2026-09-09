@@ -1,4 +1,5 @@
 #include "mobile_api.h"
+#include "mobile_route_query.h"
 #include <QBuffer>
 #include <QFile>
 #include <QGuiApplication>
@@ -15,6 +16,20 @@ class MobileContractTest : public QObject
 {
     Q_OBJECT
   private slots:
+    void navigationCoordinateTypes()
+    {
+        using ncs::mobile::routeQuery;
+        const auto gps = routeQuery(39904200, 116407400, true, {}, "walking");
+        QCOMPARE(gps.queryItemValue("coordinateType"), QString("wgs84"));
+        QCOMPARE(gps.queryItemValue("latitudeE6"), QString("39904200"));
+        QCOMPARE(gps.queryItemValue("mode"), QString("walking"));
+        const auto simulated = routeQuery(39904200, 116407400, false, {}, {});
+        QCOMPARE(simulated.queryItemValue("coordinateType"), QString("gcj02"));
+        const auto address = routeQuery(39904200, 116407400, true, "北京南站", "transit");
+        QVERIFY(!address.hasQueryItem("coordinateType"));
+        QVERIFY(!address.hasQueryItem("latitudeE6"));
+        QCOMPARE(address.queryItemValue("keyword"), QString("北京南站"));
+    }
     void contractsAndRecovery()
     {
         QTcpServer server;
@@ -25,6 +40,8 @@ class MobileContractTest : public QObject
         bool smsFails = false;
         bool avatarFails = false;
         bool unauthorized = false;
+        int profileVersion = 7;
+        int nicknameWrites = 0;
         connect(
             &server, &QTcpServer::newConnection, this,
             [&]
@@ -62,11 +79,20 @@ class MobileContractTest : public QObject
                         else if (path.endsWith("/login/sms"))
                             data = {{"accessToken", "test-token"}};
                         else if (path.endsWith("/me"))
+                        {
+                            if (raw.startsWith("PUT "))
+                            {
+                                const auto body =
+                                    QJsonDocument::fromJson(raw.mid(end + 4)).object();
+                                QCOMPARE(body.value("version").toInt(), profileVersion);
+                                ++nicknameWrites;
+                            }
                             data = {{"nickname", "测试"},
                                     {"phoneMasked", "199****0001"},
                                     {"balanceCent", 10000},
-                                    {"version", 7},
+                                    {"version", profileVersion},
                                     {"registeredAt", 1788820000}};
+                        }
                         else if (path.contains("/wallet/recharges"))
                         {
                             ++rechargeCalls;
@@ -94,7 +120,11 @@ class MobileContractTest : public QObject
                             im.save(&buffer, "JPEG");
                         }
                         else if (path.endsWith("/avatar"))
+                        {
                             status = avatarFails ? 503 : 200;
+                            if (!avatarFails)
+                                data = {{"version", ++profileVersion}};
+                        }
                         else if (path.endsWith("/flows/F1/progress"))
                             data = {{"flowNo", "F1"}, {"energyMwh", 1500000}, {"amountCent", 200}};
                         else if (path.endsWith("/flows/F1"))
@@ -189,6 +219,9 @@ class MobileContractTest : public QObject
         QVERIFY(jpeg > 0);
         const auto decoded = QImage::fromData(upload.mid(jpeg), "JPEG");
         QCOMPARE(decoded.size(), QSize(512, 512));
+        api.updateNickname("上传头像后修改昵称");
+        QTRY_VERIFY(!api.busy());
+        QCOMPARE(nicknameWrites, 2);
         const auto oldAvatar = api.avatarData();
         avatarFails = true;
         QVERIFY(capture.save(api.avatarCapturePath(), "JPEG"));

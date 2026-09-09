@@ -7,7 +7,7 @@
 | 项目名称 | 东软电动汽车充电桩应用管理平台 NCS                      |
 | 文档版本 | V1.1                                     |
 | 文档类型 | 软件需求规格说明书                                |
-| 目标平台 | Ubuntu 22.04+ 用户端/PC 管理端/Crow 服务端；Windows 10/11 保持源码构建能力；Android 为远期目标 |
+| 目标平台 | Ubuntu 22.04+ 用户端/PC 管理端/Crow 服务端；Windows 10/11 保持源码构建能力；Android 使用 Qt Quick 用户端，支持短信登录、REST 业务和拍照头像 |
 | 技术栈  | Qt 6.2 / Qt Widgets / Crow / HTTPS REST + WebSocket / C++17 / CMake / SQLite 3 / Python 3.10+ / Vue 3 + ECharts；增强任务按需使用 Qt Multimedia / Qt WebSockets |
 | 开发工具 | Qt Creator 6.2+ |
 | 数据库  | SQLite 3，单文件 `charge_platform.db`，仅由同机 Crow 服务端访问 |

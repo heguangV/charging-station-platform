@@ -1,4 +1,5 @@
 #include "mobile_api.h"
+#include "mobile_route_query.h"
 #include <QBuffer>
 #ifdef NCS_HAS_POSITIONING
 #include <QGeoPositionInfo>
@@ -33,15 +34,7 @@ void MobileApi::loadRoute(qint64 stationId, const QString& mode)
     const int serial = ++routeRequest_;
     route_.clear();
     emit routeChanged();
-    QUrlQuery query;
-    if (locationAddress_.isEmpty())
-    {
-        query.addQueryItem("latitudeE6", QString::number(latitudeE6_));
-        query.addQueryItem("longitudeE6", QString::number(longitudeE6_));
-    }
-    if (!locationAddress_.isEmpty())
-        query.addQueryItem("keyword", locationAddress_);
-    query.addQueryItem("mode", mode.isEmpty() ? "driving" : mode);
+    const auto query = routeQuery(latitudeE6_, longitudeE6_, gpsOrigin_, locationAddress_, mode);
     get(QStringLiteral("/user/stations/%1/route?%2")
             .arg(stationId)
             .arg(query.toString(QUrl::FullyEncoded)),
@@ -85,6 +78,7 @@ void MobileApi::setLocation(int region, const QString& address)
     locating_ = false;
     latitudeE6_ = lat[region];
     longitudeE6_ = lon[region];
+    gpsOrigin_ = false;
     locationAddress_ = address.trimmed();
     locationLabel_ = names[region] + QStringLiteral("（模拟位置）");
     emit locationChanged();
@@ -139,6 +133,7 @@ void MobileApi::locateDevice()
                 }
                 latitudeE6_ = qRound64(info.coordinate().latitude() * 1000000);
                 longitudeE6_ = qRound64(info.coordinate().longitude() * 1000000);
+                gpsOrigin_ = true;
                 locationAddress_.clear();
                 locationLabel_ = QStringLiteral("当前位置（系统定位）");
                 emit locationChanged();

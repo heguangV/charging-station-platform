@@ -210,6 +210,7 @@ class MobileApi final : public QObject
     bool avatarUploading_ = false;
     qint64 profileVersion_ = 0;
     qint64 latitudeE6_ = 39904200, longitudeE6_ = 116407400;
+    bool gpsOrigin_ = false;
     QString locationLabel_ = QStringLiteral("北京中心（模拟位置）");
     QString locationAddress_, loginPhone_, createdAt_;
     QHash<QString, QByteArray> mutationKeys_;

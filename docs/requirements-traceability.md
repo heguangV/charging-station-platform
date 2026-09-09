@@ -76,7 +76,8 @@
 | 项目 | 依据 | 规划产物 | 验证 | 状态 |
 | --- | --- | --- | --- | --- |
 | 拍照头像 | UC-U-11 | `apps/user/avatar`、`AvatarCaptureDialog`、可选 Qt Multimedia 接入 | 专项实施路径 A0～A5 | 未开始 |
-| 设备通信模拟器 | UC-X-01 | 规划 `tools/device_link_sim`独立 CMake，通用通信核心、桩端/平台端 GUI | 专项实施路径 S0～S4，5 桩并发验收 | 未开始 |
+| 设备通信模拟器 | UC-X-01 | `tools/device_link_sim` 独立 CMake、固定数组帧编解码和非法帧测试 | 独立 `device_link_core_test`；S1～S4 的连接、5 桩并发和 GUI 仍待实现 | 部分完成：通信帧核心已实现 |
+| 安卓用户端 | Android 用户端 | `apps/mobile` Qt Quick 用户端、真实 REST、短信登录、站点、订单、资料和拍照头像 | `tests/mobile` 独立契约/布局测试；APK 构建与真机验收分别记录 | 部分完成：已实现核心业务；2026-09-09 补充 GPS 坐标系与头像版本回归，见 [PR 补充验证](pr36-followup.md) |
 
 ## 非功能需求状态
 

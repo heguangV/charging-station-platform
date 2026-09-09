@@ -10,6 +10,29 @@ permissions:
   contents: read
 
 jobs:
+  mobile-contract:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install CMake
+        run: python3 -m pip install --disable-pip-version-check cmake==3.31.6
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          arch: gcc_64
+          cache: true
+      - name: Build and test mobile contracts and layouts
+        run: |
+          cmake -S tests/mobile -B build/mobile-contract
+          cmake --build build/mobile-contract --parallel 2
+          ctest --test-dir build/mobile-contract --output-on-failure
+      - name: Build and test device frame codec
+        run: |
+          cmake -S tools/device_link_sim -B build/device-link
+          cmake --build build/device-link --parallel 2
+          ctest --test-dir build/device-link --output-on-failure
+
   ubuntu:
     runs-on: ubuntu-22.04
     timeout-minutes: 20

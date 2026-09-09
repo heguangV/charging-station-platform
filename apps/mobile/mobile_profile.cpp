@@ -143,8 +143,9 @@ void MobileApi::uploadAvatar(const QString& path)
                 avatarUploading_ = false;
                 emit busyChanged();
                 parseReply(reply,
-                           [this](const QJsonObject&)
+                           [this](const QJsonObject& data)
                            {
+                               profileVersion_ = data.value("version").toInteger();
                                setMessage(QStringLiteral("头像已更新"));
                                auto* avatar = manager_.get(request("/user/me/avatar/content"));
                                avatar->setProperty("generation", generation_);
