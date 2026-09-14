@@ -3,6 +3,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QUrlQuery>
@@ -26,6 +27,7 @@ class AdminHttpFixture : public QTcpServer
     QList<AdminRequest> requests;
     bool expire = false, failUsers = false, emptyUsers = false, mustChange = false,
          wrongReauth = false;
+    bool appealApproved = false;
     int userStatus = 1;
     int userVersion = 8;
     AdminHttpFixture()
@@ -159,6 +161,23 @@ class AdminHttpFixture : public QTcpServer
                        {"operationalCount", 21},
                        {"totalCount", 24},
                        {"healthPercent", 87.5}});
+        if (path == "admin/tariffs")
+            return ok({{"total", 2},
+                       {"items", QJsonArray{QJsonObject{{"adcode", "110108"}},
+                                            QJsonObject{{"adcode", "110105"}}}}});
+        if (path == "admin/stations" && request.method == "POST")
+        {
+            require(QRegularExpression("^[A-Za-z0-9_]{2,16}$")
+                        .match(request.body.value("code").toString())
+                        .hasMatch(),
+                    "station code validation");
+            const auto region = request.body.value("adcode").toString();
+            require(region == "110105" || region == "110108", "station tariff region");
+            return ok({{"id", 88},
+                       {"code", request.body.value("code")},
+                       {"enabled", true},
+                       {"version", 1}});
+        }
         if (path == "admin/stations")
             return ok(
                 {{"total", 1},
@@ -180,6 +199,19 @@ class AdminHttpFixture : public QTcpServer
                                                         {"totalCount", 157},
                                                         {"totalMinutes", 1234},
                                                         {"version", 5}}}}});
+        if (path == "admin/order-appeals") {
+            if (appealApproved) return ok({{"total", 0}, {"items", QJsonArray{}}});
+            return ok({{"total", 1}, {"items", QJsonArray{QJsonObject{
+                {"orderNo", "ORDER-APPEAL-1"}, {"stationName", QStringLiteral("测试电站")},
+                {"chargerCode", "DC-01"}, {"amountCent", 1800},
+                {"reason", QStringLiteral("设备提前停止充电，实际服务未达到预期，请审核取消订单。")}}}}});
+        }
+        if (path == "admin/order-appeals/ORDER-APPEAL-1/approval") {
+            require(request.method == "POST" && request.body.value("confirmed").toBool(), "appeal must be explicitly approved");
+            require(!request.headers.value("idempotency-key").isEmpty(), "appeal approval idempotency key");
+            appealApproved = true;
+            return ok({{"status", 70}});
+        }
         if (path == "admin/users")
         {
             if (failUsers)

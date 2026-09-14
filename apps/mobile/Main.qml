@@ -104,6 +104,18 @@ ApplicationWindow {
         mobileApi.beginReview(orderNo);
         reviewDialog.open();
     }
+    function openConfirm(orderNo, amountCent) {
+        confirmDialog.orderNo = orderNo;
+        confirmDialog.amountCent = Number(amountCent || 0);
+        mobileApi.clearMessage();
+        confirmDialog.open();
+    }
+    function openAppeal(orderNo) {
+        appealDialog.orderNo = orderNo;
+        appealReason.text = "";
+        mobileApi.clearMessage();
+        appealDialog.open();
+    }
     Connections {
         target: mobileApi
         function onChargersChanged() {
@@ -127,6 +139,16 @@ ApplicationWindow {
         function onReceiptChanged() {
             if (Object.keys(mobileApi.receipt || {}).length > 0)
                 window.page = "receipt";
+        }
+        function onOrderConfirmed() {
+            if (confirmDialog.opened)
+                confirmDialog.close();
+        }
+        function onOrderAppealed() {
+            if (appealDialog.opened)
+                appealDialog.close();
+            if (window.page === "receipt" && mobileApi.receipt.orderNo)
+                mobileApi.loadOrder(mobileApi.receipt.orderNo);
         }
     }
     Timer {
@@ -546,13 +568,16 @@ ApplicationWindow {
                     model: mobileApi.orders
                     delegate: Rectangle {
                         width: orderList.width
-                        height: 156
+                        height: orderCard.implicitHeight + 30
                         radius: 14
                         color: "#FFFFFF"
                         border.width: 1
                         border.color: window.border
                         ColumnLayout {
-                            anchors.fill: parent
+                            id: orderCard
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
                             anchors.margins: 15
                             spacing: 7
                             RowLayout {
@@ -616,6 +641,56 @@ ApplicationWindow {
                                         horizontalAlignment: Text.AlignHCenter
                                     }
                                 }
+                            }
+                            // UC-U-09：待确认订单必须由用户处理，否则金额一直冻结且无法新建充电。
+                            RowLayout {
+                                Layout.fillWidth: true
+                                visible: modelData.statusText === "待用户确认"
+                                spacing: 8
+                                Button {
+                                    text: "确认完成并扣款"
+                                    Layout.fillWidth: true
+                                    enabled: !mobileApi.busy
+                                    onClicked: window.openConfirm(modelData.orderNo, modelData.amountCent)
+                                    background: Rectangle {
+                                        radius: 11
+                                        color: parent.enabled ? "#0F9D71" : "#E1E8DA"
+                                    }
+                                    contentItem: Label {
+                                        text: parent.text
+                                        color: parent.enabled ? "white" : "#687762"
+                                        font.pixelSize: 13
+                                        font.bold: true
+                                        horizontalAlignment: Text.AlignHCenter
+                                    }
+                                }
+                                Button {
+                                    text: "不满意，发起申诉"
+                                    Layout.fillWidth: true
+                                    enabled: !mobileApi.busy
+                                    onClicked: window.openAppeal(modelData.orderNo)
+                                    background: Rectangle {
+                                        radius: 11
+                                        color: parent.enabled ? "white" : "#F2F4F7"
+                                        border.width: 1
+                                        border.color: parent.enabled ? "#F2C4BC" : "#E5E7EB"
+                                    }
+                                    contentItem: Label {
+                                        text: parent.text
+                                        color: parent.enabled ? "#B42318" : "#98A2B3"
+                                        font.pixelSize: 13
+                                        font.bold: true
+                                        horizontalAlignment: Text.AlignHCenter
+                                    }
+                                }
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                visible: modelData.statusText === "申诉待审核"
+                                text: "申诉已发送管理端，审核期间不扣款。"
+                                color: muted
+                                font.pixelSize: 12
+                                wrapMode: Text.Wrap
                             }
                         }
                     }
@@ -990,13 +1065,19 @@ ApplicationWindow {
                             color: muted
                         }
                         Label {
-                            text: "支付金额  " + window.money(mobileApi.receipt.paidCent !== undefined ? mobileApi.receipt.paidCent : mobileApi.receipt.amountCent)
+                            // 100/110 尚未扣款：paidCent 为 0，展示冻结的应付金额而非支付金额。
+                            text: mobileApi.receipt.statusText === "待用户确认"
+                                  ? "应付金额  " + window.money(mobileApi.receipt.amountCent)
+                                  : mobileApi.receipt.statusText === "申诉待审核"
+                                    ? "争议金额  " + window.money(mobileApi.receipt.amountCent)
+                                    : "支付金额  " + window.money(mobileApi.receipt.paidCent !== undefined ? mobileApi.receipt.paidCent : mobileApi.receipt.amountCent)
                             color: green
                             font.pixelSize: 22
                             font.bold: true
                         }
                         Label {
-                            text: "结算后余额  " + window.money(mobileApi.receipt.balanceAfterCent)
+                            text: (mobileApi.receipt.statusText === "待用户确认" || mobileApi.receipt.statusText === "申诉待审核"
+                                   ? "当前余额  " : "结算后余额  ") + window.money(mobileApi.receipt.balanceAfterCent)
                             color: muted
                         }
                         Label {
@@ -1011,6 +1092,55 @@ ApplicationWindow {
                     visible: mobileApi.receipt.statusText === "已完成"
                     Layout.fillWidth: true
                     onClicked: window.openReview(mobileApi.receipt.orderNo)
+                }
+                Label {
+                    visible: mobileApi.receipt.statusText === "申诉待审核"
+                    text: "申诉审核期间暂不扣款，可稍后在“我的订单”查看处理结果。"
+                    color: muted
+                    font.pixelSize: 12
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
+                RowLayout {
+                    visible: mobileApi.receipt.statusText === "待用户确认"
+                    spacing: 10
+                    Layout.fillWidth: true
+                    Button {
+                        text: "确认完成并扣款"
+                        Layout.fillWidth: true
+                        enabled: !mobileApi.busy
+                        onClicked: window.openConfirm(mobileApi.receipt.orderNo, mobileApi.receipt.amountCent)
+                        background: Rectangle {
+                            radius: 11
+                            color: parent.enabled ? "#0F9D71" : "#E1E8DA"
+                        }
+                        contentItem: Label {
+                            text: parent.text
+                            color: parent.enabled ? "white" : "#687762"
+                            font.pixelSize: 13
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                    }
+                    Button {
+                        text: "不满意，发起申诉"
+                        Layout.fillWidth: true
+                        enabled: !mobileApi.busy
+                        onClicked: window.openAppeal(mobileApi.receipt.orderNo)
+                        background: Rectangle {
+                            radius: 11
+                            color: parent.enabled ? "white" : "#F2F4F7"
+                            border.width: 1
+                            border.color: parent.enabled ? "#F2C4BC" : "#E5E7EB"
+                        }
+                        contentItem: Label {
+                            text: parent.text
+                            color: parent.enabled ? "#B42318" : "#98A2B3"
+                            font.pixelSize: 13
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                    }
                 }
                 Button {
                     text: "完成，返回首页"
@@ -1650,6 +1780,133 @@ ApplicationWindow {
                     text: parent.text
                     color: "white"
                     horizontalAlignment: Text.AlignHCenter
+                }
+            }
+        }
+    }
+    Sheet {
+        id: confirmDialog
+        anchors.centerIn: parent
+        modal: true
+        title: "确认订单并扣款"
+        standardButtons: Dialog.NoButton
+        width: Math.min(window.width - 24, 390)
+        property string orderNo: ""
+        property real amountCent: 0
+        contentItem: ColumnLayout {
+            spacing: 10
+            Label {
+                text: "确认对本次充电满意？"
+                color: ink
+                font.bold: true
+                Layout.fillWidth: true
+            }
+            Label {
+                text: "应付金额  " + window.money(confirmDialog.amountCent)
+                color: green
+                font.pixelSize: 20
+                font.bold: true
+            }
+            Label {
+                text: "确认后从余额扣款，余额不足部分按现有规则记为欠费；确认后可评价本次服务。"
+                color: muted
+                font.pixelSize: 12
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+            Label {
+                text: mobileApi.message
+                visible: mobileApi.messageError
+                color: "#B42318"
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+            RowLayout {
+                spacing: 10
+                Layout.fillWidth: true
+                ActionButton {
+                    text: "取消"
+                    Layout.fillWidth: true
+                    onClicked: confirmDialog.close()
+                }
+                Button {
+                    text: "确认并扣款"
+                    Layout.fillWidth: true
+                    enabled: !mobileApi.busy
+                    onClicked: mobileApi.confirmOrder(confirmDialog.orderNo)
+                    background: Rectangle {
+                        radius: 11
+                        color: parent.enabled ? "#0F9D71" : "#E1E8DA"
+                    }
+                    contentItem: Label {
+                        text: parent.text
+                        color: parent.enabled ? "white" : "#687762"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+        }
+    }
+    Sheet {
+        id: appealDialog
+        anchors.centerIn: parent
+        modal: true
+        title: "订单申诉"
+        standardButtons: Dialog.NoButton
+        width: Math.min(window.width - 24, 390)
+        property string orderNo: ""
+        contentItem: ColumnLayout {
+            spacing: 10
+            Label {
+                text: "请说明不满意的原因（1～500 字）。提交后等待管理端审核，期间不扣款。"
+                color: muted
+                font.pixelSize: 12
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+            TextArea {
+                id: appealReason
+                Layout.fillWidth: true
+                Layout.preferredHeight: 110
+                placeholderText: "填写申诉原因（1～500 字）"
+                wrapMode: TextArea.Wrap
+                color: window.ink
+                onTextChanged: if (length > 500)
+                    remove(500, length)
+                background: Rectangle {
+                    radius: 10
+                    color: "white"
+                    border.color: window.border
+                }
+            }
+            Label {
+                text: appealReason.length + "/500"
+                color: "#8A9A90"
+                font.pixelSize: 11
+                Layout.alignment: Qt.AlignRight
+            }
+            Label {
+                text: mobileApi.message
+                visible: mobileApi.messageError
+                color: "#B42318"
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+            Button {
+                text: mobileApi.busy ? "提交中…" : "提交申诉"
+                enabled: !mobileApi.busy && appealReason.text.trim().length > 0
+                Layout.fillWidth: true
+                onClicked: mobileApi.appealOrder(appealDialog.orderNo, appealReason.text)
+                background: Rectangle {
+                    radius: 11
+                    color: parent.enabled ? green : "#C8D7CD"
+                }
+                contentItem: Label {
+                    text: parent.text
+                    color: "white"
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
                 }
             }
         }

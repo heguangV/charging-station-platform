@@ -1,6 +1,7 @@
 #include "server/controller/flow_routes.h"
 
 #include "core/domain/error_code.h"
+#include "server/controller/order_payment_routes.h"
 #include "server/controller/api_response.h"
 #include "server/controller/idempotent_response.h"
 #include "server/controller/request_validation.h"
@@ -88,7 +89,8 @@ QJsonObject receiptJson(const core::application::SettlementReceipt& receipt)
         {QStringLiteral("balanceAfterCent"),
          QJsonValue(static_cast<qint64>(receipt.balanceAfterCent))},
         {QStringLiteral("debtAfterCent"), QJsonValue(static_cast<qint64>(receipt.debtAfterCent))},
-        {QStringLiteral("settledAt"), QJsonValue(static_cast<qint64>(receipt.settledAt))},
+        {QStringLiteral("settledAt"), receipt.settledAt ? QJsonValue(static_cast<qint64>(receipt.settledAt)) : QJsonValue(QJsonValue::Null)},
+        {QStringLiteral("appealReason"), QString::fromStdString(receipt.appealReason)},
         {QStringLiteral("status"), receipt.status},
         {QStringLiteral("statusText"), QString::fromStdString(receipt.statusText)},
     };
@@ -101,6 +103,7 @@ FlowRoutes::FlowRoutes(ApiRoutes& routes, core::application::ChargeFlowService& 
                        core::application::BoundedExecutor& executor,
                        core::application::IdempotencyService& idempotency)
 {
+    registerOrderPaymentRoutes(routes, flows, sessions, executor, idempotency);
     // POST /user/flows：创建充电流程并生成报价；stationId/chargerType 必填且经范围校验，
     // 以 u<userId>:flow-create 为幂等作用域经阻塞线程池执行，业务错误码原样透传。
     routes.route("/user/flows")
@@ -489,7 +492,7 @@ FlowRoutes::FlowRoutes(ApiRoutes& routes, core::application::ChargeFlowService& 
                                          "unsupported paging or filter parameter",
                                          "分页或过滤参数不符合要求");
                 }
-                const auto status = parseIntegerFilter(*pagination, "status", 60, 90);
+                const auto status = parseIntegerFilter(*pagination, "status", 60, 110);
                 const auto fromAt = parseIntegerFilter(*pagination, "fromAt", 0, 4102444800LL);
                 const auto toAt = parseIntegerFilter(*pagination, "toAt", 0, 4102444800LL);
                 if (!status || !fromAt || !toAt ||

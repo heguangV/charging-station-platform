@@ -33,8 +33,8 @@ namespace
 
 using namespace ncs::core::application;
 
-constexpr int kLatestSchemaVersion = 9;
-constexpr const char* kLatestSchemaChecksum = "ncs-v9-order-review";
+constexpr int kLatestSchemaVersion = 10;
+constexpr const char* kLatestSchemaChecksum = "ncs-v10-order-confirmation";
 
 // 连接封装：RAII 持有单个 sqlite3 句柄。每个连接只属于打开它的线程，
 // 打开即启用外键、关闭 trusted_schema；busy_timeout 兜底锁竞争（5 秒）。
@@ -458,7 +458,7 @@ constexpr const char* orderColumns =
     "status,created_at,"
     "started_at,ended_at,energy_mwh,amount_cent,paid_cent,debt_added_cent,"
     "balance_after_cent,"
-    "debt_after_cent,settled_at";
+    "debt_after_cent,settled_at,appeal_reason,appeal_at,reviewed_by,reviewed_at";
 
 ChargingOrder readOrder(Statement& statement)
 {
@@ -487,6 +487,10 @@ ChargingOrder readOrder(Statement& statement)
     value.balanceAfterCent = statement.integer(21);
     value.debtAfterCent = statement.integer(22);
     value.settledAt = optionalInteger(statement, 23);
+    value.appealReason = statement.text(24);
+    value.appealAt = optionalInteger(statement, 25);
+    value.reviewedBy = optionalInteger(statement, 26);
+    value.reviewedAt = optionalInteger(statement, 27);
     return value;
 }
 
@@ -516,6 +520,10 @@ void bindOrder(Statement& statement, const ChargingOrder& order)
     statement.bind(22, order.balanceAfterCent);
     statement.bind(23, order.debtAfterCent);
     bindOptional(statement, 24, order.settledAt);
+    statement.bind(25, order.appealReason);
+    bindOptional(statement, 26, order.appealAt);
+    bindOptional(statement, 27, order.reviewedBy);
+    bindOptional(statement, 28, order.reviewedAt);
 }
 
 std::vector<Role> readAdminRoles(sqlite3* database, const std::int64_t adminId)
@@ -827,6 +835,9 @@ INSERT INTO schema_version VALUES(2,'admin-control-plane','ncs-v2-admin-control-
 COMMIT;
 )SQL");
     }
+    // 版本检查语句必须用后立即 reset：未 reset 的活跃语句会让后续迁移中的
+    // DROP TABLE 拿到 SQLITE_LOCKED（v10 起迁移含 DROP）。
+    migration.reset();
 
     Statement statusMigration(connection.get(), "SELECT 1 FROM schema_version WHERE version=3");
     if (!statusMigration.row())
@@ -876,6 +887,7 @@ COMMIT;
             throw;
         }
     }
+    statusMigration.reset();
 
     Statement demoMigration(connection.get(), "SELECT 1 FROM schema_version WHERE version=4");
     if (!demoMigration.row())
@@ -887,6 +899,7 @@ INSERT INTO schema_version VALUES(4,'development-admin-marker','ncs-v4-demo-admi
 COMMIT;
 )SQL");
     }
+    demoMigration.reset();
 
     Statement indexMigration(connection.get(), "SELECT 1 FROM schema_version WHERE version=5");
     if (!indexMigration.row())
@@ -902,6 +915,7 @@ INSERT INTO schema_version VALUES(5,'admin-query-indexes','ncs-v5-admin-indexes'
 COMMIT;
 )SQL");
     }
+    indexMigration.reset();
 
     Statement analyticsMigration(connection.get(), "SELECT 1 FROM schema_version WHERE version=6");
     if (!analyticsMigration.row())
@@ -968,6 +982,7 @@ INSERT INTO schema_version VALUES(6,'dashboard-ml','ncs-v6-dashboard-ml',strftim
 COMMIT;
 )SQL");
     }
+    analyticsMigration.reset();
 
     Statement orderIndexMigration(connection.get(), "SELECT 1 FROM schema_version WHERE version=7");
     if (!orderIndexMigration.row())
@@ -982,6 +997,7 @@ INSERT INTO schema_version VALUES(7,'order-analytics-indexes','ncs-v7-order-anal
 COMMIT;
 )SQL");
     }
+    orderIndexMigration.reset();
 
     Statement demoSeedMigration(connection.get(), "SELECT 1 FROM schema_version WHERE version=8");
     if (!demoSeedMigration.row())
@@ -1030,6 +1046,7 @@ COMMIT;
             throw;
         }
     }
+    demoSeedMigration.reset();
     Statement reviewMigration(connection.get(), "SELECT 1 FROM schema_version WHERE version=9");
     if (!reviewMigration.row())
     {
@@ -1047,6 +1064,69 @@ INSERT INTO schema_version VALUES(9,'order-review','ncs-v9-order-review',strftim
 COMMIT;
 )SQL");
     }
+    reviewMigration.reset();
+    // v10 rebuilds only status CHECK constraints, preserving rows, indexes,
+    // triggers and referencing tables. Recheck version under the writer lock.
+    connection.execute("PRAGMA foreign_keys=OFF");
+    try {
+        connection.execute("BEGIN IMMEDIATE");
+        bool applied = false;
+        {
+            Statement version(connection.get(), "SELECT 1 FROM schema_version WHERE version=10");
+            applied = version.row();
+        }
+        if (!applied) {
+            for (const std::string table : {"charging_flow", "charging_order"}) {
+                std::string schema;
+                std::vector<std::string> dependents;
+                {
+                    Statement query(connection.get(), "SELECT sql FROM sqlite_master WHERE type='table' AND name=?");
+                    query.bind(1, table);
+                    if (!query.row()) throw std::runtime_error("missing payment migration table");
+                    schema = query.text(0);
+                }
+                {
+                    Statement query(connection.get(), "SELECT sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL");
+                    query.bind(1, table);
+                    while (query.row()) dependents.push_back(query.text(0));
+                }
+                const auto nameAt = schema.find(table);
+                const auto checkAt = schema.find("70,80,90)");
+                if (nameAt == std::string::npos || checkAt == std::string::npos)
+                    throw std::runtime_error("unsupported payment migration schema");
+                schema.replace(checkAt, 9, "70,80,90,100,110)");
+                schema.replace(nameAt, table.size(), table + "_v10");
+                connection.execute(schema.c_str());
+                connection.execute(("INSERT INTO " + table + "_v10 SELECT * FROM " + table).c_str());
+                connection.execute(("DROP TABLE " + table).c_str());
+                connection.execute(("ALTER TABLE " + table + "_v10 RENAME TO " + table).c_str());
+                for (auto sql : dependents) {
+                    if (sql.find("uq_active_flow_user") != std::string::npos) {
+                        const auto at = sql.find("10,20,30,40,50,80");
+                        if (at == std::string::npos) throw std::runtime_error("unsupported active-user index");
+                        sql.replace(at, 17, "10,20,30,40,50,80,100,110");
+                    }
+                    connection.execute(sql.c_str());
+                }
+            }
+            connection.execute(R"SQL(
+ALTER TABLE charging_order ADD COLUMN appeal_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE charging_order ADD COLUMN appeal_at INTEGER;
+ALTER TABLE charging_order ADD COLUMN reviewed_by INTEGER;
+ALTER TABLE charging_order ADD COLUMN reviewed_at INTEGER;
+INSERT INTO schema_version VALUES(10,'order-confirmation','ncs-v10-order-confirmation',strftime('%s','now'));
+)SQL");
+            Statement foreignKeys(connection.get(), "PRAGMA foreign_key_check");
+            if (foreignKeys.row()) throw std::runtime_error("payment migration foreign-key check failed");
+        }
+        connection.execute("COMMIT");
+        connection.execute("PRAGMA foreign_keys=ON");
+    } catch (...) {
+        try { connection.execute("ROLLBACK"); } catch (...) {}
+        connection.execute("PRAGMA foreign_keys=ON");
+        throw;
+    }
+
 }
 
 // ---- 用户账户域：查询/注册/资料/凭据/头像/注销 ----
@@ -1765,7 +1845,7 @@ std::optional<ChargingFlow> SqliteRepository::activeFlow(const std::int64_t user
         {
             const std::string sql = std::string("SELECT ") + flowColumns +
                                     " FROM charging_flow WHERE user_id=? AND status IN "
-                                    "(10,20,30,40,50,80) ORDER BY created_at DESC LIMIT 1";
+                                    "(10,20,30,40,50,80,100,110) ORDER BY created_at DESC LIMIT 1";
             Statement query(database, sql.c_str());
             query.bind(1, userId);
             return query.row() ? std::optional<ChargingFlow>(readFlow(query)) : std::nullopt;
@@ -1809,9 +1889,7 @@ void SqliteRepository::addFlowEvent(const FlowEvent& value)
                              "INSERT INTO outbox_event(event_type,aggregate_type,aggregate_id,"
                              "from_status,to_status,reason_code,created_at,available_at) "
                              "VALUES(?,?,?,?,?,?,?,?)");
-            outbox.bind(1, value.toStatus == static_cast<int>(FlowStatus::Completed)
-                               ? std::string_view("order.settled")
-                               : std::string_view("flow.updated"));
+            outbox.bind(1, flowEventType(value.toStatus, value.reasonCode));
             outbox.bind(2, std::string_view("charging_flow"));
             outbox.bind(3, value.flowNo);
             outbox.bind(4, value.fromStatus);
@@ -2008,7 +2086,7 @@ void SqliteRepository::addOrder(const ChargingOrder& value)
                 {
                     const std::string sql =
                         std::string("INSERT INTO charging_order(") + orderColumns +
-                        ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+                        ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
                     Statement insert(database, sql.c_str());
                     bindOrder(insert, value);
                     insert.execute();
@@ -2085,7 +2163,7 @@ void SqliteRepository::saveOrder(const ChargingOrder& value)
                         "code=?,charger_type=?,electricity_price=?,service_price=?,power_watt=?"
                         ",time_scale=?,target_amount_cent=?,status=?,created_at=?,started_at=?,"
                         "ended_at=?,energy_mwh=?,amount_cent=?,paid_cent=?,debt_added_cent=?,"
-                        "balance_after_cent=?,debt_after_cent=?,settled_at=? WHERE order_no=?");
+                        "balance_after_cent=?,debt_after_cent=?,settled_at=?,appeal_reason=?,appeal_at=?,reviewed_by=?,reviewed_at=? WHERE order_no=?");
                     update.bind(1, value.flowNo);
                     update.bind(2, value.userId);
                     update.bind(3, value.stationId);
@@ -2109,7 +2187,11 @@ void SqliteRepository::saveOrder(const ChargingOrder& value)
                     update.bind(21, value.balanceAfterCent);
                     update.bind(22, value.debtAfterCent);
                     bindOptional(update, 23, value.settledAt);
-                    update.bind(24, value.orderNo);
+                    update.bind(24, value.appealReason);
+                    bindOptional(update, 25, value.appealAt);
+                    bindOptional(update, 26, value.reviewedBy);
+                    bindOptional(update, 27, value.reviewedAt);
+                    update.bind(28, value.orderNo);
                     update.execute();
                 });
 }
@@ -3069,7 +3151,7 @@ bool SqliteRepository::stationHasActiveFlow(const std::int64_t stationId)
                        {
                            Statement query(database,
                                            "SELECT 1 FROM charging_flow WHERE station_id=? AND "
-                                           "status IN (10,20,30,40,50,80) LIMIT 1");
+                                           "status IN (10,20,30,40,50,80,100,110) LIMIT 1");
                            query.bind(1, stationId);
                            return query.row();
                        });

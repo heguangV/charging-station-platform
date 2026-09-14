@@ -272,6 +272,16 @@ void UserMainWindow::restoreFlow(const QJsonObject& flow)
         showHome();
         return;
     }
+    if (activeFlowStatus_ == 100 || activeFlowStatus_ == 110)
+    {
+        chargingStarted_ = false;
+        settleButton_->setEnabled(false);
+        notify(activeFlowStatus_ == 100 ? QStringLiteral("请确认待处理订单，或填写原因申诉")
+                                       : QStringLiteral("申诉已提交，等待管理端审核，暂不扣款"));
+        activeFlowNo_.clear();
+        showOrders();
+        return;
+    }
     if (activeFlowStatus_ == 10)
     {
         chargingStarted_ = false;
@@ -431,6 +441,11 @@ void UserMainWindow::refreshCharge()
                 if (!reply.ok())
                 {
                     notify(reply.message, true);
+                    if (reply.httpStatus == 409) {
+                        userApi_->flow(activeFlowNo_, [this](ApiReply current) {
+                            if (current.ok()) restoreFlow(current.data.toObject());
+                        });
+                    }
                     return;
                 }
                 const QJsonObject value = reply.data.toObject();

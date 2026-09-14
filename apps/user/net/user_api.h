@@ -55,6 +55,8 @@ class UserApi final
                     ApiClient::Handler done);
     void startFlow(const QString& flowNo, qint64 flowVersion, ApiClient::Handler done);
     void progress(const QString& flowNo, ApiClient::Handler done);
+    void confirmOrder(const QString& orderNo, ApiClient::Handler done);
+    void appealOrder(const QString& orderNo, const QString& reason, ApiClient::Handler done);
     void settleFlow(const QString& flowNo, qint64 flowVersion, const QString& reasonCode,
                     ApiClient::Handler done);
 

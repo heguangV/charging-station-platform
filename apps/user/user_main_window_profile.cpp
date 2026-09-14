@@ -138,7 +138,7 @@ QWidget* UserMainWindow::createProfilePage()
 #if defined(NCS_HAS_MULTIMEDIA)
                 QMenu menu;
                 auto* cameraAction = menu.addAction(QStringLiteral("拍照"));
-                auto* fileAction = menu.addAction(QStringLiteral("从本地选择"));
+                menu.addAction(QStringLiteral("从本地选择"));
                 QAction* selected = menu.exec(avatar->mapToGlobal(QPoint(0, avatar->height())));
                 if (!selected)
                     return;

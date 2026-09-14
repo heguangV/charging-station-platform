@@ -43,8 +43,11 @@ enum class FlowStatus
     Cancelled = 70,
     SettlementFailed = 80,
     Expired = 90,
+    PendingConfirmation = 100,
+    AppealPending = 110,
 };
 
+std::string flowEventType(int toStatus, const std::string& reasonCode);
 bool isActiveFlowStatus(int status);
 std::string flowStatusText(int status);
 std::string orderStatusText(int status);
@@ -187,6 +190,10 @@ struct ChargingOrder
     std::int64_t balanceAfterCent = 0;
     std::int64_t debtAfterCent = 0;
     std::optional<std::int64_t> settledAt;
+    std::string appealReason;
+    std::optional<std::int64_t> appealAt;
+    std::optional<std::int64_t> reviewedBy;
+    std::optional<std::int64_t> reviewedAt;
 };
 
 struct FlowEvent

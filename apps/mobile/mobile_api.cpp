@@ -362,8 +362,46 @@ void MobileApi::settleCharge()
             emit flowChanged();
             loadOrders();
             loadProfile();
-            setMessage(QStringLiteral("充电已结算"));
+            // UC-U-09：停止计费只冻结金额（status=100），扣款在用户确认后发生。
+            setMessage(QStringLiteral("已结束充电，请在订单中确认扣款或发起申诉"));
         });
+}
+void MobileApi::confirmOrder(const QString& orderNo)
+{
+    if (!loggedIn() || orderNo.isEmpty())
+        return;
+    postJson(QStringLiteral("/user/orders/%1/confirmation").arg(orderNo), {},
+             [this, orderNo](const QJsonObject& d)
+             {
+                 receipt_ = d.toVariantMap();
+                 emit receiptChanged();
+                 loadOrders();
+                 loadProfile();
+                 setMessage(QStringLiteral("订单已确认并扣款，可以评价本次服务"));
+                 emit orderConfirmed();
+             });
+}
+void MobileApi::appealOrder(const QString& orderNo, const QString& reason)
+{
+    if (!loggedIn() || orderNo.isEmpty())
+        return;
+    const QString trimmed = reason.trimmed();
+    if (trimmed.isEmpty() || trimmed.toUcs4().size() > 500)
+    {
+        setMessage(QStringLiteral("请填写 1～500 字的申诉原因"), true);
+        return;
+    }
+    postJson(QStringLiteral("/user/orders/%1/appeals").arg(orderNo), {{"reason", trimmed}},
+             [this](const QJsonObject&)
+             {
+                 loadOrders();
+                 setMessage(QStringLiteral("申诉已提交，等待管理端审核，审核期间不会扣款"));
+                 emit orderAppealed();
+             });
+}
+void MobileApi::clearMessage()
+{
+    setMessage(QString());
 }
 void MobileApi::cancelCharge()
 {

@@ -1,3 +1,8 @@
+#include <QDialog>
+#include <QPointer>
+#include <QMessageBox>
+#include <QTextEdit>
+#include <memory>
 #include "admin_charts.h"
 #include "admin_main_window.h"
 #include "admin_main_window_utils.h"
@@ -138,6 +143,10 @@ QWidget* AdminMainWindow::createStationsPage()
     row->addSpacing(8);
     row->addWidget(devices);
     row->addWidget(toggle);
+    auto* appeals = action(QStringLiteral("订单申诉审核"));
+    appeals->setObjectName("orderAppealsButton");
+    row->addWidget(appeals);
+    connect(appeals, &QPushButton::clicked, this, &AdminMainWindow::openOrderAppeals);
     row->addWidget(add);
     l->addLayout(row);
     stationTable_ = makeTable({QStringLiteral("站点编码"), QStringLiteral("站点名称"),
@@ -298,4 +307,92 @@ QWidget* AdminMainWindow::createPredictionsPage()
     mutationButtons_ << run;
     return page;
 }
+void AdminMainWindow::openOrderAppeals()
+{
+    auto* dialog = new QDialog(this);
+    dialog->setObjectName("orderAppealsDialog");
+    dialog->setWindowTitle(QStringLiteral("订单申诉审核"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    auto* layout = new QVBoxLayout(dialog);
+    auto* status = new QLabel(QStringLiteral("正在加载申诉订单…"));
+    status->setWordWrap(true);
+    layout->addWidget(status);
+    auto* table = makeTable({QStringLiteral("订单号"), QStringLiteral("电站"), QStringLiteral("电桩"),
+        QStringLiteral("应付金额"), QStringLiteral("申诉原因")});
+    table->setObjectName("orderAppealsTable");
+    layout->addWidget(table);
+    auto* reason = new QTextEdit;
+    reason->setReadOnly(true);
+    reason->setMaximumHeight(110);
+    reason->setPlaceholderText(QStringLiteral("选择订单查看完整申诉原因"));
+    layout->addWidget(reason);
+    auto* row = new QHBoxLayout;
+    auto* previous = new QPushButton(QStringLiteral("上一页"));
+    auto* next = new QPushButton(QStringLiteral("下一页"));
+    auto* refresh = new QPushButton(QStringLiteral("刷新"));
+    auto* approve = new QPushButton(QStringLiteral("审核通过，取消订单且不扣款"));
+    approve->setObjectName("approveOrderAppealButton");
+    approve->setEnabled(false);
+    row->addWidget(previous); row->addWidget(next); row->addWidget(refresh); row->addStretch(); row->addWidget(approve);
+    layout->addLayout(row);
+    const auto page = std::make_shared<int>(1);
+    const auto generation = sessionGeneration_;
+    const QPointer<QDialog> guard(dialog);
+    auto load = [this, guard, generation, table, reason, status, approve, previous, next, refresh, page] {
+        if (!guard || generation != sessionGeneration_) return;
+        table->setRowCount(0); reason->clear(); approve->setEnabled(false);
+        previous->setEnabled(false); next->setEnabled(false); refresh->setEnabled(false);
+        status->setText(QStringLiteral("正在加载申诉订单…"));
+        QUrlQuery query; query.addQueryItem("page", QString::number(*page)); query.addQueryItem("pageSize", "20");
+        api_.get("admin/order-appeals", query,
+            [this, guard, generation, table, status, previous, next, refresh, page](AdminReply reply) {
+                if (!guard || generation != sessionGeneration_) return;
+                refresh->setEnabled(true); previous->setEnabled(*page > 1);
+                if (!reply.ok()) { status->setText(reply.message + QStringLiteral("，请点击刷新重试")); return; }
+                const auto data = reply.data.toObject();
+                const auto items = data.value("items").toArray();
+                next->setEnabled(*page * 20 < data.value("total").toInt());
+                status->setText(items.isEmpty() ? QStringLiteral("本页暂无待审核申诉")
+                    : QStringLiteral("第 %1 页，共 %2 条待审核申诉。审核取消后不扣款。").arg(*page).arg(data.value("total").toInt()));
+                for (const auto& value : items) {
+                    const auto item = value.toObject();
+                    const int r = table->rowCount(); table->insertRow(r);
+                    const QStringList columns{item.value("orderNo").toString(), item.value("stationName").toString(),
+                        item.value("chargerCode").toString(), QString::number(item.value("amountCent").toDouble() / 100.0, 'f', 2), item.value("reason").toString()};
+                    for (int c = 0; c < columns.size(); ++c) table->setItem(r, c, new QTableWidgetItem(columns[c]));
+                }
+            });
+    };
+    connect(table, &QTableWidget::itemSelectionChanged, dialog, [table, reason, approve] {
+        const auto* item = table->item(table->currentRow(), 4);
+        approve->setEnabled(item != nullptr);
+        reason->setPlainText(item ? item->text() : QString{});
+    });
+    connect(refresh, &QPushButton::clicked, dialog, load);
+    connect(previous, &QPushButton::clicked, dialog, [page, load] { --*page; load(); });
+    connect(next, &QPushButton::clicked, dialog, [page, load] { ++*page; load(); });
+    connect(approve, &QPushButton::clicked, dialog,
+        [this, guard, generation, table, status, approve, load] {
+            if (!guard || generation != sessionGeneration_) return;
+            const auto* item = table->item(table->currentRow(), 0);
+            if (!item) return;
+            const auto orderNo = item->text();
+            if (QMessageBox::question(guard, QStringLiteral("确认审核通过"),
+                QStringLiteral("确认申诉成立并取消订单 %1？\n本订单将不扣款、不产生欠费。").arg(orderNo)) != QMessageBox::Yes) return;
+            if (!guard || generation != sessionGeneration_) return;
+            approve->setEnabled(false);
+            api_.postJson(QStringLiteral("admin/order-appeals/%1/approval").arg(orderNo), {{"confirmed", true}},
+                [this, guard, generation, status, approve, load](AdminReply reply) {
+                    if (!guard || generation != sessionGeneration_) return;
+                    approve->setEnabled(true);
+                    if (!reply.ok()) { status->setText(reply.message); return; }
+                    notify(QStringLiteral("申诉审核通过，订单已取消，未扣款"));
+                    load();
+                }, true);
+        });
+    dialog->resize(940, 520);
+    dialog->open();
+    load();
+}
+
 } // namespace ncs::admin

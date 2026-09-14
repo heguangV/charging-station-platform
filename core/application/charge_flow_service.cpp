@@ -45,7 +45,8 @@ std::optional<SettlementReceipt> toReceipt(const ChargingOrder& order)
     receipt.debtAddedCent = order.debtAddedCent;
     receipt.balanceAfterCent = order.balanceAfterCent;
     receipt.debtAfterCent = order.debtAfterCent;
-    receipt.settledAt = *order.settledAt;
+    receipt.settledAt = order.settledAt.value_or(0);
+    receipt.appealReason = order.appealReason;
     receipt.status = order.status;
     receipt.statusText = orderStatusText(order.status);
     return receipt;
@@ -623,7 +624,7 @@ ChargeFlowService::progress(const std::int64_t userId, const std::string& flowNo
     return {core::domain::ErrorCode::Ok, view};
 }
 
-// 结算（事务内）：先落瞬态状态 50，再扣款/记账/释放设备并完成订单（状态 60）；
+// 结束充电（事务内）：冻结账单、释放设备，进入待用户确认（100），不扣款；
 // 任一异常令事务回滚后，在独立事务中落状态 80（版本保持不变以通过同键重试的版本校验），对外仅返回
 // TransactionFailed。
 ServiceResult<SettlementReceipt>
@@ -681,37 +682,20 @@ ChargeFlowService::settle(const std::int64_t userId, const std::string& flowNo,
                     order->electricityPriceCentPerKwh + order->servicePriceCentPerKwh;
                 const std::int64_t amountCent = amountCentForEnergy(energyMwh, totalPrice);
 
-                WalletAccount wallet = repository_.wallet(userId);
-                const std::int64_t paidCent = std::min(wallet.balanceCent, amountCent);
-                const std::int64_t debtAddedCent = amountCent - paidCent;
-                wallet.balanceCent -= paidCent;
-                wallet.debtCent += debtAddedCent;
-                ++wallet.version;
-                wallet.updatedAt = nowSeconds;
-
-                WalletTransaction transaction;
-                transaction.userId = userId;
-                transaction.transactionNo = numbers_.next("WT", now);
-                transaction.type = WalletTransactionType::Charge;
-                transaction.amountCent = -paidCent;
-                transaction.balanceAfterCent = wallet.balanceCent;
-                transaction.debtAfterCent = wallet.debtCent;
-                transaction.relatedNo = order->orderNo;
-                transaction.createdAt = nowSeconds;
-
+                const WalletAccount wallet = repository_.wallet(userId);
                 ChargingOrder settledOrder = *order;
-                settledOrder.status = static_cast<int>(FlowStatus::Completed);
+                settledOrder.status = static_cast<int>(FlowStatus::PendingConfirmation);
                 settledOrder.endedAt = nowSeconds;
                 settledOrder.energyMwh = energyMwh;
                 settledOrder.amountCent = amountCent;
-                settledOrder.paidCent = paidCent;
-                settledOrder.debtAddedCent = debtAddedCent;
+                settledOrder.paidCent = 0;
+                settledOrder.debtAddedCent = 0;
                 settledOrder.balanceAfterCent = wallet.balanceCent;
                 settledOrder.debtAfterCent = wallet.debtCent;
-                settledOrder.settledAt = nowSeconds;
+                settledOrder.settledAt.reset();
 
                 ChargingFlow completed = settling;
-                completed.status = static_cast<int>(FlowStatus::Completed);
+                completed.status = static_cast<int>(FlowStatus::PendingConfirmation);
                 ++completed.version;
                 if (completed.chargerId)
                 {
@@ -727,15 +711,11 @@ ChargeFlowService::settle(const std::int64_t userId, const std::string& flowNo,
                             static_cast<int>(ChargerStatus::Idle), reasonCode, nowSeconds});
                     }
                 }
-
-                repository_.saveWallet(wallet);
-                repository_.addWalletTransaction(transaction);
                 repository_.saveOrder(settledOrder);
                 repository_.saveFlow(completed);
                 repository_.addFlowEvent(
                     FlowEvent{flowNo, settling.status, completed.status, reasonCode, nowSeconds});
-                walletMirror_.applyWalletState(userId, wallet.balanceCent, wallet.debtCent);
-                walletMirror_.setActiveFlowFlag(userId, false);
+                walletMirror_.setActiveFlowFlag(userId, true);
 
                 if (completed.chargerId)
                 {
@@ -791,6 +771,163 @@ ChargeFlowService::settle(const std::int64_t userId, const std::string& flowNo,
     return {core::domain::ErrorCode::Ok, *receipt};
 }
 
+// UC-U-09: only explicit owner confirmation can mutate money. All checks and
+// writes share the repository transaction, including concurrent retries.
+ServiceResult<SettlementReceipt> ChargeFlowService::confirmOrder(
+    const std::int64_t userId, const std::string& orderNo,
+    const std::chrono::system_clock::time_point now)
+{
+    using core::domain::ErrorCode;
+    ServiceResult<SettlementReceipt> result;
+    try {
+        repository_.withTransaction([&] {
+            auto order = repository_.order(orderNo);
+            if (!order || order->userId != userId) {
+                result.error = ErrorCode::NotFound;
+                return;
+            }
+            if (order->status == 60 && order->settledAt) {
+                result.value = toReceipt(*order);
+                return;
+            }
+            auto flow = repository_.flow(order->flowNo);
+            if (order->status != 100 || !order->endedAt || !flow || flow->status != 100) {
+                result.error = ErrorCode::InvalidStateTransition;
+                return;
+            }
+            const auto at = unixSeconds(now);
+            auto wallet = repository_.wallet(userId);
+            order->paidCent = std::min(wallet.balanceCent, order->amountCent);
+            order->debtAddedCent = order->amountCent - order->paidCent;
+            wallet.balanceCent -= order->paidCent;
+            wallet.debtCent += order->debtAddedCent;
+            ++wallet.version;
+            wallet.updatedAt = at;
+            order->balanceAfterCent = wallet.balanceCent;
+            order->debtAfterCent = wallet.debtCent;
+            order->settledAt = at;
+            order->status = 60;
+            WalletTransaction transaction;
+            transaction.userId = userId;
+            transaction.transactionNo = numbers_.next("WT", now);
+            transaction.type = WalletTransactionType::Charge;
+            transaction.amountCent = -order->paidCent;
+            transaction.balanceAfterCent = wallet.balanceCent;
+            transaction.debtAfterCent = wallet.debtCent;
+            transaction.relatedNo = orderNo;
+            transaction.createdAt = at;
+            flow->status = 60;
+            ++flow->version;
+            repository_.saveWallet(wallet);
+            repository_.addWalletTransaction(transaction);
+            repository_.saveOrder(*order);
+            repository_.saveFlow(*flow);
+            repository_.addFlowEvent({flow->flowNo, 100, 60, "USER_CONFIRMED", at});
+            walletMirror_.applyWalletState(userId, wallet.balanceCent, wallet.debtCent);
+            walletMirror_.setActiveFlowFlag(userId, false);
+            result.value = toReceipt(*order);
+        });
+    } catch (...) {
+        return {ErrorCode::TransactionFailed, std::nullopt};
+    }
+    return result;
+}
+
+ServiceResult<SettlementReceipt> ChargeFlowService::appealOrder(
+    const std::int64_t userId, const std::string& orderNo, const std::string& reason,
+    const std::chrono::system_clock::time_point now)
+{
+    using core::domain::ErrorCode;
+    const auto count = std::count_if(reason.begin(), reason.end(),
+        [](unsigned char c) { return (c & 0xc0) != 0x80; });
+    if (reason.empty() || reason.size() > 2000 || count > 500 ||
+        reason.find('\0') != std::string::npos || reason.find_first_not_of(" \t\r\n") == std::string::npos)
+        return {ErrorCode::ValidationFailed, std::nullopt};
+    ServiceResult<SettlementReceipt> result;
+    try {
+        repository_.withTransaction([&] {
+            auto order = repository_.order(orderNo);
+            if (!order || order->userId != userId) {
+                result.error = ErrorCode::NotFound;
+                return;
+            }
+            if (!order->appealReason.empty()) {
+                if (order->appealReason == reason) result.value = toReceipt(*order);
+                else result.error = ErrorCode::AlreadyExists;
+                return;
+            }
+            auto flow = repository_.flow(order->flowNo);
+            if (order->status != 100 || !order->endedAt || !flow || flow->status != 100) {
+                result.error = ErrorCode::InvalidStateTransition;
+                return;
+            }
+            order->status = 110;
+            order->appealReason = reason;
+            order->appealAt = unixSeconds(now);
+            flow->status = 110;
+            ++flow->version;
+            repository_.saveOrder(*order);
+            repository_.saveFlow(*flow);
+            repository_.addFlowEvent({flow->flowNo, 100, 110, "USER_APPEALED", *order->appealAt});
+            result.value = toReceipt(*order);
+        });
+    } catch (...) {
+        return {ErrorCode::TransactionFailed, std::nullopt};
+    }
+    return result;
+}
+
+std::vector<ChargingOrder> ChargeFlowService::pendingAppeals()
+{
+    std::vector<ChargingOrder> orders;
+    repository_.withTransaction([&] {
+        for (const auto& flow : repository_.flowsWithStatus(110)) {
+            if (const auto order = repository_.orderByFlow(flow.flowNo)) orders.push_back(*order);
+        }
+    });
+    std::sort(orders.begin(), orders.end(), [](const ChargingOrder& a, const ChargingOrder& b) {
+        return a.appealAt == b.appealAt ? a.orderNo < b.orderNo : a.appealAt < b.appealAt;
+    });
+    return orders;
+}
+
+ServiceResult<SettlementReceipt> ChargeFlowService::approveAppeal(
+    const std::int64_t adminId, const std::string& orderNo,
+    const std::chrono::system_clock::time_point now)
+{
+    using core::domain::ErrorCode;
+    if (adminId <= 0) return {ErrorCode::ValidationFailed, std::nullopt};
+    ServiceResult<SettlementReceipt> result;
+    try {
+        repository_.withTransaction([&] {
+            auto order = repository_.order(orderNo);
+            if (!order) { result.error = ErrorCode::NotFound; return; }
+            if (order->status == 70 && order->reviewedAt) {
+                result.value = toReceipt(*order);
+                return;
+            }
+            auto flow = repository_.flow(order->flowNo);
+            if (order->status != 110 || order->settledAt || !flow || flow->status != 110) {
+                result.error = ErrorCode::InvalidStateTransition;
+                return;
+            }
+            order->status = 70;
+            order->reviewedBy = adminId;
+            order->reviewedAt = unixSeconds(now);
+            flow->status = 70;
+            ++flow->version;
+            repository_.saveOrder(*order);
+            repository_.saveFlow(*flow);
+            repository_.addFlowEvent({flow->flowNo, 110, 70, "APPEAL_APPROVED", *order->reviewedAt});
+            walletMirror_.setActiveFlowFlag(order->userId, false);
+            result.value = toReceipt(*order);
+        });
+    } catch (...) {
+        return {ErrorCode::TransactionFailed, std::nullopt};
+    }
+    return result;
+}
+
 ServiceResult<OrderPage> ChargeFlowService::orders(const std::int64_t userId,
                                                    const std::optional<int> status,
                                                    const std::int64_t fromAt,
@@ -801,7 +938,7 @@ ServiceResult<OrderPage> ChargeFlowService::orders(const std::int64_t userId,
     {
         return {core::domain::ErrorCode::ValidationFailed, std::nullopt};
     }
-    if (status && (status < 60 || status > 90))
+    if (status && (*status != 60 && *status != 70 && *status != 80 && *status != 90 && *status != 100 && *status != 110))
     {
         return {core::domain::ErrorCode::ValidationFailed, std::nullopt};
     }
@@ -926,7 +1063,7 @@ int ChargeFlowService::recoverAtStartup(const std::chrono::system_clock::time_po
     repository_.withTransaction(
         [&]
         {
-            for (const int status : {10, 20, 30, 40, 50, 80})
+            for (const int status : {10, 20, 30, 40, 50, 80, 100, 110})
             {
                 for (const auto& flow : repository_.flowsWithStatus(status))
                 {
@@ -1093,7 +1230,7 @@ ChargeFlowService::adminForceRelease(const std::string& flowNo, const std::strin
     return {core::domain::ErrorCode::Ok, *view};
 }
 
-// 管理端受控结算（事务内）：计费逻辑与用户结算一致，仅设备终态由调用方指定（0 空闲或 4 故障）。
+// 管理端受控停止（事务内）：生成待用户确认账单，设备终态由调用方指定（0 空闲或 4 重启中）。
 ServiceResult<SettlementReceipt>
 ChargeFlowService::adminControlledSettle(const std::string& flowNo, const std::string& reason,
                                          const int nextChargerStatus,
@@ -1138,37 +1275,20 @@ ChargeFlowService::adminControlledSettle(const std::string& flowNo, const std::s
                 order->electricityPriceCentPerKwh + order->servicePriceCentPerKwh;
             const std::int64_t amountCent = amountCentForEnergy(energyMwh, totalPrice);
 
-            WalletAccount wallet = repository_.wallet(flow->userId);
-            const std::int64_t paidCent = std::min(wallet.balanceCent, amountCent);
-            const std::int64_t debtAddedCent = amountCent - paidCent;
-            wallet.balanceCent -= paidCent;
-            wallet.debtCent += debtAddedCent;
-            ++wallet.version;
-            wallet.updatedAt = nowSeconds;
-
-            WalletTransaction transaction;
-            transaction.userId = flow->userId;
-            transaction.transactionNo = numbers_.next("WT", now);
-            transaction.type = WalletTransactionType::Charge;
-            transaction.amountCent = -paidCent;
-            transaction.balanceAfterCent = wallet.balanceCent;
-            transaction.debtAfterCent = wallet.debtCent;
-            transaction.relatedNo = order->orderNo;
-            transaction.createdAt = nowSeconds;
-
-            ChargingOrder settledOrder = *order;
-            settledOrder.status = static_cast<int>(FlowStatus::Completed);
+            const WalletAccount wallet = repository_.wallet(flow->userId);
+                ChargingOrder settledOrder = *order;
+            settledOrder.status = static_cast<int>(FlowStatus::PendingConfirmation);
             settledOrder.endedAt = nowSeconds;
             settledOrder.energyMwh = energyMwh;
             settledOrder.amountCent = amountCent;
-            settledOrder.paidCent = paidCent;
-            settledOrder.debtAddedCent = debtAddedCent;
+            settledOrder.paidCent = 0;
+            settledOrder.debtAddedCent = 0;
             settledOrder.balanceAfterCent = wallet.balanceCent;
             settledOrder.debtAfterCent = wallet.debtCent;
-            settledOrder.settledAt = nowSeconds;
+            settledOrder.settledAt.reset();
 
             ChargingFlow completed = settling;
-            completed.status = static_cast<int>(FlowStatus::Completed);
+            completed.status = static_cast<int>(FlowStatus::PendingConfirmation);
             ++completed.version;
             if (completed.chargerId)
             {
@@ -1184,15 +1304,11 @@ ChargeFlowService::adminControlledSettle(const std::string& flowNo, const std::s
                                            nextChargerStatus, reason, nowSeconds});
                 }
             }
-
-            repository_.saveWallet(wallet);
-            repository_.addWalletTransaction(transaction);
             repository_.saveOrder(settledOrder);
             repository_.saveFlow(completed);
             repository_.addFlowEvent(
                 FlowEvent{flowNo, settling.status, completed.status, reason, nowSeconds});
-            walletMirror_.applyWalletState(flow->userId, wallet.balanceCent, wallet.debtCent);
-            walletMirror_.setActiveFlowFlag(flow->userId, false);
+            walletMirror_.setActiveFlowFlag(flow->userId, true);
             if (completed.chargerId)
             {
                 promoteQueueLocked(flow->stationId, flow->chargerType, now);

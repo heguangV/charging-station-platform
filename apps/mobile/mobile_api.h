@@ -155,6 +155,10 @@ class MobileApi final : public QObject
     Q_INVOKABLE void startCharge();
     Q_INVOKABLE void settleCharge();
     Q_INVOKABLE void cancelCharge();
+    // UC-U-09 确认扣款与申诉：订单停在 100/110 时必须由用户处理，否则无法新建充电。
+    Q_INVOKABLE void confirmOrder(const QString& orderNo);
+    Q_INVOKABLE void appealOrder(const QString& orderNo, const QString& reason);
+    Q_INVOKABLE void clearMessage();
     Q_INVOKABLE void loadActiveFlow();
     Q_INVOKABLE void loadFlowProgress();
     Q_INVOKABLE void loadRoute(qint64 stationId, const QString& mode);
@@ -183,6 +187,9 @@ class MobileApi final : public QObject
     void receiptChanged();
     void routeChanged();
     void reviewChanged();
+    // UC-U-09：确认/申诉各发一次成功信号，QML 依此关弹窗，避免与无关刷新串扰。
+    void orderConfirmed();
+    void orderAppealed();
     void stationReviewsChanged();
     void cameraPermissionResult(bool granted);
 

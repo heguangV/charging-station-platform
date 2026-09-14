@@ -560,3 +560,9 @@ target_link_libraries(ncs_user_navigation_origin_tests PRIVATE Qt6::Core Qt6::Ne
 set_target_properties(ncs_user_navigation_origin_tests PROPERTIES AUTOMOC ON AUTOUIC OFF AUTORCC OFF)
 add_test(NAME ncs_user_navigation_origin COMMAND ncs_user_navigation_origin_tests)
 set_tests_properties(ncs_user_navigation_origin PROPERTIES LABELS "unit;user;navigation")
+
+add_executable(ncs_order_payment_tests order_payment_test.cpp)
+set_target_properties(ncs_order_payment_tests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+target_link_libraries(ncs_order_payment_tests PRIVATE ncs::server_controller ncs::infrastructure_sqlite Qt6::Core)
+add_test(NAME ncs_order_payment COMMAND ncs_order_payment_tests)
+set_tests_properties(ncs_order_payment PROPERTIES LABELS "contract;integration;payment" TIMEOUT 120)

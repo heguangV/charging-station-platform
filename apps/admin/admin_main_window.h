@@ -34,6 +34,7 @@ class AdminMainWindow final : public QMainWindow
     void refreshStations();
     void refreshChargers();
     void refreshUsers();
+    void openOrderAppeals();
     void refreshPredictions();
     void addStation();
     void removeStation();

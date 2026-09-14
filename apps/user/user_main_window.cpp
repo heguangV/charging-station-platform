@@ -432,7 +432,7 @@ QWidget* UserMainWindow::createChargePage()
         [this]
         {
             if (QMessageBox::question(this, QStringLiteral("确认结算"),
-                                      QStringLiteral("结束充电后将立即从余额扣款，是否继续？")) !=
+                                      QStringLiteral("结束充电后生成待确认订单，您确认满意后才扣款；不满意可填写原因申诉。是否结束充电？")) !=
                 QMessageBox::Yes)
             {
                 return;
@@ -452,9 +452,9 @@ QWidget* UserMainWindow::createChargePage()
                         const int minutes =
                             receipt.value(QStringLiteral("durationSec")).toInt() / 60;
                         receiptText_->setText(
-                            QStringLiteral("支付成功\n\n订单号  %1\n电站  %2\n充电桩  "
-                                           "%3\n\n充电时长  %4 分钟\n累计电量  %5 kWh\n本次扣款  "
-                                           "%6\n扣款后余额  %7\n\n感谢使用 NCS 充电服务")
+                            QStringLiteral("待用户确认 · 尚未扣款\n\n订单号  %1\n电站  %2\n充电桩  "
+                                           "%3\n\n充电时长  %4 分钟\n累计电量  %5 kWh\n应付金额  "
+                                           "%6\n当前余额  %7\n\n感谢使用 NCS 充电服务")
                                 .arg(receipt.value(QStringLiteral("orderNo")).toString(),
                                      receipt.value(QStringLiteral("stationName")).toString(),
                                      receipt.value(QStringLiteral("chargerCode")).toString(),
@@ -471,8 +471,8 @@ QWidget* UserMainWindow::createChargePage()
                         activeFlowStatus_ = 0;
                         chargingStarted_ = false;
                         settleButton_->setEnabled(false);
-                        notify(QStringLiteral("结算完成"));
-                        pages_->setCurrentIndex(kReceiptPage);
+                        notify(QStringLiteral("充电已结束，请确认订单或发起申诉"));
+                        showOrders();
                     });
                 return;
             }
@@ -485,7 +485,7 @@ QWidget* UserMainWindow::createChargePage()
             const OrderSummary order = service_.orders().first();
             const int minutes = order.durationSeconds / 60;
             receiptText_->setText(
-                QStringLiteral("支付成功\n\n订单号  %1\n电站  %2\n充电桩  %3\n开始时间  "
+                QStringLiteral("待用户确认 · 尚未扣款\n\n订单号  %1\n电站  %2\n充电桩  %3\n开始时间  "
                                "%4\n结束时间  %5\n\n充电时长  %6 分钟\n累计电量  %7 kWh\n单价  %8 "
                                "/ 度\n本次扣款  %9\n扣款后余额  %10\n\n感谢使用 NCS 充电服务")
                     .arg(order.orderNo, order.stationName, order.chargerCode, order.startTime,

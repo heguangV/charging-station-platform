@@ -7,6 +7,8 @@ add_library(ncs_server_controller STATIC
     dashboard_routes.h
     async_response.cpp
     async_response.h
+    order_payment_routes.cpp
+    order_payment_routes.h
     flow_routes.cpp
     flow_routes.h
     health_routes.cpp

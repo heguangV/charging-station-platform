@@ -5,6 +5,9 @@
 #include "ui/review_dialog.h"
 
 #include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QTextEdit>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QJsonArray>
@@ -213,6 +216,54 @@ void UserMainWindow::renderOrders(const QVector<OrderSummary>& records)
                     { openReviewDialog(order.orderNo, order.stationName, entry); });
             details->addWidget(reviewEntryRaw);
         }
+        if (userApi_ && order.status == QStringLiteral("待用户确认")) {
+            auto* confirm = new QPushButton(QStringLiteral("确认完成并扣款"));
+            confirm->setObjectName(QStringLiteral("confirmOrderButton"));
+            confirm->setCursor(Qt::PointingHandCursor);
+            confirm->setStyleSheet(
+                QStringLiteral("QPushButton{background:#0F9D71;color:white;border:0;"
+                               "border-radius:10px;font-size:13px;font-weight:600;padding:7px 12px;}"
+                               "QPushButton:hover{background:#0C8560;}"
+                               "QPushButton:disabled{background:#E1E8DA;color:#687762;}"));
+            auto* appeal = new QPushButton(QStringLiteral("不满意，发起申诉"));
+            appeal->setObjectName(QStringLiteral("appealOrderButton"));
+            appeal->setCursor(Qt::PointingHandCursor);
+            appeal->setStyleSheet(
+                QStringLiteral("QPushButton{background:#FFFFFF;color:#B42318;"
+                               "border:1px solid #F2C4BC;border-radius:10px;"
+                               "font-size:13px;font-weight:600;padding:7px 12px;}"
+                               "QPushButton:hover{background:#FEF3F2;}"
+                               "QPushButton:disabled{background:#F2F4F7;color:#98A2B3;}"));
+            auto* orderActions = new QHBoxLayout;
+            orderActions->setSpacing(10);
+            orderActions->addWidget(confirm, 3);
+            orderActions->addWidget(appeal, 2);
+            cardLayout->addLayout(orderActions);
+            connect(appeal, &QPushButton::clicked, this, [this, order] { openAppealDialog(order.orderNo); });
+            connect(confirm, &QPushButton::clicked, this,
+                [this, order, button = QPointer<QPushButton>(confirm), appealButton = QPointer<QPushButton>(appeal)] {
+                    if (QMessageBox::question(this, QStringLiteral("确认订单并扣款"),
+                        QStringLiteral("确认对本次充电满意？\n应付金额：%1\n确认后从余额扣款，余额不足部分按现有规则记为欠费。").arg(money(order.amountCent))) != QMessageBox::Yes)
+                        return;
+                    if (button) button->setEnabled(false);
+                    if (appealButton) appealButton->setEnabled(false);
+                    userApi_->confirmOrder(order.orderNo, [this, order, button, appealButton](ApiReply reply) {
+                        if (button) button->setEnabled(true);
+                        if (appealButton) appealButton->setEnabled(true);
+                        if (!reply.ok()) { notify(reply.message, true); return; }
+                        notify(QStringLiteral("订单已确认并扣款，可以评价本次服务"));
+                        refreshOrders();
+                        refreshProfile();
+                        openReviewDialog(order.orderNo, order.stationName, nullptr);
+                    });
+                });
+        }
+        if (order.status == QStringLiteral("申诉待审核")) {
+            auto* pending = new QLabel(QStringLiteral("申诉已发送管理端，审核期间不扣款。可刷新查看处理结果。"));
+            pending->setWordWrap(true);
+            pending->setStyleSheet(QStringLiteral("color:#607362;font-size:12px;"));
+            cardLayout->addWidget(pending);
+        }
         const QPointer<QPushButton> reviewEntry(reviewEntryRaw);
         auto* receipt = new QPushButton(QStringLiteral("查看小票  ›"));
         receipt->setCursor(Qt::PointingHandCursor);
@@ -275,6 +326,9 @@ void UserMainWindow::renderOrders(const QVector<OrderSummary>& records)
                                         money(value.value(QStringLiteral("paidCent")).toInt()),
                                         value.value(QStringLiteral("statusText")).toString()),
                                 QMessageBox::Ok, this);
+                            receiptBox.setTextFormat(Qt::PlainText);
+                            receiptBox.setText(receiptBox.text() + QStringLiteral("\n应付金额  %1\n申诉原因  %2")
+                                .arg(money(value.value("amountCent").toInt()), value.value("appealReason").toString()));
                             QPushButton* writeReview = nullptr;
                             if (value.value(QStringLiteral("statusText")).toString() ==
                                 QStringLiteral("已完成"))
@@ -307,6 +361,53 @@ void UserMainWindow::renderOrders(const QVector<OrderSummary>& records)
         ordersCards_->addWidget(card);
     }
     ordersCards_->addStretch();
+}
+
+void UserMainWindow::openAppealDialog(const QString& orderNo)
+{
+    if (!userApi_) return;
+    auto* dialog = new QDialog(this);
+    dialog->setObjectName(QStringLiteral("orderAppealDialog"));
+    dialog->setWindowTitle(QStringLiteral("订单申诉"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    auto* layout = new QVBoxLayout(dialog);
+    auto* hint = new QLabel(QStringLiteral("请说明不满意的原因（1～500 字）。提交后等待管理端审核，期间不扣款。"));
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+    auto* reason = new QTextEdit;
+    reason->setObjectName(QStringLiteral("appealReasonEdit"));
+    reason->setAcceptRichText(false);
+    layout->addWidget(reason);
+    auto* message = new QLabel;
+    message->setWordWrap(true);
+    layout->addWidget(message);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    auto* submit = buttons->button(QDialogButtonBox::Ok);
+    submit->setText(QStringLiteral("提交申诉"));
+    submit->setEnabled(false);
+    layout->addWidget(buttons);
+    connect(reason, &QTextEdit::textChanged, dialog, [reason, submit] {
+        const auto text = reason->toPlainText().trimmed();
+        submit->setEnabled(!text.isEmpty() && text.toUcs4().size() <= 500);
+    });
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, dialog,
+        [this, guard = QPointer<QDialog>(dialog), reason, submit, message, orderNo] {
+            submit->setEnabled(false);
+            reason->setReadOnly(true);
+            userApi_->appealOrder(orderNo, reason->toPlainText().trimmed(),
+                [this, guard, reason, submit, message](ApiReply reply) {
+                    if (!guard) return;
+                    reason->setReadOnly(false);
+                    submit->setEnabled(true);
+                    if (!reply.ok()) { message->setText(reply.message); return; }
+                    guard->accept();
+                    notify(QStringLiteral("申诉已提交，等待管理端审核，不会扣款"));
+                    refreshOrders();
+                });
+        });
+    dialog->resize(360, 300);
+    dialog->open();
 }
 
 void UserMainWindow::openReviewDialog(const QString& orderNo, const QString& stationName,

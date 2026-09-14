@@ -59,7 +59,8 @@ std::size_t OutboxDispatcher::dispatchOnce(const std::chrono::system_clock::time
                 deliveredIds.push_back(row.id);
                 continue;
             }
-            if (row.eventType == "order.settled")
+            if (row.eventType == "order.settled" || row.eventType == "order.ready" ||
+                row.eventType == "order.appealed" || row.eventType == "order.cancelled")
             {
                 const auto flow = repository_.flow(row.aggregateId);
                 const auto order = flow ? repository_.orderByFlow(row.aggregateId) : std::nullopt;
@@ -78,8 +79,8 @@ std::size_t OutboxDispatcher::dispatchOnce(const std::chrono::system_clock::time
                 data["amountCent"] = static_cast<qint64>(order->amountCent);
                 data["energyMwh"] = static_cast<qint64>(order->energyMwh);
                 data["settledAt"] = static_cast<qint64>(order->settledAt.value_or(0));
-                data["status"] = order->status;
-                if (hub_->publish("order.settled", compact(data),
+                data["status"] = row.toStatus;
+                if (hub_->publish(row.eventType, compact(data),
                                   EventScope{flow->userId, std::nullopt, true, false},
                                   row.createdAt))
                 {

@@ -326,10 +326,10 @@ int main()
     for (const auto& value : envelope(adminFlows).value("data").toObject().value("items").toArray())
     {
         if (value.toObject().value("flowNo").toString().toStdString() == newFlowNo &&
-            value.toObject().value("status").toInt() == 60)
+            value.toObject().value("status").toInt() == 100)
             settled = true;
     }
-    tests.check(settled, "restart controlled-settled the charging flow");
+    tests.check(settled, "restart stops charging without deducting money");
 
     const std::string commandNo = envelope(restart)
                                       .value("data")

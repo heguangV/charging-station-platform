@@ -7,11 +7,13 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPointer>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QTableWidget>
@@ -133,6 +135,28 @@ void interfaceFlow()
     waitFor([&] { return stations->rowCount() == 1; }, "station list");
     require(stations->item(0, 1)->text() == QStringLiteral("中关村绿色能源站"), "station metadata");
     screenshot(window, "admin-stations");
+    invoke(window, "addStation");
+    waitFor(
+        [&]
+        {
+            auto* d = window.findChild<QDialog*>("addStationDialog");
+            return d && widget<QComboBox>(*d, "stationAdcode")->isEnabled();
+        },
+        "tariff regions not loaded in station dialog");
+    QPointer<QDialog> addDialog = widget<QDialog>(window, "addStationDialog");
+    auto* addButtons = widget<QDialogButtonBox>(*addDialog, "");
+    widget<QLineEdit>(*addDialog, "stationCode")->setText("INVALID-CODE");
+    widget<QLineEdit>(*addDialog, "stationName")->setText(QStringLiteral("验收测试站"));
+    widget<QLineEdit>(*addDialog, "stationAddress")->setText(QStringLiteral("北京市测试路 1 号"));
+    widget<QDoubleSpinBox>(*addDialog, "stationLatitude")->setValue(39.977680);
+    widget<QDoubleSpinBox>(*addDialog, "stationLongitude")->setValue(116.316417);
+    addButtons->button(QDialogButtonBox::Save)->click();
+    require(addDialog->isVisible() && server.count("admin/stations", "POST") == 0,
+            "invalid station code submitted");
+    widget<QLineEdit>(*addDialog, "stationCode")->setText("TEST_01");
+    addButtons->button(QDialogButtonBox::Save)->click();
+    waitFor([&] { return server.count("admin/stations", "POST") == 1 && addDialog.isNull(); },
+            "station creation did not complete");
     nav->setCurrentRow(2);
     auto* chargers = widget<QTableWidget>(window, "chargerTable");
     waitFor([&] { return chargers->rowCount() == 1; }, "charger list");
@@ -200,6 +224,17 @@ void interfaceFlow()
     require(users->item(0, 5)->text() == QStringLiteral("正常"), "user numeric status");
     require(users->item(0, 3)->text() == QString::fromUtf8("¥50.25"), "balance cents");
     screenshot(window, "admin-users");
+    widget<QPushButton>(window, "orderAppealsButton")->click();
+    auto* appealsDialog = widget<QDialog>(window, "orderAppealsDialog");
+    auto* appealsTable = widget<QTableWidget>(*appealsDialog, "orderAppealsTable");
+    waitFor([&] { return appealsTable->rowCount() == 1; }, "appeal list loads");
+    require(appealsTable->item(0, 4)->text().contains(QStringLiteral("提前停止")), "appeal reason visible");
+    appealsTable->selectRow(0);
+    const auto folder = qEnvironmentVariable("NCS_ADMIN_SCREENSHOT_DIR");
+    if (!folder.isEmpty()) require(appealsDialog->grab().save(folder + "/admin-order-appeals.png"), "appeals screenshot");
+    widget<QPushButton>(*appealsDialog, "approveOrderAppealButton")->click();
+    waitFor([&] { return server.appealApproved && appealsTable->rowCount() == 0; }, "appeal approval refreshes empty list");
+    appealsDialog->close();
     users->selectRow(0);
     invoke(window, "toggleUserStatus");
     waitFor(

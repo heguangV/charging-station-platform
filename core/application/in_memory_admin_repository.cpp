@@ -380,7 +380,7 @@ InMemoryAdminRepository::activeFlowOnCharger(const std::int64_t chargerId)
 {
     for (const auto& flow : charging_.allFlows())
     {
-        if (flow.chargerId && *flow.chargerId == chargerId && isActiveStatus(flow.status))
+        if (flow.chargerId && *flow.chargerId == chargerId && isActiveStatus(flow.status) && flow.status < 100)
             return flow;
     }
     return std::nullopt;

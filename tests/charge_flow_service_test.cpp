@@ -170,9 +170,11 @@ int main() {
                   progress.value->simulatedSoc > 20,
               "progress derives simulated energy and amount from the snapshot");
 
-  const auto settled =
+  const auto settledPending =
       flows.settle(driver.id, flow.value->flowNo, started.value->version,
                    "USER_STOPPED", now + 70 * second);
+  tests.check(settledPending.ok() && settledPending.value->status == 100 && settledPending.value->paidCent == 0, "stopping creates unpaid pending order");
+  const auto settled = flows.confirmOrder(driver.id, settledPending.value->orderNo, now + 200 * second);
   tests.check(settled.ok() && settled.value->durationSec == 3600 &&
                   settled.value->energyMwh == 60000000 &&
                   settled.value->amountCent == 8100 &&
@@ -212,9 +214,11 @@ int main() {
       debtor.id, debtorFlow.value->flowNo, debtorConfirm.value->version,
       std::nullopt, 0, now + 2 * second);
   tests.check(debtorStart.ok(), "zero client floor keeps the city minimum balance");
-  const auto debtorSettle = flows.settle(debtor.id, debtorFlow.value->flowNo,
+  const auto debtorSettlePending = flows.settle(debtor.id, debtorFlow.value->flowNo,
                                          debtorStart.value->version,
                                          "USER_STOPPED", now + 62 * second);
+  tests.check(debtorSettlePending.ok() && debtorSettlePending.value->status == 100 && debtorSettlePending.value->paidCent == 0, "stopping creates unpaid pending order");
+  const auto debtorSettle = flows.confirmOrder(debtor.id, debtorSettlePending.value->orderNo, now + 200 * second);
   tests.check(debtorSettle.ok() && debtorSettle.value->paidCent == 600 &&
                   debtorSettle.value->debtAddedCent ==
                       debtorSettle.value->amountCent - 600 &&
@@ -330,9 +334,11 @@ int main() {
       flows.progress(driver.id, resumed.value->flowNo, now + 134 * second);
   tests.check(resumedProgress.ok() && resumedProgress.value->durationSec == 120,
               "charging resumes billing from the started time");
-  const auto resumedSettle = flows.settle(driver.id, resumed.value->flowNo,
+  const auto resumedSettlePending = flows.settle(driver.id, resumed.value->flowNo,
                                           resumedStart.value->version,
                                           "USER_STOPPED", now + 136 * second);
+  tests.check(resumedSettlePending.ok() && resumedSettlePending.value->status == 100 && resumedSettlePending.value->paidCent == 0, "stopping creates unpaid pending order");
+  const auto resumedSettle = flows.confirmOrder(driver.id, resumedSettlePending.value->orderNo, now + 200 * second);
   tests.check(resumedSettle.ok() && resumedSettle.value->amountCent == 540,
               "recovered flow settles normally");
 

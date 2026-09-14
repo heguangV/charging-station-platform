@@ -149,7 +149,7 @@ void resetToPreV8(const std::string& path)
                "DELETE FROM station WHERE code IN ('CYGY','BJN','SJS','TZYH');"
                "DELETE FROM region_tariff WHERE adcode IN ('110106','110107','110112');"
                "DROP TABLE IF EXISTS order_review;"
-               "DELETE FROM schema_version WHERE version>=8;");
+               "DELETE FROM schema_version WHERE version>=8 AND version<10;");
 }
 
 bool openThrows(const std::string& path, std::string& message)
@@ -194,7 +194,7 @@ int main()
         tests.check(openThrows(database.path(), message) &&
                         message.find("sim_owner_001") != std::string::npos,
                     "an exact username collision aborts with a useful error");
-        tests.check(queryInteger(database.path(), "SELECT MAX(version) FROM schema_version") == 7 &&
+        tests.check(queryInteger(database.path(), "SELECT MAX(version) FROM schema_version WHERE version<10") == 7 &&
                         queryInteger(database.path(), "SELECT COUNT(*) FROM wallet_account") == 1,
                     "the username collision rolls back v8 and preserves the account wallet");
     }
@@ -208,7 +208,7 @@ int main()
                         message.find("phone identity") != std::string::npos &&
                         message.find("13800001001") == std::string::npos,
                     "a phone collision aborts without exposing the complete phone");
-        tests.check(queryInteger(database.path(), "SELECT MAX(version) FROM schema_version") == 7 &&
+        tests.check(queryInteger(database.path(), "SELECT MAX(version) FROM schema_version WHERE version<10") == 7 &&
                         queryInteger(database.path(), "SELECT COUNT(*) FROM user_account WHERE "
                                                       "username='real_owner_001'") == 1,
                     "the phone collision rolls back v8 and preserves the account");

@@ -93,6 +93,7 @@ class UserMainWindow final : public QMainWindow
     void refreshProfile();
     void refreshOrders();
     void renderOrders(const QVector<OrderSummary>& records);
+    void openAppealDialog(const QString& orderNo);
     void openReviewDialog(const QString& orderNo, const QString& stationName,
                           QPushButton* cardButton = nullptr);
     void notify(const QString& message, bool error = false);

@@ -689,10 +689,20 @@ def main() -> int:
             receipt = json.loads(settle_body)["data"]
             assert (
                 settle_status == 200
-                and receipt["status"] == 60
+                and receipt["status"] == 100
                 and receipt["energyMwh"] > 0
             ), (settle_status, receipt)
 
+            assert receipt["paidCent"] == 0 and receipt["settledAt"] is None
+            ready_events = ws_user.wait_for(
+                lambda event: event.get("type") == "order.ready", EVENT_TIMEOUT_SECONDS)
+            assert ready_events, "pending order notification missing"
+            confirm_status, _, confirm_body = request(
+                port, f"/api/v1/user/orders/{receipt['orderNo']}/confirmation",
+                {**auth_headers, **json_headers, "Idempotency-Key": str(uuid.uuid4())},
+                "POST", "{}")
+            receipt = json.loads(confirm_body)["data"]
+            assert confirm_status == 200 and receipt["status"] == 60
             settled_events = ws_user.wait_for(
                 lambda event: event.get("type") == "order.settled",
                 EVENT_TIMEOUT_SECONDS)

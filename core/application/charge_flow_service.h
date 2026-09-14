@@ -116,6 +116,7 @@ struct SettlementReceipt
     std::int64_t settledAt = 0;
     int status = 60;
     std::string statusText;
+    std::string appealReason;
 };
 
 struct OrderSummaryView
@@ -195,11 +196,18 @@ class ChargeFlowService final
     ServiceResult<ChargeProgressView> progress(std::int64_t userId, const std::string& flowNo,
                                                std::chrono::system_clock::time_point now);
     // 结算充电订单（事务内，状态
-    // 40/80→60）：计算电量与金额，余额不足部分转欠款，生成钱包流水、释放设备并触发队列晋级，返回结算凭据；
+    // 40/80→100）：冻结电量与金额、释放设备并触发队列晋级，返回未付款凭据；用户确认才扣款。
     // 事务失败时在独立事务落状态 80（版本不变，支持同键重试幂等续结）并返回 TransactionFailed。
     ServiceResult<SettlementReceipt> settle(std::int64_t userId, const std::string& flowNo,
                                             std::int64_t flowVersion, const std::string& reasonCode,
                                             std::chrono::system_clock::time_point now);
+    ServiceResult<SettlementReceipt> confirmOrder(std::int64_t userId, const std::string& orderNo,
+        std::chrono::system_clock::time_point now);
+    ServiceResult<SettlementReceipt> appealOrder(std::int64_t userId, const std::string& orderNo,
+        const std::string& reason, std::chrono::system_clock::time_point now);
+    std::vector<ChargingOrder> pendingAppeals();
+    ServiceResult<SettlementReceipt> approveAppeal(std::int64_t adminId, const std::string& orderNo,
+        std::chrono::system_clock::time_point now);
     ServiceResult<OrderPage> orders(std::int64_t userId, std::optional<int> status,
                                     std::int64_t fromAt, std::int64_t toAt, const std::string& sort,
                                     int page, int pageSize) const;
@@ -224,8 +232,8 @@ class ChargeFlowService final
     ServiceResult<FlowView> adminForceRelease(const std::string& flowNo, const std::string& reason,
                                               int nextChargerStatus, std::int64_t flowVersion,
                                               std::chrono::system_clock::time_point now);
-    // 管理端受控结算（事务内，状态 40/80→60）：计费与欠款逻辑同用户结算，设备终态仅允许 0（空闲）或
-    // 4（故障）； 原因或目标状态非法返回 ValidationFailed，状态不可结算返回
+    // 管理端受控停止（事务内，状态 40/80→100）：冻结金额等待用户确认，设备终态仅允许 0（空闲）或
+    // 4（重启中）； 原因或目标状态非法返回 ValidationFailed，状态不可结算返回
     // InvalidStateTransition。
     ServiceResult<SettlementReceipt>
     adminControlledSettle(const std::string& flowNo, const std::string& reason,

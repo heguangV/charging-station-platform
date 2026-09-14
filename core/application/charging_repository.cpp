@@ -11,6 +11,14 @@ constexpr std::int64_t kFarFutureSeconds = 4102444800; // 2100-01-01 UTC
 
 } // namespace
 
+std::string flowEventType(const int toStatus, const std::string& reasonCode) {
+  if (toStatus == 60) return "order.settled";
+  if (toStatus == 100) return "order.ready";
+  if (toStatus == 110) return "order.appealed";
+  if (toStatus == 70 && reasonCode == "APPEAL_APPROVED") return "order.cancelled";
+  return "flow.updated";
+}
+
 bool isActiveFlowStatus(const int status) {
   switch (status) {
   case 10:
@@ -19,6 +27,8 @@ bool isActiveFlowStatus(const int status) {
   case 40:
   case 50:
   case 80:
+  case 100:
+  case 110:
     return true;
   default:
     return false;
@@ -37,6 +47,10 @@ std::string flowStatusText(const int status) {
     return "充电中";
   case 50:
     return "结算中";
+  case 100:
+    return "待用户确认";
+  case 110:
+    return "申诉待审核";
   case 60:
     return "已完成";
   case 70:
@@ -52,6 +66,10 @@ std::string flowStatusText(const int status) {
 
 std::string orderStatusText(const int status) {
   switch (status) {
+  case 100:
+    return "待用户确认";
+  case 110:
+    return "申诉待审核";
   case 60:
     return "已完成";
   case 70:
@@ -355,9 +373,7 @@ void InMemoryChargingRepository::addFlowEvent(const FlowEvent &event) {
   flowEvents_.push_back(event);
   OutboxEvent outbox;
   outbox.id = nextOutboxId_++;
-  outbox.eventType = event.toStatus == static_cast<int>(FlowStatus::Completed)
-                         ? "order.settled"
-                         : "flow.updated";
+  outbox.eventType = flowEventType(event.toStatus, event.reasonCode);
   outbox.aggregateType = "charging_flow";
   outbox.aggregateId = event.flowNo;
   outbox.fromStatus = event.fromStatus;

@@ -152,7 +152,7 @@ int main()
                     "fresh database is migrated, writable and in WAL mode");
         tests.check(repository.findAdminByUsername("admin").has_value() &&
                         queryInteger(database.path(), "SELECT MAX(version) FROM schema_version") ==
-                            9,
+                            10,
                     "demo-seed migration, development account and full history exist");
 
         UserAccount account;
@@ -401,7 +401,7 @@ int main()
         const auto settledEventsBefore = queryInteger(
             database.path(), "SELECT COUNT(*) FROM outbox_event WHERE event_type='order.settled'");
         executeSql(database.path(),
-                   "CREATE TRIGGER fail_settlement_wallet BEFORE UPDATE ON wallet_account "
+                   "CREATE TRIGGER fail_settlement_wallet BEFORE UPDATE OF status ON charging_flow WHEN NEW.status=100 "
                    "BEGIN SELECT RAISE(ABORT,'injected settlement failure'); END");
         const auto failedSettlement = flows.settle(userId, flowNo, active.flow->version,
                                                    "USER_STOPPED", now + std::chrono::seconds(62));
@@ -421,6 +421,8 @@ int main()
         tests.check(settled.ok() && settled.value->orderNo == orderNo,
                     "status 80 settlement retries with the pre-failure version in "
                     "one transaction");
+        tests.check(flows.confirmOrder(userId, orderNo, now + std::chrono::seconds(70)).ok(),
+                    "explicit confirmation applies payment after stop retry");
         tests.check(queryInteger(database.path(),
                                  "SELECT COUNT(*) FROM outbox_event WHERE "
                                  "event_type='order.settled'") == settledEventsBefore + 1,

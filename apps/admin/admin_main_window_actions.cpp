@@ -1,5 +1,6 @@
 #include "admin_main_window.h"
 #include <QComboBox>
+#include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -8,10 +9,12 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSpinBox>
 #include <QTimer>
+#include <QUrlQuery>
 #include <algorithm>
 namespace ncs::admin
 {
@@ -85,10 +88,13 @@ void AdminMainWindow::addStation()
 {
     if (operationBusy_)
         return;
-    QDialog dialog(this);
-    dialog.setWindowTitle(QStringLiteral("新增充电站"));
-    dialog.setMinimumWidth(470);
-    auto* form = new QFormLayout(&dialog);
+    auto* dialog = new QDialog(this);
+    dialog->setObjectName("addStationDialog");
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(QStringLiteral("新增充电站"));
+    dialog->setMinimumWidth(500);
+    dialog->setModal(true);
+    auto* form = new QFormLayout(dialog);
     form->setContentsMargins(24, 20, 24, 20);
     form->setSpacing(10);
     auto field = [&form](const QString& label, int max, const QString& value = QString())
@@ -101,12 +107,21 @@ void AdminMainWindow::addStation()
     auto* code = field(QStringLiteral("站点编码"), 16);
     auto* name = field(QStringLiteral("站点名称"), 64);
     auto* address = field(QStringLiteral("地址"), 128);
-    auto* adcode = field(QStringLiteral("行政区编码"), 6);
+    code->setObjectName("stationCode");
+    name->setObjectName("stationName");
+    address->setObjectName("stationAddress");
+    auto* adcode = new QComboBox;
+    adcode->setObjectName("stationAdcode");
+    adcode->addItem(QStringLiteral("正在读取可用区域…"));
+    adcode->setEnabled(false);
+    form->addRow(QStringLiteral("计价区域"), adcode);
     auto* latitude = new QDoubleSpinBox;
+    latitude->setObjectName("stationLatitude");
     latitude->setDecimals(6);
     latitude->setRange(-90, 90);
     latitude->setSuffix(QStringLiteral(" °"));
     auto* longitude = new QDoubleSpinBox;
+    longitude->setObjectName("stationLongitude");
     longitude->setDecimals(6);
     longitude->setRange(-180, 180);
     longitude->setSuffix(QStringLiteral(" °"));
@@ -136,37 +151,106 @@ void AdminMainWindow::addStation()
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
     buttons->button(QDialogButtonBox::Save)->setText(QStringLiteral("创建站点"));
     buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));
+    buttons->button(QDialogButtonBox::Save)->setEnabled(false);
     form->addRow(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog,
-            [&]
+    connect(buttons, &QDialogButtonBox::accepted, dialog,
+            [this, dialog, code, name, address, adcode, latitude, longitude, hours, count, type,
+             power, connector, error, buttons]
             {
                 if (code->text().trimmed().size() < 2 || name->text().trimmed().isEmpty() ||
                     address->text().trimmed().isEmpty() ||
-                    !QRegularExpression("^[0-9]{6}$").match(adcode->text()).hasMatch() ||
+                    !QRegularExpression("^[A-Za-z0-9_]{2,16}$")
+                         .match(code->text().trimmed())
+                         .hasMatch() ||
+                    adcode->currentData().toString().isEmpty() ||
                     hours->text().trimmed().isEmpty() || connector->text().trimmed().isEmpty())
                 {
-                    error->setText(
-                        QStringLiteral("请完整填写站点信息；编码至少 2 位，行政区编码为 6 位数字"));
+                    error->setText(QStringLiteral(
+                        "请完整填写站点信息；站点编码仅可使用 2～16 位字母、数字或下划线"));
                     return;
                 }
-                dialog.accept();
-            });
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    if (dialog.exec() != QDialog::Accepted || !api_.hasSession())
-        return;
-    mutate("POST", "admin/stations",
-           {{"code", code->text().trimmed()},
-            {"name", name->text().trimmed()},
-            {"address", address->text().trimmed()},
-            {"adcode", adcode->text()},
-            {"latitudeE6", qRound64(latitude->value() * 1000000)},
-            {"longitudeE6", qRound64(longitude->value() * 1000000)},
-            {"businessHours", hours->text().trimmed()},
-            {"initialCharger", QJsonObject{{"count", count->value()},
+                buttons->setEnabled(false);
+                error->setStyleSheet("color:#65717B;");
+                error->setText(QStringLiteral("正在创建站点与初始设备…"));
+                QJsonObject initialCharger{{"count", count->value()},
                                            {"chargerType", type->currentData().toInt()},
                                            {"powerWatt", qRound64(power->value() * 1000)},
-                                           {"connectorStandard", connector->text().trimmed()}}}},
-           1);
+                                           {"connectorStandard", connector->text().trimmed()}};
+                QJsonObject body{{"code", code->text().trimmed()},
+                                 {"name", name->text().trimmed()},
+                                 {"address", address->text().trimmed()},
+                                 {"adcode", adcode->currentData().toString()},
+                                 {"latitudeE6", qRound64(latitude->value() * 1000000)},
+                                 {"longitudeE6", qRound64(longitude->value() * 1000000)},
+                                 {"businessHours", hours->text().trimmed()},
+                                 {"initialCharger", initialCharger}};
+                QPointer<QDialog> guard(dialog);
+                api_.postJson(
+                    "admin/stations", body,
+                    [this, guard, buttons, error](AdminReply reply)
+                    {
+                        if (!guard)
+                            return;
+                        buttons->setEnabled(true);
+                        if (!reply.ok())
+                        {
+                            error->setStyleSheet("color:#B42318;");
+                            error->setText(reply.message);
+                            return;
+                        }
+                        guard->accept();
+                        notify(QStringLiteral("站点与初始设备创建成功"));
+                        catalog_.clear();
+                        loadCatalog();
+                        refreshStations();
+                    },
+                    true);
+            });
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    code->setPlaceholderText(QStringLiteral("如 ZGC2，仅限字母、数字、下划线"));
+    error->setStyleSheet("color:#65717B;");
+    error->setText(QStringLiteral("计价区域必须存在当前生效的基础电价，正在读取…"));
+    QUrlQuery query;
+    query.addQueryItem("effectiveAt", QString::number(QDateTime::currentSecsSinceEpoch()));
+    query.addQueryItem("page", "1");
+    query.addQueryItem("pageSize", "100");
+    QPointer<QDialog> guard(dialog);
+    api_.get("admin/tariffs", query,
+             [guard, adcode, buttons, error](AdminReply reply)
+             {
+                 if (!guard)
+                     return;
+                 adcode->clear();
+                 if (!reply.ok() || !reply.data.isObject())
+                 {
+                     error->setStyleSheet("color:#B42318;");
+                     error->setText(reply.ok() ? QStringLiteral("可用计价区域响应格式错误")
+                                               : reply.message);
+                     return;
+                 }
+                 QStringList regions;
+                 for (const auto& value : reply.data.toObject().value("items").toArray())
+                 {
+                     const auto region = value.toObject().value("adcode").toString();
+                     if (QRegularExpression("^[0-9]{6}$").match(region).hasMatch() &&
+                         !regions.contains(region))
+                         regions.append(region);
+                 }
+                 regions.sort();
+                 for (const auto& region : regions)
+                     adcode->addItem(region, region);
+                 if (regions.isEmpty())
+                 {
+                     error->setStyleSheet("color:#B42318;");
+                     error->setText(QStringLiteral("当前没有生效的区域基础电价，请先配置价格"));
+                     return;
+                 }
+                 adcode->setEnabled(true);
+                 buttons->button(QDialogButtonBox::Save)->setEnabled(true);
+                 error->setStyleSheet("color:#65717B;");
+                 error->setText(QStringLiteral("请选择已有计价区域；创建成功后会同时生成初始设备"));
+             });
+    dialog->open();
 }
 void AdminMainWindow::removeStation()
 {

@@ -233,6 +233,16 @@ void UserApi::settleFlow(const QString& flowNo, qint64 flowVersion, const QStrin
                      idempotencyHeaders());
 }
 
+void UserApi::confirmOrder(const QString& orderNo, ApiClient::Handler done)
+{
+    client_.postJson(kUserBase + QStringLiteral("/orders/%1/confirmation").arg(orderNo), {},
+        std::move(done), idempotencyHeaders());
+}
+void UserApi::appealOrder(const QString& orderNo, const QString& reason, ApiClient::Handler done)
+{
+    client_.postJson(kUserBase + QStringLiteral("/orders/%1/appeals").arg(orderNo), {{"reason", reason}},
+        std::move(done), idempotencyHeaders());
+}
 QHash<QByteArray, QByteArray> UserApi::idempotencyHeaders()
 {
     return {{"Idempotency-Key", QUuid::createUuid().toString(QUuid::WithoutBraces).toUtf8()}};

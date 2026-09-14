@@ -376,8 +376,11 @@ int main()
              R"({"reasonCode":"USER_STOPPED","flowVersion":)" + std::to_string(startVersion) + "}",
              token, kUuidF);
     tests.check(retrySettle.code == 200 &&
-                    envelope(retrySettle).value("data").toObject().value("status").toInt() == 60,
+                    envelope(retrySettle).value("data").toObject().value("status").toInt() == 100,
                 "settlement succeeds with the current version");
+    const auto paymentConfirmation = call(app, crow::HTTPMethod::POST,
+        "/api/v1/user/orders/" + orderNo + "/confirmation", "{}", token, kUuidA);
+    tests.check(paymentConfirmation.code == 200, "explicit user confirmation settles the pending order");
     const QJsonObject receipt =
         envelope(call(app, crow::HTTPMethod::GET, "/api/v1/user/orders/" + orderNo, {}, token))
             .value("data")

@@ -1343,3 +1343,21 @@ Token 通过握手 `Authorization: Bearer <token>` 传递，不放入 URL。允�
 5. 每个写接口至少测试正常流、权限、字段边界、非法状态、并发、幂等重试和事务回滚。
 6. 每个查询接口至少测试空数据、分页上限、过滤、排序白名单、权限和性能预算。
 7. 接口实现完成以自动化契约测试和端到端证据为准，文档存在不代表功能已经实现。
+
+
+## 2026-09-09：UC-U-09 用户确认扣款与申诉（v10）
+
+本节替代原结束充电接口的“立即扣款”语义；业务规则以需求规格 UC-U-09 为准。
+
+| 接口（前缀 `/api/v1`） | 请求与权限 | 成功结果 |
+| --- | --- | --- |
+| POST `/user/flows/{flowNo}/settlements` | 保持原 `flowVersion`、`reasonCode` 和幂等键 | 停止计费、冻结金额、释放设备；小票 `status=100`、`settledAt=null`、`paidCent=0`，钱包不变 |
+| POST `/user/orders/{orderNo}/confirmation` | 当前订单所有人；JSON `{}`；Idempotency-Key 必填 | 按冻结金额扣款，返回 `status=60` 小票，随后可调用现有评价接口 |
+| POST `/user/orders/{orderNo}/appeals` | 当前订单所有人；JSON `{"reason":"申诉原因"}`；Idempotency-Key 必填 | 1～500 个 Unicode 码点、去除首尾空白、拒绝 NUL；返回 `status=110` 小票及 `appealReason` |
+| GET `/admin/order-appeals?page=1&pageSize=20` | OPERATOR 或 OWNER | `items/total/page/pageSize`；按申诉时间从早到晚，同时间按订单号排序；每项 `orderNo/stationName/chargerCode/amountCent/reason/appealAt` |
+| POST `/admin/order-appeals/{orderNo}/approval` | OPERATOR 或 OWNER；JSON `{"confirmed":true}`；Idempotency-Key 必填 | 审核通过取消订单，返回 `status=70` 小票；`settledAt=null`，无扣款和欠费 |
+
+- 100/110 均可在现有用户订单列表中过滤，列表和小票使用对应 `statusText`。活动流程仍返回这些状态，以恢复订单处理入口。
+- 确认、申诉和审核的幂等作用域分别为 `u{id}:order-confirm:{orderNo}`、`u{id}:order-appeal:{orderNo}`、`a{id}:appeal-approve:{orderNo}`。业务事务也拒绝重复收费；失败可用新键重试。相同申诉内容重试返回已有结果，不同内容返回 AlreadyExists。
+- 沿用现有错误码：Unauthorized/Forbidden、NotFound（包括非本人订单）、ValidationFailed、InvalidStateTransition、AlreadyExists、TransactionFailed。旧订单及旧评论数据不变；客户端与服务端必须配套升级，旧客户端不得把停止充电响应当作支付成功。
+- 新增 WebSocket 事件 `order.ready`、`order.appealed`、`order.cancelled`，复用 `order.settled` 的最小字段结构及“本人 + 管理员”的发送范围；不推送申诉自由文本、余额和完整小票。客户端从授权 REST 读取详情，断线后刷新订单可恢复。`order.settled` 仅在用户确认完成扣款后发送。
