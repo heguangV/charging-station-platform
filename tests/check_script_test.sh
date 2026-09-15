@@ -64,7 +64,7 @@ NCS_CHECK_BASE_REF="${base_commit}" ./scripts/check.sh >/dev/null
 
 # The same file may occur in both the committed PR range and local changes;
 # de-duplication must not trip `set -e`.
-sed -i 's/return 2/return 3/' tests/committed.cpp
+sed -i.bak 's/return 2/return 3/' tests/committed.cpp
 NCS_CHECK_BASE_REF="${base_commit}" ./scripts/check.sh >/dev/null
 
 # Bad CI configuration and newly introduced oversized files fail closed.

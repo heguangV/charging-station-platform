@@ -1,6 +1,6 @@
 // UserAccountRepository 与 WalletMirror
 // 的内存实现（测试适配器）：用户账号增删改查、密码替换与钱包/活跃流程标志镜像。 互斥锁保护
-// id→账号映射，id 自增分配；进程重启即丢失，仅供测试与原型。 生产由 infrastructure/sqlite 的
+// id→账号映射，id 自增分配；进程重启即丢失，仅供测试与原型。生产由 PostgreSQL
 // SqliteRepository 等价替换，服务层无感。
 
 #pragma once

@@ -1,7 +1,7 @@
 // 充电领域聚合仓储端口（端口-适配器模式）：定义领域枚举/视图结构与钱包、站点/充电桩/资费、充电流程、排队、订单、Outbox
-// 事件的持久化接口。 生产实现为 infrastructure/sqlite 的 SqliteRepository；本头文件同时给出
+// 事件的持久化接口。生产实现由 infrastructure/database 工厂装配 PostgreSQL；本头文件同时给出
 // InMemoryChargingRepository（含演示数据）供原型与测试。 约束：服务层所有变更必须运行在
-// withTransaction 内（生产映射 SQLite BEGIN IMMEDIATE）；金额用整数分、电量毫瓦时、时间 UTC 秒。
+// withTransaction 内（生产映射 PostgreSQL 原生事务与行锁）；金额用整数分、电量毫瓦时、时间 UTC 秒。
 
 #pragma once
 
@@ -237,7 +237,7 @@ struct WalletMovement
 };
 
 // One aggregate store for the charging domain. Every service mutation runs
-// inside withTransaction, which maps to a SQLite BEGIN IMMEDIATE transaction
+// inside withTransaction, which maps to a PostgreSQL transaction with explicit row locks
 // in the future persistent adapter; the in-memory implementation only guards
 // the maps with a re-entrant mutex.
 class ChargingRepository
@@ -301,7 +301,7 @@ class ChargingRepository
     virtual std::vector<ChargingOrder> allOrders() = 0;
 };
 
-// In-memory adapter with demo stations; replaced by the SQLite adapter later
+// In-memory adapter with demo stations; production uses the PostgreSQL adapter.
 // without touching the service or controller layers.
 class InMemoryChargingRepository final : public ChargingRepository
 {

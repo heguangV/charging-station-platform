@@ -6,10 +6,10 @@
 
 | 配置项 | 用途 | 可见范围 |
 | --- | --- | --- |
-| `TENCENT_MAP_JS_KEY` | JavaScript API GL 地图渲染 | 会在页面运行时对用户可见，必须限制来源和额度 |
-| `TENCENT_MAP_SERVER_KEY` | 地理编码及驾车、步行、公交路线规划 WebService | 仅 Crow 服务端读取，不得发送给客户端或写入日志 |
+| `TENCENT_MAP_JS_KEY` | Vue Web 用户端（`apps/user`）的 JavaScript API GL 地图渲染；由 Vite 在开发/构建时从仓库根 `.env` 注入 `import.meta.env.TENCENT_MAP_JS_KEY` | 会在页面运行时对用户可见，必须限制来源和额度；不得与服务端 Key 混用 |
+| `TENCENT_MAP_SERVER_KEY` | 服务端 WebService：地理编码、POI 周边检索（`/ws/place/v1/search`）、驾车/步行/公交路线规划 | 仅 Crow 服务端读取（`infrastructure/map`），不得发送给客户端、写入日志或进入前端构建产物 |
 
-两个 Key 不得混用。分别在腾讯位置服务控制台启用所需 API，并按控制台能力配置来源、出口 IP、配额和告警。
+两个 Key 不得混用。分别在腾讯位置服务控制台启用所需 API，并按控制台能力配置来源、出口 IP、配额和告警。前端的 JS Key 只从仓库根 `.env` 读取（`vite.config.js` 的 `envDir` 指向仓库根，`envPrefix` 仅放行 `VITE_*` 与 `TENCENT_MAP_JS_KEY`），因此 Agent 的 POI/路线能力与前端地图显示各自使用各自的 Key，互不越界。
 
 ## 2. 本地配置
 
@@ -43,8 +43,10 @@ TENCENT_MAP_JS_ORIGIN=http://localhost/
 
 1. 确认 `.env` 被 Git 忽略：`git check-ignore -v .env`。
 2. 启动服务端，验证 WebService Key 可完成一次北京地址地理编码，并分别取得驾车、步行、公交路线。
-3. 启动用户端并登录，验证导航页优先显示腾讯路线来源、距离、预计时间、起终点标记和路线折线。
-4. 临时断网或使用无效 Server Key，验证此时才显示 `LOCAL_FALLBACK`、浏览器导航入口和 Haversine 距离；使用无效 JS Key 时仍保留服务端路线摘要和浏览器导航。
+3. 启动 Web 用户端（`cd apps/user && npm run dev`）并登录，验证附近站点在地图上以 Marker 显示、定位按钮可用、站点详情可进入导航。
+4. 在 AI 助手页提问（例如“充电站旁边哪里可以喝咖啡”），验证 POI 结果来自 Server Key 调用的 WebService，且响应中的 `provider` 与 `fallback` 与实际情况一致。
+5. 临时断网或使用无效 Server Key，验证此时才显示 `LOCAL_FALLBACK`、浏览器导航入口和 Haversine 距离；Agent 的 `route.provider` 变为 `LOCAL_FALLBACK` 且 `degraded=true`，站点结果仍返回。
+6. 使用无效 JS Key 或缺省 JS Key，验证地图区域显示失败态与配置指引，站点列表与充电流程不受影响。
 
 ## 4. 常见问题
 
@@ -53,6 +55,8 @@ TENCENT_MAP_JS_ORIGIN=http://localhost/
 | 页面提示鉴权失败 | JS Key 是否启用 JavaScript API GL；允许来源是否与 `TENCENT_MAP_JS_ORIGIN` 完全一致 |
 | 地理编码失败 | 是否误用了 JS Key；WebService API 是否启用；服务端出口限制是否正确 |
 | 路线只显示本地降级 | Server Key 是否同时启用了驾车、步行和公交路线规划；配额、出口限制和服务端超时是否正常 |
-| 有路线摘要但无内嵌地图 | JS Key 来源限制是否允许 `TENCENT_MAP_JS_ORIGIN`；Qt WebEngine 是否安装；系统是否支持 WebGL |
+| Web 页面地图空白并提示未配置 Key | 仓库根 `.env` 是否设置 `TENCENT_MAP_JS_KEY`；前端是否在设置后重新执行 `npm run dev` 或 `npm run build`（该值在构建时注入） |
+| Web 地图加载失败 | JS Key 来源限制是否包含当前访问来源；网络是否可达 `map.qq.com`；浏览器是否支持 WebGL |
+| Agent 未返回 POI | 是否配置 `TENCENT_MAP_SERVER_KEY`；是否启用 WebService 周边检索；配额与出口 IP 限制是否正常 |
 | 程序未读取配置 | 环境变量、`NCS_ENV_FILE` 和 `.env` 路径是否正确；进程是否在修改后重启 |
 | Key 曾被提交 | 立即在控制台重新生成；删除文件或补充 `.gitignore` 不能消除 Git 历史泄露 |

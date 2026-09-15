@@ -1,9 +1,11 @@
-// ncs_server 进程入口：按「配置加载 → 启动检查 → SQLite 仓储初始化/迁移种子 → 中间件与服务装配 →
-// 路由注册 → HTTPS 监听」组装整个服务端。 串联 controller 各路由、websocket 推送与 runtime
-// 周期调度；阻塞工作一律经 BoundedExecutor，SQLite 不进 Crow 事件循环。
+// ncs_server 进程入口：按「配置加载 → 启动检查 → PostgreSQL 仓储初始化/迁移种子 → 中间件与服务装配
+// → 路由注册 → HTTPS 监听」组装整个服务端。 串联 controller 各路由、websocket 推送与 runtime
+// 周期调度；阻塞工作一律经 BoundedExecutor，数据库访问不进 Crow 事件循环。
 // 仅开发模式（allowInsecureHttp）允许回环 HTTP，正式环境强制 TLS；一次性 bootstrap OWNER 需经
 // NCS_ADMIN_BOOTSTRAP_KEY 注入初始密码。
 #include <crow.h>
+
+#include "agent/agent_service.h"
 
 #include "core/application/admin_account_service.h"
 #include "core/application/admin_auth_service.h"
@@ -20,11 +22,16 @@
 #include "core/application/security_crypto.h"
 #include "core/application/station_service.h"
 #include "core/application/wallet_service.h"
+#include "infrastructure/ai/llm_client.h"
+#include "infrastructure/ai/llm_config.h"
+#include "infrastructure/database/repository_factory.h"
 #include "infrastructure/files/model_artifact_store.h"
+#include "infrastructure/map/poi_service.h"
 #include "infrastructure/map/tencent_geocoder.h"
+#include "infrastructure/map/tencent_map_client.h"
 #include "infrastructure/map/tencent_route_planner.h"
-#include "infrastructure/sqlite/sqlite_repository.h"
 #include "server/controller/admin_routes.h"
+#include "server/controller/agent_controller.h"
 #include "server/controller/api_routes.h"
 #include "server/controller/dashboard_routes.h"
 #include "server/controller/flow_routes.h"
@@ -115,9 +122,9 @@ int runBootstrapOwner(const ncs::server::runtime::ServerConfig& config, const st
     const auto at = std::chrono::duration_cast<std::chrono::seconds>(
                         std::chrono::system_clock::now().time_since_epoch())
                         .count();
-    ncs::infrastructure::sqlite::SqliteRepository repository(config.databasePath);
-    repository.ensureDevelopmentAdmin(config.demoCredentialsEnabled());
-    const auto created = repository.bootstrapOwnerAccount(
+    auto repository = ncs::infrastructure::database::makeRepository(config.database);
+    repository->ensureDevelopmentAdmin(config.demoCredentialsEnabled());
+    const auto created = repository->bootstrapOwnerAccount(
         username, ncs::core::application::PasswordHasher().hash(password), at);
     if (!created)
     {
@@ -153,6 +160,7 @@ int main(int argc, char* argv[])
         }
         if (startup.action == ncs::server::runtime::StartupAction::BootstrapOwner)
         {
+            ncs::server::runtime::checkDatabaseSecurity(startup.config);
             return runBootstrapOwner(startup.config, startup.bootstrapOwnerUsername);
         }
 
@@ -202,14 +210,17 @@ int main(int argc, char* argv[])
                 std::chrono::seconds(60),
                 std::chrono::seconds(30),
                 std::chrono::seconds(60),
-                [&sessions](const std::string_view token) {
+                [&sessions](const std::string_view token)
+                {
                     return sessions.authenticate(token, std::chrono::system_clock::now())
                         .has_value();
                 },
             });
         ncs::core::application::VerificationCodeService verificationCodes(
             startup.config.demoCredentialsEnabled());
-        ncs::infrastructure::sqlite::SqliteRepository repository(startup.config.databasePath);
+        auto repositoryOwner =
+            ncs::infrastructure::database::makeRepository(startup.config.database);
+        auto& repository = *repositoryOwner;
         repository.ensureDevelopmentAdmin(startup.config.demoCredentialsEnabled());
         ncs::server::websocket::OutboxDispatcher outboxDispatcher(repository, hub);
         ncs::core::application::UserIdentityService userIdentity(repository, sessions,
@@ -235,6 +246,16 @@ int main(int argc, char* argv[])
         };
         ncs::core::application::StationService stationService(repository, geocoder,
                                                               adjustmentLookup);
+        // —— AI 与 Agent 装配：LLM 只通过 core 端口注入 Agent，缺配置时 Agent 自动走确定性降级 ——
+        ncs::infrastructure::map::TencentPoiService poiService(
+            ncs::infrastructure::map::TencentMapClient(
+                QString::fromStdString(startup.config.tencentMapKey)));
+        const auto llmConfig = ncs::infrastructure::ai::makeLlmConfig(
+            startup.config.aiProvider, startup.config.aiModel, startup.config.aiBaseUrl,
+            startup.config.aiApiKey, startup.config.aiTimeoutMs);
+        ncs::infrastructure::ai::OpenAiCompatibleLlmClient llmClient(
+            llmConfig ? *llmConfig : ncs::infrastructure::ai::LlmConfig{});
+        ncs::agent::AgentService agentService(stationService, routePlanner, poiService, llmClient);
         ncs::core::application::ChargeFlowService chargeFlowService(
             repository, repository, repository, businessNumbers,
             static_cast<int>(startup.config.chargeTimeScale), adjustmentLookup);
@@ -289,6 +310,8 @@ int main(int argc, char* argv[])
                                                              blockingExecutor);
         ncs::server::controller::NavigationRoutes navigationRoutes(apiRoutes, navigationService,
                                                                    sessions, blockingExecutor);
+        ncs::server::controller::AgentController agentController(apiRoutes, agentService, sessions,
+                                                                 blockingExecutor);
         ncs::server::controller::FlowRoutes flowRoutes(apiRoutes, chargeFlowService, sessions,
                                                        blockingExecutor, idempotency);
         ncs::server::controller::OrderReviewRoutes reviewRoutes(

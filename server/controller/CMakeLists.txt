@@ -1,6 +1,8 @@
 add_library(ncs_server_controller STATIC
     admin_routes.cpp
     admin_routes.h
+    agent_controller.cpp
+    agent_controller.h
     api_routes.cpp
     api_routes.h
     dashboard_routes.cpp
@@ -23,6 +25,7 @@ add_library(ncs_server_controller STATIC
     request_validation.h
     order_review_routes.cpp
     order_review_routes.h
+    station_dto.h
     station_routes.cpp
     station_routes.h
     user_auth.h
@@ -45,6 +48,7 @@ target_compile_features(ncs_server_controller PUBLIC cxx_std_17)
 target_include_directories(ncs_server_controller PUBLIC ${PROJECT_SOURCE_DIR})
 target_link_libraries(ncs_server_controller
     PUBLIC
+        ncs::agent
         ncs::core_application
         ncs::crow
         ncs::http_common

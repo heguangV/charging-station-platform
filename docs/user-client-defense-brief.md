@@ -1,5 +1,12 @@
 # PE1 Qt 用户客户端答辩说明
 
+> **历史文档说明（2026-09-14）**：本文记录原 **Qt Widgets 车主端**首次交付时的答辩提纲与技术选型，
+> 内容保留归档用途，不再代表当前实现。车主端已改造为 `apps/user` 下的 Vue 3 + HTML5
+> 响应式 Web（同一套页面适配 PC 与手机浏览器），原 Qt 客户端源码已移除；迁移后的工程结构、
+> 构建方式与验收证据见 [研发实施指南](development-guide.md)、[需求追踪](requirements-traceability.md)
+> 与 [需求规格说明书](01-requirements-specification.md) 的 `UC-U-13`。
+
+
 | 项目 | 内容 |
 | --- | --- |
 | 负责成员 | prayer666 |

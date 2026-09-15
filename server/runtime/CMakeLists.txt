@@ -5,8 +5,12 @@ add_library(ncs_server_runtime STATIC
     periodic_scheduler.h
     server_config.cpp
     server_config.h
+    server_config_database.cpp
+    server_config_database.h
     server_config_environment.cpp
     server_config_environment.h
+    server_config_values.cpp
+    server_config_values.h
     startup_checks.cpp
     startup_checks.h
 )

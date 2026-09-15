@@ -3,6 +3,7 @@
 // 仅限开发环境且必须回环地址，解析与启动检查双重拒绝；配置错误抛 ConfigError 中止启动。
 #pragma once
 
+#include "infrastructure/database/repository_factory.h"
 #include "infrastructure/files/structured_logger.h"
 
 #include <cstdint>
@@ -48,7 +49,7 @@ struct ServerConfig
     std::size_t websocketQueueCapacity = 256;
     ncs::infrastructure::files::LogLevel logLevel = ncs::infrastructure::files::LogLevel::Info;
     std::string logDirectory;
-    std::string databasePath;
+    ncs::infrastructure::database::RepositoryConfig database;
     std::string tlsCertificatePath;
     std::string tlsPrivateKeyPath;
     // Explicit opt-in for same-host development only. Parsing and startup
@@ -56,6 +57,13 @@ struct ServerConfig
     bool allowInsecureHttp = false;
     std::vector<std::string> corsAllowedOrigins;
     std::string tencentMapKey;
+    // AI（Agent 大模型）配置：仅由进程环境变量或 .env 提供。aiApiKey 只保存在进程内存中，
+    // 绝不写入日志、启动输出或任何 API 响应；缺任一项时 Agent 走确定性降级路径。
+    std::string aiProvider = "openai";
+    std::string aiModel;
+    std::string aiBaseUrl;
+    std::string aiApiKey;
+    std::int64_t aiTimeoutMs = 15000;
     std::string dashboardSnapshotPath;
     std::string pythonExecutable = "python3";
     std::string mlWorkerScript;

@@ -1,0 +1,331 @@
+/**
+ * NCS 车主端动效层。
+ * 只做“视觉动效”，不改动任何文案、数值与 data-testid，因此不存在动画中途读到中间值的问题：
+ * 所有过渡只作用于 opacity / transform / box-shadow / background，从不参与数值格式化。
+ *
+ * 约定：
+ * 1. 只动画合成属性（transform、opacity），不触发 layout，保证 60fps；
+ * 2. 每个动效都必须在 prefers-reduced-motion: reduce 下降级为“无动画、直接到终态”；
+ * 3. 时长短、幅度小、缓动自然（--ease-out 收尾），避免廉价的大幅弹跳。
+ */
+
+/* ---------- 关键帧 ---------- */
+
+@keyframes ncs-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ncs-rise-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes ncs-pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ncs-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translate3d(16px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes ncs-slide-in-left {
+  from {
+    opacity: 0;
+    transform: translate3d(-16px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* 数据更新：短暂高亮，不改变文本内容 */
+@keyframes ncs-value-flash {
+  0% {
+    background-color: var(--ncs-brand-soft);
+    box-shadow: 0 0 0 3px var(--ncs-brand-soft);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+
+/* 加载骨架：一条掠过的高光 */
+@keyframes ncs-shimmer {
+  from {
+    transform: translate3d(-100%, 0, 0);
+  }
+  to {
+    transform: translate3d(100%, 0, 0);
+  }
+}
+
+/* 地图/大块内容的柔光呼吸，用于“正在连接”一类等待态 */
+@keyframes ncs-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* AI 等待指示：三点依次起伏 */
+@keyframes ncs-typing {
+  0%,
+  60%,
+  100% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translate3d(0, -3px, 0);
+    opacity: 1;
+  }
+}
+
+@keyframes ncs-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 顶部/侧边导航选中指示条 */
+@keyframes ncs-indicator-in {
+  from {
+    opacity: 0;
+    transform: scaleX(0.4);
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+/* ---------- 滚动进入（IntersectionObserver 结果由 .is-visible 驱动） ---------- */
+
+.reveal {
+  opacity: 0;
+  transform: translate3d(0, 14px, 0);
+  transition:
+    opacity var(--ncs-dur-3) var(--ncs-ease-out),
+    transform var(--ncs-dur-3) var(--ncs-ease-out);
+  transition-delay: var(--reveal-delay, 0ms);
+  will-change: opacity, transform;
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+/* 元素进入视口并完成过渡后撤掉 will-change，避免长期占用合成层 */
+.reveal.is-settled {
+  will-change: auto;
+}
+
+/* ---------- 数据更新高亮 ---------- */
+
+.value-flash {
+  border-radius: var(--ncs-r-xs);
+  animation: ncs-value-flash var(--ncs-dur-4) var(--ncs-ease-out);
+}
+
+/* ---------- 骨架屏 ---------- */
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--ncs-skeleton);
+  border-radius: var(--ncs-r-xs);
+  color: transparent;
+  user-select: none;
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.65) 50%,
+    transparent 100%
+  );
+  animation: ncs-shimmer 1.35s var(--ncs-ease-in-out) infinite;
+}
+
+.skeleton-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ncs-s-3);
+}
+
+.skeleton-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: var(--ncs-s-4);
+  border: 1px solid var(--ncs-line);
+  border-radius: var(--ncs-r-md);
+  background: var(--ncs-surface);
+}
+
+.skeleton-line {
+  height: 12px;
+}
+
+/* ---------- 列表进出场 ---------- */
+
+/* Vue <TransitionGroup> 默认名 */
+.list-move,
+.list-enter-active,
+.list-leave-active {
+  transition:
+    opacity var(--ncs-dur-2) var(--ncs-ease-out),
+    transform var(--ncs-dur-2) var(--ncs-ease-out);
+}
+
+.list-enter-from {
+  opacity: 0;
+  transform: translate3d(0, 10px, 0);
+}
+
+.list-leave-to {
+  opacity: 0;
+  transform: translate3d(0, -6px, 0);
+}
+
+/* 离开项脱离文档流，剩余项才能平滑位移而不是瞬间跳变 */
+.list-leave-active {
+  position: absolute;
+  width: 100%;
+}
+
+.stagger-item {
+  animation: ncs-rise-in var(--ncs-dur-3) var(--ncs-ease-out) both;
+  animation-delay: calc(var(--stagger-index, 0) * 45ms);
+}
+
+/* ---------- 路由切换 ---------- */
+
+.page-enter-active {
+  transition:
+    opacity var(--ncs-dur-2) var(--ncs-ease-out),
+    transform var(--ncs-dur-2) var(--ncs-ease-out);
+}
+
+.page-leave-active {
+  transition:
+    opacity var(--ncs-dur-1) var(--ncs-ease-in-out),
+    transform var(--ncs-dur-1) var(--ncs-ease-in-out);
+}
+
+.page-enter-from {
+  opacity: 0;
+  transform: translate3d(0, 10px, 0);
+}
+
+.page-leave-to {
+  opacity: 0;
+  transform: translate3d(0, -6px, 0);
+}
+
+/* ---------- 浮层出现 ---------- */
+
+.overlay-pop {
+  animation: ncs-pop-in var(--ncs-dur-2) var(--ncs-ease-spring) both;
+}
+
+.overlay-rise {
+  animation: ncs-rise-in var(--ncs-dur-3) var(--ncs-ease-out) both;
+}
+
+.overlay-fade {
+  animation: ncs-fade-in var(--ncs-dur-3) var(--ncs-ease-out) both;
+}
+
+.waiting-pulse {
+  animation: ncs-breathe 1.6s var(--ncs-ease-in-out) infinite;
+}
+
+.typing-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: ncs-typing 1.15s var(--ncs-ease-in-out) infinite;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.14s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.28s;
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: ncs-spin 0.7s linear infinite;
+}
+
+/* ---------- 全局降级：尊重系统“减弱动态效果” ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .reveal {
+    opacity: 1;
+    transform: none;
+  }
+
+  .skeleton::after {
+    display: none;
+  }
+
+  .stagger-item {
+    animation: none;
+  }
+}

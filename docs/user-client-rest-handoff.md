@@ -1,5 +1,11 @@
 # 用户端 REST 对接交接
 
+> **历史文档说明（2026-09-14）**：本文描述的是原 **Qt Widgets 车主端**（`ncs_user`）的实现，
+> 该客户端已按 `UC-U-13` 改造为 `apps/user` 下的 Vue 3 + HTML5 响应式 Web，Qt 源码与
+> `ncs_user` 构建目标均已移除。本文保留归档用途；当前实现请见
+> [研发实施指南](development-guide.md) 与 [需求追踪](requirements-traceability.md)。
+
+
 ## 范围
 
 `apps/user/net/` 是 Qt 用户端唯一的 HTTP 边界。页面与 UI 组件不得手拼 URL、解析响应信封或直连 SQLite。

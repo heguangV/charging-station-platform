@@ -1,0 +1,32 @@
+import { readFileSync } from 'node:fs'
+import { describe, expect, it } from 'vitest'
+
+const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
+
+describe('两端共享冰蓝主题', () => {
+  it('两端在基础样式之后、动效降级之前加载相同主题', () => {
+    for (const path of ['../src/main.js', '../../admin/src/main.js']) {
+      const source = read(path)
+      const theme = source.indexOf("import '../../shared/styles/ice-theme.css'")
+      expect(theme).toBeGreaterThan(source.indexOf("import './style.css'"))
+      expect(theme).toBeLessThan(source.indexOf("import './styles/motion.css'"))
+    }
+  })
+
+  it('装饰不接收点击且保留键盘焦点提示，不新增无限动画', () => {
+    const theme = read('../../shared/styles/ice-theme.css')
+    expect(theme).toContain('pointer-events: none')
+    expect(theme).toContain(':focus-visible')
+    expect(theme).not.toContain('animation:')
+    for (const path of ['../src/styles/ice-layout.css', '../../admin/src/styles/ice-layout.css']) {
+      expect(read(path)).not.toContain('animation:')
+    }
+  })
+
+  it('电量装饰复用真实格式化值，不伪造进度且不重复朗读', () => {
+    const source = read('../src/views/ChargingView.vue')
+    expect(source).toContain('class="charge-energy" aria-hidden="true"')
+    expect(source).toContain('<strong>{{ formatEnergy(progress?.energyMwh ?? 0) }}</strong>')
+    expect(source).toContain('data-testid="progress-energy"')
+  })
+})

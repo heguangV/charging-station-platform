@@ -1,12 +1,13 @@
 #include "core/application/navigation_service.h"
 
 #include <algorithm>
+#include <cctype>
+#include <string_view>
 
 namespace ncs::core::application
 {
-namespace
-{
-bool usableRoute(const PlannedRoute& route)
+
+bool usablePlannedRoute(const PlannedRoute& route)
 {
     if (route.distanceMeter <= 1 || route.durationSecond <= 0 || route.polyline.size() < 2)
         return false;
@@ -17,13 +18,10 @@ bool usableRoute(const PlannedRoute& route)
                            return p.latitudeE6 >= -90000000 && p.latitudeE6 <= 90000000 &&
                                   p.longitudeE6 >= -180000000 && p.longitudeE6 <= 180000000;
                        }) &&
-           std::any_of(route.polyline.begin(), route.polyline.end(),
-                       [first](RoutePoint p) {
-                           return p.latitudeE6 != first.latitudeE6 ||
-                                  p.longitudeE6 != first.longitudeE6;
-                       });
+           std::any_of(
+               route.polyline.begin(), route.polyline.end(), [first](RoutePoint p)
+               { return p.latitudeE6 != first.latitudeE6 || p.longitudeE6 != first.longitudeE6; });
 }
-} // namespace
 
 std::string_view travelModeName(const TravelMode mode)
 {
@@ -37,6 +35,63 @@ std::string_view travelModeName(const TravelMode mode)
         return "transit";
     }
     return "driving";
+}
+
+std::string browserRouteUrl(const RoutePoint origin, const RoutePoint destination,
+                            const std::string& destinationName, const TravelMode mode)
+{
+    // core/application 不依赖 Qt，因此这里手工完成定点格式化与百分号编码；
+    // 非保留字符与逗号保持原样，其余按 UTF-8 字节百分号编码。
+    const auto fixed6 = [](const std::int64_t value)
+    {
+        const bool negative = value < 0;
+        const auto magnitude = negative ? -value : value;
+        auto digits = std::to_string(magnitude % 1000000);
+        return (negative ? "-" : "") + std::to_string(magnitude / 1000000) + "." +
+               std::string(6 - digits.size(), '0') + digits;
+    };
+    const auto encode = [](const std::string_view value)
+    {
+        constexpr char hex[] = "0123456789ABCDEF";
+        std::string encoded;
+        encoded.reserve(value.size());
+        for (const char character : value)
+        {
+            const auto byte = static_cast<unsigned char>(character);
+            const bool literal = std::isalnum(byte) != 0 || byte == '-' || byte == '_' ||
+                                 byte == '.' || byte == '~' || byte == ',';
+            if (literal)
+            {
+                encoded.push_back(character);
+                continue;
+            }
+            encoded.push_back('%');
+            encoded.push_back(hex[byte >> 4]);
+            encoded.push_back(hex[byte & 0x0F]);
+        }
+        return encoded;
+    };
+
+    const char* type = "drive";
+    switch (mode)
+    {
+    case TravelMode::Driving:
+        type = "drive";
+        break;
+    case TravelMode::Walking:
+        type = "walk";
+        break;
+    case TravelMode::Transit:
+        type = "bus";
+        break;
+    }
+    const auto coordinate = [&fixed6](const RoutePoint point)
+    { return fixed6(point.latitudeE6) + "," + fixed6(point.longitudeE6); };
+
+    return std::string("https://apis.map.qq.com/uri/v1/routeplan?type=") + type +
+           "&from=" + encode("导航起点") + "&fromcoord=" + encode(coordinate(origin)) +
+           "&to=" + encode(destinationName) + "&tocoord=" + encode(coordinate(destination)) +
+           "&referer=NCS";
 }
 
 ServiceResult<NavigationResult> NavigationService::routeToStation(
@@ -89,7 +144,7 @@ ServiceResult<NavigationResult> NavigationService::routeToStation(
     const auto route = directDistance > 5
                            ? routePlanner_.plan(result.origin, result.destination, mode)
                            : std::nullopt;
-    if (route && usableRoute(*route))
+    if (route && usablePlannedRoute(*route))
     {
         result.distanceMeter = route->distanceMeter;
         result.durationSecond = route->durationSecond;

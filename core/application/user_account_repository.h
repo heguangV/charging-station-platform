@@ -1,5 +1,5 @@
 // 用户账号仓储端口（端口-适配器模式）：账号创建、资料/凭据/头像变更、注销匿名化、多种查询，以及
-// WalletMirror 钱包镜像接口。 生产实现为 infrastructure/sqlite 的 SqliteRepository，测试用
+// WalletMirror 钱包镜像接口。生产实现由 infrastructure/database 工厂装配 PostgreSQL，测试用
 // in_memory_user_account_repository；服务层只依赖本接口。 约束：变更用 expectedVersion 乐观锁并返回
 // AccountWriteResult；钱包数值以账本为准、账号行仅存非权威镜像供资料展示。
 

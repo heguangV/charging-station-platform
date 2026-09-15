@@ -25,6 +25,7 @@ add_library(ncs_core_application STATIC
     event_hub.h
     idempotency_service.cpp
     idempotency_service.h
+    llm_client.h
     in_memory_admin_accounts.cpp
     in_memory_admin_repository.cpp
     in_memory_admin_repository.h
@@ -34,6 +35,7 @@ add_library(ncs_core_application STATIC
     navigation_service.h
     order_review_service.cpp
     order_review_service.h
+    poi_service.h
     pricing.cpp
     pricing.h
     readiness_probe.h
