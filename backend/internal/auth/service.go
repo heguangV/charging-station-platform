@@ -66,12 +66,24 @@ type AccountReader interface {
 	FindAdminByUsername(ctx context.Context, username string) (*AdminAccount, error)
 }
 
+// AdminStatusReader is an optional stronger read used to revalidate live administrator sessions.
+// PostgreSQL implements it; lightweight test readers may omit it and keep snapshot-only behavior.
+type AdminStatusReader interface {
+	FindAdminByID(ctx context.Context, adminID int64) (*AdminAccount, error)
+}
+
 // AccountWriter ensures an account exists. UC-U-01 requires the first SMS
 // login to register the user and the wallet; the method executes the same
 // statement sequence whether or not the account already exists, so response
 // timing cannot be used to enumerate registered phones.
 type AccountWriter interface {
 	EnsureUserWithWallet(ctx context.Context, phone string) (UserAccount, error)
+	// RegisterUser creates a user with a password and its wallet. It reports
+	// ErrAccountExists when the phone is already registered instead of taking
+	// the account over: the SMS login path upserts deliberately, but a
+	// registration that silently claimed an existing phone would let anyone
+	// take over an account by typing someone else's number.
+	RegisterUser(ctx context.Context, phone, displayName, passwordHash string) (UserAccount, error)
 }
 
 // Sentinel errors mapped by the HTTP layer to the shared error-code registry.
@@ -79,6 +91,9 @@ var (
 	// ErrInvalidCredentials maps to 401 UNAUTHORIZED. It is deliberately
 	// shared by unknown account and wrong password so neither is distinguishable.
 	ErrInvalidCredentials = errors.New("auth: invalid credentials")
+	// ErrAccountExists maps to 409 ALREADY_EXISTS: the phone already has an
+	// account, and registration does not take it over.
+	ErrAccountExists = errors.New("auth: phone is already registered")
 	// ErrUserFrozen maps to 403 USER_FROZEN.
 	ErrUserFrozen = errors.New("auth: account is disabled")
 	// ErrUnauthorized maps to 401 UNAUTHORIZED for missing or expired sessions.
@@ -271,6 +286,52 @@ func (s *Service) createSession(ctx context.Context, identityID int64, role, adm
 	}, nil
 }
 
+// Register creates a user account from a phone, a password and a valid SMS code
+// and returns a session, so the caller is logged in without a second round trip.
+//
+// The order of the checks is deliberate: phone and password are validated first
+// (the caller's own input), the code is verified next (the proof that the phone
+// belongs to the caller), and only then is the account created. Creating the
+// account before the code check would leave a half-registered account behind on
+// every typo, and verifying the code before validating the body would let anyone
+// burn another phone's code with a malformed request.
+func (s *Service) Register(ctx context.Context, username, phone, password, code string) (LoginResult, error) {
+	phone = strings.TrimSpace(phone)
+	username = strings.TrimSpace(username)
+	if !IsValidPhone(phone) {
+		return LoginResult{}, ErrInvalidPhone
+	}
+	if !IsValidSMSCode(code) {
+		return LoginResult{}, ErrInvalidSMSCode
+	}
+	// HashPassword enforces the contract's 8..128 bounds, so a weak password is
+	// rejected before anything is stored.
+	passwordHash, err := HashPassword(password)
+	if err != nil {
+		return LoginResult{}, err
+	}
+
+	verified, _, found, err := s.codes.Verify(ctx, phone, code, maxSMSCodeFailures)
+	if err != nil {
+		return LoginResult{}, fmt.Errorf("auth: verify sms code: %w", err)
+	}
+	if !found || !verified {
+		return LoginResult{}, ErrSMSCodeInvalid
+	}
+
+	if username == "" {
+		// The same default the SMS login path uses, so a user who registers and
+		// one who logs in by SMS end up with the same display-name shape.
+		username = "用户" + phone[len(phone)-4:]
+	}
+
+	user, err := s.writer.RegisterUser(ctx, phone, username, passwordHash)
+	if err != nil {
+		return LoginResult{}, err
+	}
+	return s.createSession(ctx, user.ID, RoleUser, "", user.DisplayName)
+}
+
 // LoginBySms authenticates a user by phone and SMS code. Unknown phones are
 // registered automatically together with a zero-balance wallet (UC-U-01).
 func (s *Service) LoginBySms(ctx context.Context, phone, code string) (LoginResult, error) {
@@ -397,6 +458,22 @@ func (s *Service) Identify(ctx context.Context, token string) (Identity, error) 
 			return Identity{}, ErrUnauthorized
 		}
 		return Identity{}, fmt.Errorf("auth: load session: %w", err)
+	}
+	if session.Role == RoleAdmin {
+		if reader, ok := s.accounts.(AdminStatusReader); ok {
+			account, err := reader.FindAdminByID(ctx, session.IdentityID)
+			if err != nil {
+				return Identity{}, fmt.Errorf("auth: revalidate administrator: %w", err)
+			}
+			if account == nil || account.Status != StatusActive {
+				_ = s.sessions.Delete(ctx, token)
+				return Identity{}, ErrUnauthorized
+			}
+			// Role and display name come from PostgreSQL, so a changed account never
+			// keeps stale authorization merely because its session predates the change.
+			session.AdminRole = account.Role
+			session.DisplayName = account.Username
+		}
 	}
 
 	return Identity{

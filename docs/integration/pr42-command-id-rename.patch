@@ -1,0 +1,119 @@
+diff --git a/apps/admin/src/api/charger.js b/apps/admin/src/api/charger.js
+index 3eb9267..a6342bb 100644
+--- a/apps/admin/src/api/charger.js
++++ b/apps/admin/src/api/charger.js
+@@ -31,6 +31,6 @@ export function createRestartCommand(chargerId, { reason }, { idempotencyKey } =
+ }
+ 
+ /** §7.10 查询设备命令状态：PENDING/RUNNING/SUCCEEDED/FAILED。 */
+-export function fetchDeviceCommand(commandNo) {
+-  return api.get(`/admin/device-commands/${encodeURIComponent(commandNo)}`)
++export function fetchDeviceCommand(commandId) {
++  return api.get(`/admin/device-commands/${encodeURIComponent(commandId)}`)
+ }
+diff --git a/apps/admin/src/stores/chargers.js b/apps/admin/src/stores/chargers.js
+index 35d69f8..9d0998a 100644
+--- a/apps/admin/src/stores/chargers.js
++++ b/apps/admin/src/stores/chargers.js
+@@ -185,7 +185,7 @@ export const useChargersStore = defineStore('adminChargers', {
+           createRestartCommand(charger.id, { reason }, { idempotencyKey })
+         )
+         this.command = {
+-          commandNo: data.commandNo || '',
++          commandId: data.commandId || '',
+           status: data.status || 'PENDING',
+           chargerStatus: toInteger(data.chargerStatus),
+           createdAt: toInteger(data.createdAt) ?? 0,
+@@ -197,8 +197,8 @@ export const useChargersStore = defineStore('adminChargers', {
+           status: toInteger(data.chargerStatus) ?? charger.status,
+           statusText: '重启中'
+         })
+-        this.notice = `重启指令已提交（${data.commandNo || '无编号'}），正在等待设备响应`
+-        if (this.command.commandNo) this.startPolling()
++        this.notice = `重启指令已提交（${data.commandId || '无编号'}），正在等待设备响应`
++        if (this.command.commandId) this.startPolling()
+         return true
+       } catch (error) {
+         this.error = error?.userMessage || '远程重启失败'
+@@ -210,8 +210,8 @@ export const useChargersStore = defineStore('adminChargers', {
+ 
+     /** §7.10 查询一次命令状态；终态时停止轮询并刷新设备列表。 */
+     async pollCommand() {
+-      if (!this.command?.commandNo) return null
+-      const data = await fetchDeviceCommand(this.command.commandNo)
++      if (!this.command?.commandId) return null
++      const data = await fetchDeviceCommand(this.command.commandId)
+       this.command = {
+         ...this.command,
+         status: data.status || this.command.status,
+@@ -240,7 +240,7 @@ export const useChargersStore = defineStore('adminChargers', {
+         if (!this.commandPolling || this.commandFinished) return
+         if (this.commandAttempts >= COMMAND_POLL_MAX_ATTEMPTS) {
+           this.stopPolling()
+-          this.notice = `命令 ${this.command?.commandNo} 仍在处理中，请稍后刷新设备状态`
++          this.notice = `命令 ${this.command?.commandId} 仍在处理中，请稍后刷新设备状态`
+           return
+         }
+         pollTimer = setTimeout(tick, COMMAND_POLL_INTERVAL_MS)
+diff --git a/apps/admin/src/views/ChargersView.vue b/apps/admin/src/views/ChargersView.vue
+index b014d7b..1408aa8 100644
+--- a/apps/admin/src/views/ChargersView.vue
++++ b/apps/admin/src/views/ChargersView.vue
+@@ -280,7 +280,7 @@ async function submitRestart({ reason }) {
+         <div>
+           <h2>最近一次远程重启</h2>
+           <p class="panel__hint">
+-            命令编号 {{ chargers.command.commandNo }} · 提交于 {{ formatDateTime(chargers.command.createdAt) }}
++            命令编号 {{ chargers.command.commandId }} · 提交于 {{ formatDateTime(chargers.command.createdAt) }}
+           </p>
+         </div>
+         <div class="panel__row">
+diff --git a/apps/admin/tests/chargers.test.js b/apps/admin/tests/chargers.test.js
+index 71739fe..b249f41 100644
+--- a/apps/admin/tests/chargers.test.js
++++ b/apps/admin/tests/chargers.test.js
+@@ -129,9 +129,9 @@ describe('远程重启与命令轮询', () => {
+   it('创建重启命令后进入重启中，并轮询到终态', async () => {
+     vi.useFakeTimers()
+     harness = installFetch([
+-      okResponse({ commandNo: 'CMD202609020001', status: 'PENDING', chargerStatus: 4, createdAt: 1788235200 }),
+-      okResponse({ commandNo: 'CMD202609020001', status: 'RUNNING', chargerId: 11, chargerCode: 'ZGC-DC-01', createdAt: 1788235200, completedAt: null }),
+-      okResponse({ commandNo: 'CMD202609020001', status: 'SUCCEEDED', chargerId: 11, chargerCode: 'ZGC-DC-01', createdAt: 1788235200, completedAt: 1788235205 }),
++      okResponse({ commandId: 'CMD202609020001', status: 'PENDING', chargerStatus: 4, createdAt: 1788235200 }),
++      okResponse({ commandId: 'CMD202609020001', status: 'RUNNING', chargerId: 11, chargerCode: 'ZGC-DC-01', createdAt: 1788235200, completedAt: null }),
++      okResponse({ commandId: 'CMD202609020001', status: 'SUCCEEDED', chargerId: 11, chargerCode: 'ZGC-DC-01', createdAt: 1788235200, completedAt: 1788235205 }),
+       okResponse({ items: [{ ...CHARGER_ROW, status: 0, statusText: '空闲' }], total: 1, page: 1, pageSize: 20 })
+     ])
+ 
+@@ -142,7 +142,7 @@ describe('远程重启与命令轮询', () => {
+     expect(createIndex).toBe(0)
+     expect(harness.bodyOf(0)).toEqual({ confirm: true, reason: '远程恢复测试' })
+     expect(harness.headersOf(0)['Idempotency-Key']).toMatch(/^[0-9a-f-]{36}$/)
+-    expect(chargers.command.commandNo).toBe('CMD202609020001')
++    expect(chargers.command.commandId).toBe('CMD202609020001')
+     // 服务端返回 chargerStatus=4，设备立即进入“重启中”
+     expect(chargers.items[0].status).toBe(4)
+     expect(chargers.commandPolling).toBe(true)
+@@ -163,8 +163,8 @@ describe('远程重启与命令轮询', () => {
+   it('轮询达到上限后停止并提示稍后刷新', async () => {
+     vi.useFakeTimers()
+     harness = installFetch([
+-      okResponse({ commandNo: 'CMD-2', status: 'PENDING', chargerStatus: 4, createdAt: 1788235200 }),
+-      okResponse({ commandNo: 'CMD-2', status: 'RUNNING', chargerId: 11, chargerCode: 'ZGC-DC-01', createdAt: 1788235200 })
++      okResponse({ commandId: 'CMD-2', status: 'PENDING', chargerStatus: 4, createdAt: 1788235200 }),
++      okResponse({ commandId: 'CMD-2', status: 'RUNNING', chargerId: 11, chargerCode: 'ZGC-DC-01', createdAt: 1788235200 })
+     ])
+     chargers.items = [{ ...CHARGER_ROW }]
+     await chargers.restart(chargers.items[0], '远程恢复测试')
+@@ -178,9 +178,9 @@ describe('远程重启与命令轮询', () => {
+   it('命令状态查询失败时保留命令并记录安全错误信息', async () => {
+     vi.useFakeTimers()
+     harness = installFetch([
+-      okResponse({ commandNo: 'CMD-3', status: 'PENDING', chargerStatus: 4, createdAt: 1788235200 }),
++      okResponse({ commandId: 'CMD-3', status: 'PENDING', chargerStatus: 4, createdAt: 1788235200 }),
+       okResponse({
+-        commandNo: 'CMD-3',
++        commandId: 'CMD-3',
+         status: 'FAILED',
+         chargerId: 11,
+         chargerCode: 'ZGC-DC-01',

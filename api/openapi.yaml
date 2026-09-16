@@ -15,6 +15,7 @@ tags:
   - name: stations
   - name: chargers
   - name: orders
+  - name: agent
   - name: wallet
   - name: admin
   - name: internal
@@ -23,6 +24,12 @@ paths:
     get:
       tags: [system]
       operationId: healthz
+      # The probes are served at the root, NOT under the /api/v1 server prefix below:
+      # internal/httpapi/server.go registers "/healthz" and "/readyz" on the bare mux, and the
+      # deployment's nginx/systemd checks call them there. Without this override a generated client
+      # would ask for /api/v1/healthz and get 404.
+      servers:
+        - url: /
       security: []
       responses:
         '200':
@@ -41,6 +48,10 @@ paths:
     get:
       tags: [system]
       operationId: readyz
+      # Root-level like /healthz, and for the same reason; /metrics is deliberately not registered
+      # here (ops endpoint, never exposed to the front end).
+      servers:
+        - url: /
       security: []
       responses:
         '200':
@@ -56,6 +67,15 @@ paths:
     post:
       tags: [auth]
       operationId: requestUserSmsCode
+      description: |-
+        Issues a code for one phone.
+
+        Codes are stored per phone and are not isolated by `purpose`: the request
+        accepts LOGIN / REGISTER / RESET_PASSWORD and returns success, but the
+        code it issues can be used for any of them. The parameter is kept in the
+        contract so clients can send it today; purpose isolation is a separate
+        behaviour change that has not been implemented, and no client should rely
+        on a code being refused outside the purpose it was requested for.
       security: []
       requestBody:
         required: true
@@ -105,6 +125,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /auth/user/register:
+    post:
+      tags: [auth]
+      operationId: userRegister
+      summary: Register a user with a phone, a password and an SMS code
+      description: |-
+        The account is created only after the SMS code proves the caller owns the
+        phone, and the response carries a session so the caller is logged in
+        without a second round trip. A phone that already has an account is 409
+        ALREADY_EXISTS - registration never takes an existing account over - and
+        that check happens after the code check, so a caller cannot use this
+        endpoint to find out which phones are registered without a code for them.
+
+        The code itself is the phone's code, not a registration-specific one: see
+        /auth/user/sms/code for what `purpose` does and does not do today.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RegisterRequest'}
+      responses:
+        '201':
+          description: Account created and session issued
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LoginResponseEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422':
+          description: |-
+            The SMS code is wrong, expired, or has exceeded its failure budget
+            (code 20 CODE_INVALID).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+
   /auth/user/login/sms:
     post:
       tags: [auth]
@@ -444,6 +503,15 @@ paths:
           schema:
             type: string
             format: date-time
+        - name: sort
+          in: query
+          description: |-
+            Order of the returned page. The default (-createdAt) is newest first;
+            createdAt returns the oldest first.
+          schema:
+            type: string
+            enum: [createdAt, -createdAt]
+            default: -createdAt
       responses:
         '200':
           description: Order page
@@ -456,6 +524,10 @@ paths:
     post:
       tags: [orders]
       operationId: createOrder
+      description: |-
+        Creates a 15-minute charger reservation in CREATED state (UC-U-07).
+        The charger is held immediately, but no device start command is sent;
+        the user must explicitly call the start endpoint before reservedUntil.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -466,7 +538,7 @@ paths:
               $ref: '#/components/schemas/CreateOrderRequest'
       responses:
         '201':
-          description: Order created
+          description: Charger reserved for 15 minutes
           content:
             application/json:
               schema:
@@ -498,6 +570,11 @@ paths:
     post:
       tags: [orders]
       operationId: startCharging
+      description: |-
+        Starts a CREATED reservation after revalidating its owner, deadline,
+        wallet balance and charger state. An expired reservation is marked
+        EXPIRED, releases the charger, and returns code 17
+        (RESERVATION_EXPIRED).
       parameters:
         - $ref: '#/components/parameters/OrderNo'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -514,6 +591,12 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          description: Reservation deadline passed (code 17 RESERVATION_EXPIRED).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /orders/{orderNo}/stop:
     post:
       tags: [orders]
@@ -558,6 +641,39 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+  /orders/{orderNo}/confirm:
+    post:
+      tags: [orders]
+      operationId: confirmOrder
+      description: |-
+        UC-U-09 user confirmation of a completed order: the pending bill is
+        deducted from the wallet (an insufficient balance is drawn to zero
+        and the remainder stays recorded as debt) and the payment state
+        becomes PAID or PARTIAL_PAID. Idempotent through Idempotency-Key.
+
+        A completed-but-unsettled order blocks new flows, so this is the step
+        that closes the charging loop, not an optional extra.
+      parameters:
+        - $ref: '#/components/parameters/OrderNo'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Payment recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponseEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Order not completed, already settled, or in a state
+            that cannot be confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
   /orders/{orderNo}/review:
     post:
@@ -621,6 +737,27 @@ paths:
           $ref: '#/components/responses/NotFound'
 
   /orders/{orderNo}/appeal:
+    get:
+      tags: [orders]
+      operationId: getOrderAppeal
+      description: |-
+        The caller's own appeal for the order, so the app can show 审核中/已通过/已驳回
+        instead of offering the form again. No appeal yet is a 404, the same shape
+        the order review resource uses. Cross-user access is indistinguishable from
+        a missing appeal.
+      parameters:
+        - $ref: '#/components/parameters/OrderNo'
+      responses:
+        '200':
+          description: The appeal the caller filed for this order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppealResponseEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
     post:
       tags: [orders]
       operationId: createOrderAppeal
@@ -628,7 +765,9 @@ paths:
         Appeals the caller's own COMPLETED order (UC-U-09 pt 4): a 1..500
         code point reason after trimming. One appeal per order — a
         same-content retry returns the first result, different content
-        conflicts (409).
+        conflicts (409). The order may still have paymentStatus=PENDING:
+        payment confirmation and appeal are alternatives, and a pending
+        appeal blocks settlement until an administrator decides it.
       parameters:
         - $ref: '#/components/parameters/OrderNo'
       requestBody:
@@ -667,6 +806,13 @@ paths:
       description: |-
         Internal charger-gateway callback. Together with the `/api/v1`
         server prefix this is `POST /api/v1/internal/charger-events`.
+        Besides the start and stop facts a charger reports its running meter as
+        CHARGE_PROGRESS while it is charging (`energyWh` = energy delivered so
+        far). Progress readings are absolute and never go backwards: a reading
+        lower than the stored one is a stale delivery and is ignored, so the
+        endpoint is safe to retry without an idempotency key. A progress receipt
+        prices what has been delivered with the order's frozen snapshot and
+        settles nothing - the stop receipt still decides the bill.
         Deploy it behind HTTPS and restrict its Nginx ingress to the charger
         gateway network. The Bearer credential is the service token from
         `NCS_CHARGER_GATEWAY_TOKEN`, not a user or administrator session.
@@ -713,6 +859,31 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /agent/chat:
+    post:
+      tags: [agent]
+      operationId: agentChat
+      summary: Ask the travel assistant about charging stations, nearby places and routes
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentChatRequest'
+      responses:
+        '200':
+          description: Assistant reply, including structured results and degradation state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentChatResponseEnvelope'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
   /admin/stations:
     get:
       tags: [admin]
@@ -753,7 +924,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StationResponseEnvelope'
+                $ref: '#/components/schemas/StationCreateResponseEnvelope'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1005,6 +1176,100 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+  /admin/device-commands/{commandId}:
+    get:
+      tags: [admin]
+      operationId: adminGetDeviceCommand
+      summary: Read one device command and its recorded outcome
+      description: |-
+        Administrators follow a command from submission to the receipt that
+        applied it. A command the platform has no record of is 404: the gateway
+        either never answered or the identifier is wrong, and neither improves
+        by retrying.
+      parameters:
+        - name: commandId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Device command and its outcome
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceCommandResponseEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/stations/{stationId}/status:
+    put:
+      tags: [admin]
+      operationId: adminChangeStationStatus
+      summary: Take a station out of service or bring it back
+      description: |-
+        The transition is checked against the current status inside the same
+        transaction that reads it, and the change is written to the audit trail.
+        A transition the lifecycle does not allow is 409 and leaves the row
+        unchanged.
+      parameters:
+        - name: stationId
+          in: path
+          required: true
+          schema: {type: integer, format: int64, minimum: 1}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/StationStatusUpdate'}
+      responses:
+        '200':
+          description: Station status changed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StationStatusResponseEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /admin/chargers/{chargerId}/status:
+    put:
+      tags: [admin]
+      operationId: adminChangeChargerStatus
+      summary: Take a charger out of service or put it back in the pool
+      description: |-
+        IDLE<->DISABLED and FAULT->IDLE/DISABLED are accepted. A charger that is
+        OCCUPIED or RESTARTING is refused with 409: an order still holds it, or a
+        restart command is in flight. The change is audited and bumps the
+        charger's version.
+      parameters:
+        - name: chargerId
+          in: path
+          required: true
+          schema: {type: integer, format: int64, minimum: 1}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChargerStatusUpdate'}
+      responses:
+        '200':
+          description: Charger status changed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChargerStatusResponseEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
   /admin/audit:
     get:
       tags: [admin]
@@ -1068,6 +1333,101 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [admin]
+      operationId: adminCreateUser
+      summary: Archive one account on a user's behalf
+      description: |-
+        Most accounts arrive by themselves: a phone that signs in with an SMS
+        code registers automatically (UC-U-01). This archives the accounts that
+        loop cannot produce - a house account, a roster entry, a migrated user.
+
+        The account is born the way a self-registered one is: ACTIVE, with a
+        zero-balance wallet and no password. The user keeps signing in through
+        SMS, which is why no credential is accepted here - a password an
+        operator chose for a user is a credential the user never agreed to
+        carry. A phone that is already registered is a 409, not a warning: a
+        skipped entry would leave the operator guessing whether the account
+        exists.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserArchiveRequest'
+      responses:
+        '201':
+          description: The account was created (or replayed from the idempotency key)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRecordEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: |-
+            The phone is already registered, or the idempotency key was reused
+            for a different request. No account was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /admin/users/batch:
+    post:
+      tags: [admin]
+      operationId: adminCreateUsersBatch
+      summary: Archive a page of a roster
+      description: |-
+        A roster is enrolled a page at a time, and the page is all-or-nothing:
+        one phone that already exists aborts it and nothing is created - not
+        the entries before it, not the entries after it. A phone repeated
+        inside one page is refused before the transaction opens, so the answer
+        names the phone instead of leaving the caller to compare two rows by
+        eye.
+
+        Every account is created the way a self-registered one is: ACTIVE, a
+        zero-balance wallet, no password. Beyond a page, bulk loads go through
+        the seed tooling, not this endpoint.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserBatchRequest'
+      responses:
+        '201':
+          description: Every account in the page was created (or replayed from the idempotency key)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserBatchResponseEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: |-
+            A phone in the page is already registered, or the idempotency key
+            was reused for a different page. Nothing was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /admin/orders:
     get:
       tags: [admin]
@@ -1084,6 +1444,16 @@ paths:
           in: query
           schema:
             $ref: '#/components/schemas/OrderStatus'
+        - name: userId
+          in: query
+          description: |-
+            Only orders belonging to this user. Omit it to list every user's
+            orders; the management UI opens a user's detail page and asks for
+            that user's orders.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
       responses:
         '200':
           description: Admin order page
@@ -1151,7 +1521,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [PENDING, APPROVED]
+            enum: [PENDING, APPROVED, REJECTED]
       responses:
         '200':
           description: Appeal page
@@ -1190,6 +1560,126 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AppealResponseEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /admin/accounts:
+    get:
+      tags: [admin]
+      operationId: adminListAccounts
+      description: Lists administrator accounts. SUPER_ADMIN only.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Administrator account page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccountPageEnvelope'
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [admin]
+      operationId: adminCreateAccount
+      description: Creates an active OPERATOR account that must change its initial password. SUPER_ADMIN only.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAdminAccountRequest'
+      responses:
+        '201':
+          description: Administrator account created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccountResponseEnvelope'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /admin/accounts/{accountId}/status:
+    put:
+      tags: [admin]
+      operationId: adminSetAccountStatus
+      description: |-
+        Enables or disables an administrator with optimistic concurrency. SUPER_ADMIN only.
+        The caller cannot disable itself or the last active SUPER_ADMIN. A disabled
+        administrator's existing session is rejected on its next request.
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: {type: integer, format: int64, minimum: 1}
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetAdminAccountStatusRequest'
+      responses:
+        '200':
+          description: Administrator status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccountResponseEnvelope'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /admin/appeals/{appealId}/reject:
+    post:
+      tags: [admin]
+      operationId: adminRejectAppeal
+      description: |-
+        Dismisses an appeal: it becomes REJECTED with the operator's reason, and the
+        order and the wallet stay exactly as they are - rejection refunds nothing and
+        cancels nothing, which is what approval is for. A decision is final: a second
+        decision on the same appeal is a no-op that returns the current state, so a
+        repeated request can never flip an approved, refunded order.
+      parameters:
+        - name: appealId
+          in: path
+          required: true
+          schema: {type: integer, format: int64, minimum: 1}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 500
+                  description: Why the appeal is dismissed. Audited and shown to the customer.
+      responses:
+        '200':
+          description: Rejection applied, or a repeated decision returning the current appeal state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppealResponseEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1296,6 +1786,299 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
+  /admin/stats/revenue:
+    get:
+      tags: [admin]
+      operationId: adminRevenueStats
+      summary: Revenue and energy per bucket over a time range
+      description: |-
+        The series behind the console's revenue trend and its daily and hourly
+        detail tables. It is a read with an administrator session; an auditor may
+        look at the figures, and nothing here changes a row.
+
+        `fromAt` and `toAt` are required UTC Unix seconds and the range is
+        half-open. The platform does not default them: it cannot know which
+        timezone the caller's "last seven days" is in, and guessing one would
+        answer a question nobody asked. The range is capped at 90 days, which is
+        the widest window the console offers.
+
+        Revenue is the bill of a COMPLETED order, attributed to the moment the
+        charge stopped - the instant the stop receipt froze the amount. A
+        cancelled or failed order is not revenue however much it was quoted.
+
+        Buckets are aligned to `fromAt`, not to the epoch, so each bucket is one
+        of the caller's own days when the caller asked for its own days. The
+        series is dense: a bucket with no orders is present and zero, because a
+        chart that skipped a quiet day would draw a trend that never happened.
+      parameters:
+        - name: fromAt
+          in: query
+          required: true
+          schema: {type: integer, format: int64, minimum: 0}
+          description: Inclusive start, UTC Unix seconds.
+        - name: toAt
+          in: query
+          required: true
+          schema: {type: integer, format: int64, minimum: 0}
+          description: Exclusive end, UTC Unix seconds.
+        - name: stationId
+          in: query
+          required: false
+          schema: {type: integer, format: int64, minimum: 1}
+          description: Restrict to one station. Absent means every station.
+        - name: bucket
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [hour, day]
+            default: day
+      responses:
+        '200':
+          description: The revenue series and its range totals
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevenueStatsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /admin/stats/chargers:
+    get:
+      tags: [admin]
+      operationId: adminChargerStats
+      summary: The charger fleet census and its health
+      description: |-
+        Every charger is counted, including a disabled one: an operator asking
+        how many devices exist is not asking how many are usable, and the health
+        figure is only meaningful against the whole fleet.
+
+        A charger is operational when it is idle or occupied. A faulty or
+        disabled device cannot serve, and a restarting one is not available at
+        the moment it is counted. `healthPercent` is the operational share, kept
+        to two decimals so losing one device in a large fleet is visible.
+      parameters:
+        - name: stationId
+          in: query
+          required: false
+          schema: {type: integer, format: int64, minimum: 1}
+          description: Restrict to one station. Absent means every station.
+      responses:
+        '200':
+          description: The fleet census
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChargerStatusStatsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /admin/stats/overview:
+    get:
+      tags: [admin]
+      operationId: adminStatsOverview
+      summary: The lifetime operations snapshot
+      description: |-
+        What the platform has, not what happened in a window: lifetime revenue,
+        the number of completed charges and their charger mix, the registered
+        accounts, the stations, the orders still in flight, and the fleet census.
+
+        The old service precomputed this into a dashboard snapshot and rebuilt it
+        on a timer, which made it fast and occasionally hours out of date. It is
+        computed on demand here, because PostgreSQL answers the aggregate faster
+        than a reader can look away and a figure is never stale.
+
+        Windowed figures are not part of this payload: only the client knows
+        which timezone its "today" is in, so those belong to
+        /admin/stats/revenue where the caller states the range.
+      responses:
+        '200':
+          description: The operations snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsOverviewEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /admin/stations/{stationId}:
+    put:
+      tags: [admin]
+      operationId: adminUpdateStationProfile
+      summary: Edit a station's name, address and coordinates
+      description: |-
+        The change is written and audited in one transaction, so the recorded
+        before-and-after pair is the one this request actually replaced even when
+        two administrators edit the same station at once.
+
+        Only four fields are editable: the name, the address and the two
+        coordinates. The code is identity - the audit trail and the order
+        history reference it - and the status has its own endpoint with its own
+        lifecycle rule. A body that carries either of them is not obeyed.
+
+        Coordinates are E6 integers (degrees times one million): the column holds
+        degrees and the conversion happens here, so a client never has to guess
+        which unit it is reading.
+      parameters:
+        - name: stationId
+          in: path
+          required: true
+          schema: {type: integer, format: int64, minimum: 1}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/StationProfileUpdate'}
+      responses:
+        '200':
+          description: Station profile updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StationProfileResponseEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /admin/tariffs:
+    get:
+      tags: [admin]
+      operationId: adminGlobalTariff
+      summary: The tariff every charger currently carries
+      description: |-
+        Prices live on chargers, not in a tariff table, so this reports the
+        fleet's actual state: the distinct configurations and how many chargers
+        share each one, with the ranges and the time-of-use split beside them.
+
+        The range is what makes the view worth reading before a change. A fleet
+        where every charger already agrees is a no-op; a fleet spread across a
+        wide range is a change worth pausing over.
+
+        The old district-scoped price versions are not modelled here. That is a
+        pricing-version subsystem - a version table, an effective-time resolver
+        and a scheduled rollover - and this is the smaller thing that is usable
+        today against the columns the platform already has.
+      responses:
+        '200':
+          description: The fleet tariff picture
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GlobalTariffViewEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+    put:
+      tags: [admin]
+      operationId: adminUpdateGlobalTariff
+      summary: Set one tariff on every charger
+      description: |-
+        The single most consequential write on this boundary: it changes what
+        every charge costs. The reason is required and audited for that reason -
+        "who set the platform's price to this, and why" has to be answerable
+        afterwards.
+
+        The body is the complete tariff, not a patch. Absent off-peak fields mean
+        the fleet becomes flat, the same rule the per-charger endpoint follows:
+        after the call every charger holds exactly what was sent, and nobody has
+        to reason about which devices were touched.
+
+        Every charger is in scope, a disabled one too: a device switched off
+        today is switched on again tomorrow, and leaving it on last year's price
+        would be discovered by a customer. Running orders are unaffected - the
+        order domain snapshots the tariff when charging starts.
+
+        The response reports how many devices now carry the tariff and how many
+        distinct tariffs the change replaced.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GlobalTariffUpdate'}
+      responses:
+        '200':
+          description: Fleet tariff applied
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GlobalTariffResultEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+
+  /admin/chargers/batch:
+    post:
+      tags: [admin]
+      operationId: adminCreateChargersBatch
+      summary: Commission a bank of chargers at one station
+      description: |-
+        Entering a station's devices one at a time is twenty trips through a form
+        for a twenty-bay station. This is the batch, and its whole point is that
+        it is all-or-nothing: a batch that half-succeeded would leave an operator
+        counting rows to work out which devices exist, and a station whose device
+        list disagrees with the physical cabinet is worse than one that was never
+        created.
+
+        The batch is one statement inside one transaction. A code that already
+        exists at the station aborts it and nothing is created - not the devices
+        before it, not the devices after it. A code repeated inside one request is
+        refused before the transaction opens, so the answer names the code instead
+        of leaving the caller to compare two rows by eye.
+
+        Only what an operator types in travels: the bay's code, its connector type
+        and its power. Status, price and version are the platform's to decide. A
+        device is created IDLE at the schema's default price and takes its tariff
+        from the tariff endpoints - the platform does not guess a price for
+        hardware nobody has priced.
+
+        The station must exist. Its status is deliberately not checked: a device
+        bank is commissioned before the station opens.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChargerBatchRequest'
+      responses:
+        '201':
+          description: Every device in the batch was created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChargerBatchResponseEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |-
+            A code in the batch already exists at the station, or the idempotency
+            key was reused for a different batch. Nothing was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1391,6 +2174,115 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
   schemas:
+    AgentChatRequest:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string, minLength: 1, maxLength: 500 }
+        location:
+          type: object
+          required: [latitudeE6, longitudeE6]
+          properties:
+            latitudeE6: { type: integer, format: int64, minimum: -90000000, maximum: 90000000 }
+            longitudeE6: { type: integer, format: int64, minimum: -180000000, maximum: 180000000 }
+        coordinateType: { type: string, enum: [gcj02, wgs84], default: gcj02 }
+        chargerType: { type: integer, enum: [0, 1] }
+    AgentStation:
+      type: object
+      required: [id, code, name, address, status, latitudeE6, longitudeE6, chargerCount, idleChargerCount, minPriceCentPerKwh]
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        name: { type: string }
+        address: { type: string }
+        status: { type: string, enum: [OPEN, CLOSED, DISABLED] }
+        latitudeE6: { type: integer, format: int64 }
+        longitudeE6: { type: integer, format: int64 }
+        chargerCount: { type: integer, minimum: 0 }
+        idleChargerCount: { type: integer, minimum: 0 }
+        operationalChargerCount: { type: integer, minimum: 0 }
+        minPriceCentPerKwh: { type: integer, minimum: 0 }
+        electricityPriceCentPerKwh: { type: integer, minimum: 0 }
+        servicePriceCentPerKwh: { type: integer, minimum: 0 }
+        fastChargerCount: { type: integer, minimum: 0 }
+        slowChargerCount: { type: integer, minimum: 0 }
+        chargerTypes:
+          type: array
+          items: { type: string, enum: [AC, DC] }
+        distanceMeter: { type: integer, format: int64, minimum: 0 }
+    AgentPoi:
+      type: object
+      required: [id, name, category, address, latitudeE6, longitudeE6, distanceMeter]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        category: { type: string }
+        address: { type: string }
+        latitudeE6: { type: integer, format: int64 }
+        longitudeE6: { type: integer, format: int64 }
+        distanceMeter: { type: integer, format: int64, minimum: 0 }
+        tel: { type: string }
+    AgentRouteStep:
+      type: object
+      required: [instruction, distanceMeter, durationSecond]
+      properties:
+        instruction: { type: string }
+        distanceMeter: { type: integer, format: int64, minimum: 0 }
+        durationSecond: { type: integer, format: int64, minimum: 0 }
+    AgentPolylinePoint:
+      type: object
+      required: [latitudeE6, longitudeE6]
+      properties:
+        latitudeE6: { type: integer, format: int64 }
+        longitudeE6: { type: integer, format: int64 }
+    AgentRoute:
+      type: object
+      required: [destinationName, originLatitudeE6, originLongitudeE6, destinationLatitudeE6, destinationLongitudeE6, distanceMeter, durationSecond, provider, fallback, steps, polyline, browserUrl]
+      properties:
+        destinationName: { type: string }
+        originLatitudeE6: { type: integer, format: int64 }
+        originLongitudeE6: { type: integer, format: int64 }
+        destinationLatitudeE6: { type: integer, format: int64 }
+        destinationLongitudeE6: { type: integer, format: int64 }
+        distanceMeter: { type: integer, format: int64, minimum: 0 }
+        durationSecond: { type: integer, format: int64, minimum: 0 }
+        provider: { type: string, enum: [TENCENT_MAP, LOCAL_FALLBACK] }
+        fallback: { type: boolean }
+        steps: { type: array, items: { $ref: '#/components/schemas/AgentRouteStep' } }
+        polyline: { type: array, items: { $ref: '#/components/schemas/AgentPolylinePoint' } }
+        browserUrl: { type: string }
+    AgentAction:
+      type: object
+      required: [type, label]
+      properties:
+        type: { type: string, enum: [open_station, navigate] }
+        label: { type: string }
+        targetId: { type: string }
+        url: { type: string }
+    AgentChatResponse:
+      type: object
+      required: [reply, stations, pois, route, actions, tools, llmUsed, degraded]
+      properties:
+        reply: { type: string }
+        stations: { type: array, items: { $ref: '#/components/schemas/AgentStation' } }
+        pois: { type: array, items: { $ref: '#/components/schemas/AgentPoi' } }
+        route:
+          allOf: [{ $ref: '#/components/schemas/AgentRoute' }]
+          nullable: true
+        actions: { type: array, items: { $ref: '#/components/schemas/AgentAction' } }
+        tools:
+          type: array
+          items: { type: string, enum: [station_search, station_detail, poi_search, route] }
+        llmUsed: { type: boolean }
+        degraded: { type: boolean }
+    AgentChatResponseEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: { type: boolean, enum: [true] }
+        code: { type: integer, enum: [0] }
+        message: { type: string }
+        data: { $ref: '#/components/schemas/AgentChatResponse' }
     SuccessEnvelope:
       type: object
       required: [success, code, message, data]
@@ -1434,6 +2326,31 @@ components:
           format: password
           minLength: 8
           maxLength: 128
+    RegisterRequest:
+      type: object
+      required: [phone, password, smsCode]
+      properties:
+        username:
+          type: string
+          maxLength: 64
+          description: |-
+            Optional display name. When it is absent the account is named from
+            its phone, the same way the SMS login path names a new account.
+        phone:
+          type: string
+          pattern: '^1[0-9]{10}$'
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+        smsCode:
+          type: string
+          description: |-
+            The code issued for this phone. It is single use: registering
+            consumes it, and a second registration needs a fresh code.
+        deviceId:
+          type: string
+
     LoginResponseEnvelope:
       type: object
       required: [success, code, message, data]
@@ -1558,6 +2475,7 @@ components:
     OrderStatus:
       type: string
       enum: [CREATED, STARTING, CHARGING, STOPPING, COMPLETED, CANCELLED, FAILED, EXPIRED]
+      description: CREATED is a charger reservation awaiting explicit start.
     Order:
       type: object
       required: [orderNo, userId, stationId, chargerId, status, amountCent, createdAt]
@@ -1592,6 +2510,55 @@ components:
           type: integer
           format: int64
           minimum: 0
+        reservedUntil:
+          type: string
+          format: date-time
+          description: |-
+            Reservation deadline. Present while status is CREATED; starting
+            after this instant expires the order and releases the charger.
+        startedAt:
+          type: string
+          format: date-time
+          description: |-
+            Device fact time the charge actually started (the CHARGE_STARTED
+            receipt). Absent until the device confirms the start.
+        chargerPowerWatt:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Rated power of the charger this order is bound to, in watts.
+        meteredEnergyWh:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |-
+            Energy the charger has metered so far, from the latest
+            CHARGE_PROGRESS receipt. Present while the order is charging once a
+            reading has arrived; after the stop the settled figure is `energyWh`.
+        meteredAmountCent:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |-
+            What the metered energy costs at the order's frozen snapshot, priced
+            with the same time-of-use engine as the final bill. Present together
+            with `meteredEnergyWh`. It is not a settled charge: settlement still
+            happens on the stop receipt.
+        meteredAt:
+          type: string
+          format: date-time
+          description: Device fact time of the latest meter reading.
+        unitPriceCentPerKwh:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |-
+            Electricity plus service price per kWh that applies to this order
+            at the moment of the request, in cents: the frozen snapshot
+            resolved against the off-peak window in the deployment's billing
+            timezone. Present while the order is active. It exists so a client
+            can show an estimate during a charge; the bill is settled from the
+            meter reading in the stop receipt.
         createdAt:
           type: string
           format: date-time
@@ -1687,7 +2654,7 @@ components:
           description: Unique receipt identifier and idempotency key.
         eventType:
           type: string
-          enum: [CHARGE_STARTED, CHARGE_STOPPED]
+          enum: [CHARGE_STARTED, CHARGE_STOPPED, CHARGE_PROGRESS]
         orderNo:
           type: string
           minLength: 8
@@ -1739,7 +2706,7 @@ components:
             eventId: {type: string}
             eventType:
               type: string
-              enum: [CHARGE_STARTED, CHARGE_STOPPED]
+              enum: [CHARGE_STARTED, CHARGE_STOPPED, CHARGE_PROGRESS]
             orderNo: {type: string}
             status: {$ref: '#/components/schemas/OrderStatus'}
             occurredAt:
@@ -1777,13 +2744,44 @@ components:
           maxLength: 200
     Command:
       type: object
-      required: [commandNo, status]
+      required: [commandId, status]
       properties:
-        commandNo:
+        commandId:
           type: string
+          description: |-
+            Identifier of the device command. This is the same value stored in
+            charger_command_outcomes.command_id; it is not an order number.
         status:
           type: string
           enum: [PENDING, RUNNING, SUCCEEDED, FAILED]
+    DeviceCommand:
+      type: object
+      description: |-
+        What the platform recorded for one device command: the outcome the
+        charger gateway reported and whether it has been applied to the order.
+      required: [commandId, chargerId, action, result, applied, recordedAt]
+      properties:
+        commandId:
+          type: string
+        chargerId:
+          type: integer
+          format: int64
+        orderNo:
+          type: string
+          description: Present for charge commands that belong to an order.
+        action:
+          type: string
+          enum: [START, STOP, RESTART]
+        result:
+          type: string
+          enum: [COMPLETED, FAILED]
+        applied:
+          type: boolean
+          description: |-
+            Whether the stored outcome has already been applied to the order.
+        recordedAt:
+          type: string
+          format: date-time
     PageMeta:
       type: object
       required: [page, pageSize, total]
@@ -1795,6 +2793,56 @@ components:
         total:
           type: integer
           format: int64
+    AdminAccount:
+      type: object
+      required: [id, username, roles, status, mustChangePassword, version]
+      properties:
+        id: {type: integer, format: int64}
+        username: {type: string, pattern: '^[A-Za-z0-9_]{3,32}$'}
+        roles:
+          type: array
+          minItems: 1
+          items: {type: string, enum: [SUPER_ADMIN, OPERATOR, AUDITOR]}
+        status: {type: integer, enum: [0, 1]}
+        mustChangePassword: {type: boolean}
+        version: {type: integer, format: int64, minimum: 1}
+    CreateAdminAccountRequest:
+      type: object
+      required: [username, password, reason]
+      properties:
+        username: {type: string, pattern: '^[A-Za-z0-9_]{3,32}$'}
+        password: {type: string, format: password, minLength: 10, maxLength: 128}
+        reason: {type: string, minLength: 2, maxLength: 200}
+    SetAdminAccountStatusRequest:
+      type: object
+      required: [status, version, reason]
+      properties:
+        status: {type: integer, enum: [0, 1]}
+        version: {type: integer, format: int64, minimum: 1}
+        reason: {type: string, minLength: 2, maxLength: 200}
+    AdminAccountResponseEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/AdminAccount'}
+    AdminAccountPageEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data:
+          type: object
+          required: [items, meta]
+          properties:
+            items:
+              type: array
+              items: {$ref: '#/components/schemas/AdminAccount'}
+            meta: {$ref: '#/components/schemas/PageMeta'}
     StationPageEnvelope:
       type: object
       required: [success, code, message, data]
@@ -1810,6 +2858,48 @@ components:
               type: array
               items: {$ref: '#/components/schemas/Station'}
             meta: {$ref: '#/components/schemas/PageMeta'}
+    StationCreateResponse:
+      type: object
+      description: |-
+        The station a write returns (create, a profile edit, or a status change).
+        The seven
+        required properties are what the write itself produces. The aggregates the
+        Station read schema also carries are declared here as optional: a create
+        answers with zeros for them, which is true for a station that has no
+        chargers yet, but a write is not required to compute numbers it cannot
+        change - the read endpoints are where they are computed.
+      required: [id, code, name, address, status, latitudeE6, longitudeE6]
+      properties:
+        id: {type: integer, format: int64}
+        code: {type: string}
+        name: {type: string}
+        address: {type: string}
+        status:
+          type: string
+          enum: [OPEN, CLOSED, DISABLED]
+        latitudeE6: {type: integer, format: int64}
+        longitudeE6: {type: integer, format: int64}
+        chargerCount:
+          type: integer
+          format: int64
+          description: Optional on a write; computed by the station read endpoints.
+        idleChargerCount:
+          type: integer
+          format: int64
+          description: Optional on a write; computed by the station read endpoints.
+        minPriceCentPerKwh:
+          type: integer
+          format: int64
+          description: Optional on a write; computed by the station read endpoints.
+    StationCreateResponseEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/StationCreateResponse'}
+
     StationResponseEnvelope:
       type: object
       required: [success, code, message, data]
@@ -1879,6 +2969,64 @@ components:
         code: {type: integer, enum: [0]}
         message: {type: string}
         data: {$ref: '#/components/schemas/Command'}
+    StationStatusUpdate:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [OPEN, CLOSED, DISABLED]
+          description: |-
+            Target status. Only these transitions are accepted: OPEN<->CLOSED,
+            OPEN->DISABLED, CLOSED->DISABLED, DISABLED->OPEN. A change to the
+            status the station already has, and DISABLED->CLOSED, are refused
+            with 409.
+    ChargerStatusUpdate:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [IDLE, DISABLED]
+          description: |-
+            Target status an administrator may set. IDLE<->DISABLED and
+            FAULT->IDLE/DISABLED are accepted; OCCUPIED and RESTARTING are
+            refused with 409 because a charger in use must be force-released
+            first and a restart in flight is decided by its receipt.
+    ChargerStatusRecord:
+      type: object
+      required: [chargerId, chargerCode, status]
+      properties:
+        chargerId: {type: integer, format: int64}
+        chargerCode: {type: string}
+        status:
+          type: string
+          enum: [IDLE, OCCUPIED, FAULT, RESTARTING, DISABLED]
+    StationStatusResponseEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/StationCreateResponse'}
+    ChargerStatusResponseEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/ChargerStatusRecord'}
+
+    DeviceCommandResponseEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/DeviceCommand'}
 
     Review:
       type: object
@@ -1929,9 +3077,18 @@ components:
         id: {type: integer, format: int64}
         orderNo: {type: string}
         reason: {type: string}
-        status: {type: string, enum: [PENDING, APPROVED]}
+        status:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED]
+          description: |-
+            PENDING until an admin decides. APPROVED cancels the order and refunds
+            the settled amount; REJECTED dismisses the appeal and leaves the order
+            and the wallet untouched.
         orderAmountCent: {type: integer, format: int64, minimum: 0}
         orderPaidCent: {type: integer, format: int64, minimum: 0}
+        decisionReason:
+          type: string
+          description: The operator's reason, present when the appeal was rejected.
         createdAt: {type: string, format: date-time}
         decidedAt: {type: string, format: date-time}
     AppealResponseEnvelope:
@@ -2035,6 +3192,9 @@ components:
           type: integer
           minimum: 0
           maximum: 23
+          description: |-
+            Wall-clock hour in the deployment's billing timezone
+            (NCS_BILLING_TZ, default Asia/Shanghai) - not UTC.
         offPeakEndHour:
           type: integer
           minimum: 0
@@ -2062,6 +3222,9 @@ components:
           type: integer
           minimum: 0
           maximum: 23
+          description: |-
+            Wall-clock hour in the deployment's billing timezone
+            (NCS_BILLING_TZ, default Asia/Shanghai) - not UTC.
         offPeakEndHour:
           type: integer
           minimum: 0
@@ -2185,6 +3348,416 @@ components:
               type: array
               items: {$ref: '#/components/schemas/AuditEntry'}
             meta: {$ref: '#/components/schemas/PageMeta'}
+
+    RevenueBucket:
+      type: object
+      description: One point of the revenue series.
+      required: [bucketStart, amountCent, energyMwh, orderCount]
+      properties:
+        bucketStart:
+          type: integer
+          format: int64
+          description: The UTC Unix second the bucket begins at. Buckets are
+            aligned to the requested `fromAt`, so the first one always starts
+            exactly there.
+        amountCent:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Frozen bill amounts in cents.
+        energyMwh:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Metered energy in milliwatt-hours, the same unit the order
+            endpoints use.
+        orderCount: {type: integer, format: int64, minimum: 0}
+    RevenueStats:
+      type: object
+      required: [items, totalAmountCent, totalEnergyMwh, totalOrderCount]
+      properties:
+        items:
+          type: array
+          description: Every bucket in the range, in order. A quiet bucket is
+            present and zero, never omitted.
+          items: {$ref: '#/components/schemas/RevenueBucket'}
+        totalAmountCent: {type: integer, format: int64, minimum: 0}
+        totalEnergyMwh: {type: integer, format: int64, minimum: 0}
+        totalOrderCount: {type: integer, format: int64, minimum: 0}
+    ChargerStatusStats:
+      type: object
+      description: The charger fleet census and its health.
+      required: [idleCount, occupiedCount, faultyCount, restartingCount, disabledCount, operationalCount, totalCount, healthPercent]
+      properties:
+        idleCount: {type: integer, format: int64, minimum: 0}
+        occupiedCount: {type: integer, format: int64, minimum: 0}
+        faultyCount: {type: integer, format: int64, minimum: 0}
+        restartingCount: {type: integer, format: int64, minimum: 0}
+        disabledCount: {type: integer, format: int64, minimum: 0}
+        operationalCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Idle plus occupied. A faulty or disabled device cannot
+            serve, and a restarting one is not available when it is counted.
+        totalCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Every charger, including a disabled one.
+        healthPercent:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: The operational share, to two decimals. Zero for an empty
+            fleet.
+    StatsOverview:
+      type: object
+      description: The lifetime operations snapshot. Windowed figures are not
+        part of it; they belong to /admin/stats/revenue.
+      required: [generatedAt, totalRevenueCent, totalChargeCount, fastChargeCount, slowChargeCount, registeredUserCount, stationCount, activeOrderCount, chargers]
+      properties:
+        generatedAt:
+          type: integer
+          format: int64
+          description: When the snapshot was computed, UTC Unix seconds.
+        totalRevenueCent:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Lifetime revenue over every completed order.
+        totalChargeCount: {type: integer, format: int64, minimum: 0}
+        fastChargeCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Completed orders on a DC charger.
+        slowChargeCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Completed orders on an AC charger.
+        registeredUserCount: {type: integer, format: int64, minimum: 0}
+        stationCount: {type: integer, format: int64, minimum: 0}
+        activeOrderCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Orders that have not reached a terminal state.
+        chargers: {$ref: '#/components/schemas/ChargerStatusStats'}
+    RevenueStatsEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/RevenueStats'}
+    ChargerStatusStatsEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/ChargerStatusStats'}
+    StatsOverviewEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/StatsOverview'}
+
+    StationProfileUpdate:
+      type: object
+      description: |-
+        The editable profile of a station. The code and the status are absent on
+        purpose: this endpoint does not accept them.
+      required: [name, address, latitudeE6, longitudeE6]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        address:
+          type: string
+          minLength: 1
+          maxLength: 255
+        latitudeE6:
+          type: integer
+          format: int64
+          minimum: -90000000
+          maximum: 90000000
+        longitudeE6:
+          type: integer
+          format: int64
+          minimum: -180000000
+          maximum: 180000000
+    StationProfileResponseEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/StationCreateResponse'}
+    GlobalTariff:
+      type: object
+      description: One tariff configuration and how many chargers share it.
+      required: [electricityPriceCentPerKwh, servicePriceCentPerKwh, chargerCount]
+      properties:
+        electricityPriceCentPerKwh: {type: integer, format: int64, minimum: 0}
+        servicePriceCentPerKwh: {type: integer, format: int64, minimum: 0}
+        offPeakElectricityPriceCentPerKwh:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Present only for a charger with a time-of-use window.
+        offPeakStartHour:
+          type: integer
+          minimum: 0
+          maximum: 23
+          description: |-
+            Wall-clock hour in the deployment's billing timezone
+            (NCS_BILLING_TZ, default Asia/Shanghai) - not UTC.
+        offPeakEndHour: {type: integer, minimum: 0, maximum: 23}
+        chargerCount: {type: integer, format: int64, minimum: 0}
+    GlobalTariffView:
+      type: object
+      required: [chargerCount, configurationCount, minElectricityPriceCentPerKwh, maxElectricityPriceCentPerKwh, minServicePriceCentPerKwh, maxServicePriceCentPerKwh, offPeakChargerCount, flatChargerCount, configurations]
+      properties:
+        chargerCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Every charger in the fleet.
+        configurationCount: {type: integer, format: int64, minimum: 0}
+        minElectricityPriceCentPerKwh: {type: integer, format: int64, minimum: 0}
+        maxElectricityPriceCentPerKwh: {type: integer, format: int64, minimum: 0}
+        minServicePriceCentPerKwh: {type: integer, format: int64, minimum: 0}
+        maxServicePriceCentPerKwh: {type: integer, format: int64, minimum: 0}
+        offPeakChargerCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Chargers with a time-of-use window.
+        flatChargerCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Chargers with a single price.
+        configurations:
+          type: array
+          description: Every distinct configuration, most common first. A list
+            even when the fleet is empty.
+          items: {$ref: '#/components/schemas/GlobalTariff'}
+    GlobalTariffUpdate:
+      type: object
+      description: |-
+        The tariff every charger should hold. The off-peak triple is
+        all-or-nothing; absent means the fleet becomes flat.
+      required: [electricityPriceCentPerKwh, servicePriceCentPerKwh, reason]
+      properties:
+        electricityPriceCentPerKwh: {type: integer, format: int64, minimum: 0}
+        servicePriceCentPerKwh: {type: integer, format: int64, minimum: 0}
+        offPeakElectricityPriceCentPerKwh: {type: integer, format: int64, minimum: 0}
+        offPeakStartHour:
+          type: integer
+          minimum: 0
+          maximum: 23
+          description: |-
+            Wall-clock hour in the deployment's billing timezone
+            (NCS_BILLING_TZ, default Asia/Shanghai) - not UTC.
+        offPeakEndHour: {type: integer, minimum: 0, maximum: 23}
+        reason:
+          type: string
+          minLength: 2
+          maxLength: 200
+          description: Why the fleet's price changed. Written to the audit trail.
+    GlobalTariffResult:
+      type: object
+      required: [affectedChargers, previousConfigurations, electricityPriceCentPerKwh, servicePriceCentPerKwh]
+      properties:
+        affectedChargers:
+          type: integer
+          format: int64
+          minimum: 0
+          description: How many devices now carry the new tariff.
+        previousConfigurations:
+          type: integer
+          format: int64
+          minimum: 0
+          description: How many distinct tariffs the change replaced. One means
+            the fleet already agreed.
+        electricityPriceCentPerKwh: {type: integer, format: int64, minimum: 0}
+        servicePriceCentPerKwh: {type: integer, format: int64, minimum: 0}
+        offPeakElectricityPriceCentPerKwh: {type: integer, format: int64, minimum: 0}
+        offPeakStartHour:
+          type: integer
+          minimum: 0
+          maximum: 23
+          description: |-
+            Wall-clock hour in the deployment's billing timezone
+            (NCS_BILLING_TZ, default Asia/Shanghai) - not UTC.
+        offPeakEndHour: {type: integer, minimum: 0, maximum: 23}
+    GlobalTariffViewEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/GlobalTariffView'}
+    GlobalTariffResultEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/GlobalTariffResult'}
+
+    ChargerBatchItem:
+      type: object
+      description: One device to create, as an operator types it in.
+      required: [code, connectorType, powerWatt]
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 32
+          description: The bay's identifier, unique within the station.
+        connectorType:
+          type: string
+          enum: [AC, DC]
+          description: The platform's own words, not the console's 0/1 shorthand.
+        powerWatt:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 1000000
+    ChargerBatchRequest:
+      type: object
+      required: [stationId, chargers]
+      properties:
+        stationId:
+          type: integer
+          format: int64
+          minimum: 1
+        chargers:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: {$ref: '#/components/schemas/ChargerBatchItem'}
+    ChargerBatchResponse:
+      type: object
+      description: |-
+        The devices the batch created. `chargerCount` equals the length of
+        `created` and is stated separately so a client that only needs the count
+        does not have to walk the list.
+      required: [stationId, chargerCount, created]
+      properties:
+        stationId: {type: integer, format: int64}
+        chargerCount: {type: integer, format: int64, minimum: 0}
+        created:
+          type: array
+          items: {$ref: '#/components/schemas/Charger'}
+    ChargerBatchResponseEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/ChargerBatchResponse'}
+
+    UserArchiveDraft:
+      type: object
+      description: One account to archive, as an operator types it in.
+      required: [phone]
+      properties:
+        phone:
+          type: string
+          pattern: '^1[3-9]\d{9}$'
+          description: The phone that will own the account, and the door it
+            keeps signing in through.
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 20
+          description: Optional. An unnamed draft takes the registration
+            default, so an archived account is indistinguishable from a
+            self-registered one in every list.
+    UserArchiveRequest:
+      type: object
+      required: [phone]
+      properties:
+        phone:
+          type: string
+          pattern: '^1[3-9]\d{9}$'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 20
+    UserRecord:
+      type: object
+      description: One archived account. balanceCent is always zero at
+        creation; it is stated so the console can render an archived account
+        with the same card it uses everywhere else.
+      required: [id, phone, displayName, status, balanceCent]
+      properties:
+        id: {type: integer, format: int64}
+        phone: {type: string}
+        displayName: {type: string}
+        status:
+          type: string
+          enum: [ACTIVE, DISABLED]
+        balanceCent:
+          type: integer
+          format: int64
+          minimum: 0
+    UserRecordEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/UserRecord'}
+    UserBatchRequest:
+      type: object
+      description: One page of a roster. Phones must be unique inside the page
+        as well as against the platform.
+      required: [users]
+      properties:
+        users:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items: {$ref: '#/components/schemas/UserArchiveDraft'}
+    UserBatchResponse:
+      type: object
+      description: |-
+        The accounts the page created. `userCount` equals the length of
+        `created` and is stated separately so a client that only needs the
+        count does not have to walk the list.
+      required: [userCount, created]
+      properties:
+        userCount: {type: integer, format: int64, minimum: 0}
+        created:
+          type: array
+          items: {$ref: '#/components/schemas/UserRecord'}
+    UserBatchResponseEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/UserBatchResponse'}
 
 security:
   - bearerAuth: []

@@ -26,6 +26,10 @@ type fakeStore struct {
 	approved      bool
 	approveResult bool
 	approveErr    error
+	rejected      bool
+	rejectReason  string
+	rejectResult  bool
+	rejectErr     error
 }
 
 func (f *fakeStore) CreateReview(_ context.Context, userID int64, orderNo string, stars int, comment string) (ReviewView, error) {
@@ -59,6 +63,16 @@ func (f *fakeStore) GetAppeal(_ context.Context, appealID int64) (AppealView, er
 func (f *fakeStore) ApproveAppeal(context.Context, int64, int64) (bool, error) {
 	f.approved = true
 	return f.approveResult, f.approveErr
+}
+
+func (f *fakeStore) GetAppealByOrder(context.Context, int64, string) (AppealView, error) {
+	return f.appeal, f.appealErr
+}
+
+func (f *fakeStore) RejectAppeal(_ context.Context, _ int64, _ int64, reason string) (bool, error) {
+	f.rejected = true
+	f.rejectReason = reason
+	return f.rejectResult, f.rejectErr
 }
 
 type fakeAuthProvider struct {
@@ -243,3 +257,74 @@ func TestGetReviewEndpoint(t *testing.T) {
 }
 
 var _ = errors.New
+
+// UC-U-09 follow-up: an appeal could only be closed by approving, which cancels
+// the order and refunds. Rejection dismisses it with a reason and touches
+// neither the order nor the wallet.
+func TestAppealRejectionEndpoint(t *testing.T) {
+	admin := newFixture(t, auth.Identity{ID: 2, Role: auth.RoleAdmin, AdminRole: auth.AdminRoleOperator, Status: auth.StatusActive}, true)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/appeals/1/reject",
+		strings.NewReader(`{"reason":"计量与设备记录一致，申诉不成立"}`))
+	admin.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("reject status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if payload["data"] == nil {
+		t.Fatalf("reject response = %s, want the current appeal state", recorder.Body.String())
+	}
+}
+
+func TestAppealRejectValidationAndErrors(t *testing.T) {
+	admin := newFixture(t, auth.Identity{ID: 2, Role: auth.RoleAdmin, AdminRole: auth.AdminRoleOperator, Status: auth.StatusActive}, true)
+
+	// Empty reason: the operator has to say why the appeal is dismissed, because
+	// the customer sees it.
+	recorder := httptest.NewRecorder()
+	admin.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/admin/appeals/1/reject",
+		strings.NewReader(`{"reason":"   "}`)))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("blank reason status = %d, want 400", recorder.Code)
+	}
+
+	// A malformed appeal id must not reach the store.
+	recorder = httptest.NewRecorder()
+	admin.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/admin/appeals/abc/reject",
+		strings.NewReader(`{"reason":"理由"}`)))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("bad appeal id status = %d, want 400", recorder.Code)
+	}
+
+	// GET on an admin-only action is a method error, not a silent success.
+	recorder = httptest.NewRecorder()
+	admin.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/admin/appeals/1/reject", nil))
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET reject status = %d, want 405", recorder.Code)
+	}
+}
+
+// The customer has to be able to read the outcome of their own appeal: the
+// endpoint is the same order sub-resource the appeal is filed on, and a missing
+// appeal is a 404 (the shape the review resource already uses).
+func TestGetOwnAppealEndpoint(t *testing.T) {
+	user := newFixture(t, auth.Identity{ID: 7, Role: auth.RoleUser, Status: auth.StatusActive}, true)
+
+	recorder := httptest.NewRecorder()
+	user.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/orders/ORD20260915120000aaaa/appeal", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET appeal status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	anon := newFixture(t, auth.Identity{}, false)
+	recorder = httptest.NewRecorder()
+	anon.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/orders/ORD20260915120000aaaa/appeal", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous GET appeal status = %d, want 401", recorder.Code)
+	}
+}

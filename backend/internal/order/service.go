@@ -70,6 +70,12 @@ func IsCommandResult(result string) bool {
 // MinStartBalanceCents is the city-wide minimum start balance (BR-04: 5.00元).
 const MinStartBalanceCents = 500
 
+// DefaultReservationDuration is the UC-U-07 device hold after a user confirms
+// a quote. Deployments may override the janitor duration, and the API store is
+// configured with the same value so the exposed deadline and enforcement
+// cannot drift apart.
+const DefaultReservationDuration = 15 * time.Minute
+
 var validStatuses = map[string]bool{
 	StatusCreated: true, StatusStarting: true, StatusCharging: true, StatusStopping: true,
 	StatusCompleted: true, StatusCancelled: true, StatusExpired: true, StatusFailed: true,
@@ -189,9 +195,29 @@ type TariffConfig struct {
 	ServicePrice int64
 }
 
+// defaultBillingLocation is the wall-clock timezone the off-peak window is expressed in when the
+// deployment does not configure one.
+//
+// A fixed +08, not time.Local and not UTC: the product bills Chinese operators, whose off-peak
+// window is local night (the seed configures 23:00-07:00), and China has had no DST since 1991.
+// Resolving those hours against UTC (the previous behaviour) moved a 23:00-07:00 window to
+// 07:00-15:00 local time, so an afternoon charge was billed at the off-peak price.
+var defaultBillingLocation = time.FixedZone("CST", 8*60*60)
+
+// DefaultBillingLocation returns the fallback billing timezone. Callers that hold configuration
+// (NCS_BILLING_TZ) should pass their own location instead.
+func DefaultBillingLocation() *time.Location { return defaultBillingLocation }
+
+// UnitPriceCents is the electricity price that applies at one instant plus the service fee: the
+// per-kWh figure a client needs to estimate a charge that is still running.
+func UnitPriceCents(at time.Time, cfg TariffConfig) int64 {
+	return EffectiveElectricityPrice(at, cfg) + cfg.ServicePrice
+}
+
 // EffectiveElectricityPrice resolves the tariff for one instant: the
 // off-peak price applies inside the configured hour window (which may span
-// midnight), otherwise the peak price.
+// midnight), otherwise the peak price. The window is read in the location of
+// the instant it is given, so the caller decides the billing timezone.
 func EffectiveElectricityPrice(start time.Time, cfg TariffConfig) int64 {
 	if cfg.OffPeak == nil || cfg.WindowStart == nil || cfg.WindowEnd == nil || *cfg.WindowStart == *cfg.WindowEnd {
 		return cfg.PeakPrice

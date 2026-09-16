@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 type handlerFixture struct {
 	handlers *Handlers
 	reader   *fakeAccountReader
+	codes    SMSCodeStore
 }
 
 func newHandlerFixture(t *testing.T) handlerFixture {
@@ -26,13 +28,14 @@ func newHandlerFixture(t *testing.T) handlerFixture {
 		ID: 7, Phone: "13800000001", DisplayName: "开发用户", PasswordHash: hashForTest(t, testPassword), Status: StatusActive,
 	}}
 	mutations := NewInMemoryAccountMutation(map[int64]*UserAccount{reader.user.ID: reader.user})
+	codes := NewInMemorySMSCodeStore(nil)
 	service, err := NewService(
 		reader,
 		reader,
 		mutations,
 		NewInMemorySessionStore(time.Minute, nil),
 		NewFixedWindowLimiter(5, time.Minute, nil),
-		NewInMemorySMSCodeStore(nil),
+		codes,
 		time.Minute, time.Hour,
 	)
 	if err != nil {
@@ -43,7 +46,7 @@ func newHandlerFixture(t *testing.T) handlerFixture {
 	if err != nil {
 		t.Fatalf("NewHandlers() error = %v", err)
 	}
-	return handlerFixture{handlers: handlers, reader: reader}
+	return handlerFixture{handlers: handlers, reader: reader, codes: codes}
 }
 
 func (f handlerFixture) server() *httpapi.Server {
@@ -360,5 +363,95 @@ func TestAdminRoleExposedByIdentity(t *testing.T) {
 	}
 	if payload.Data["adminRole"] != AdminRoleSuper {
 		t.Fatalf("me adminRole = %v", payload.Data["adminRole"])
+	}
+}
+
+// TestRegisterEndpoint covers POST /api/v1/auth/user/register: a valid phone
+// with a valid code creates the account and returns a session (201), a phone
+// that already has an account is 409 ALREADY_EXISTS, a password outside the
+// contract bounds is 400, and a wrong code is 422 CODE_INVALID with no account
+// created at all.
+func TestRegisterEndpoint(t *testing.T) {
+	const phone = "13900000042"
+	password := strings.Repeat("a", 12)
+
+	post := func(f handlerFixture, body string) (*httptest.ResponseRecorder, envelope) {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/user/register", bytes.NewBufferString(body))
+		request.Header.Set("Content-Type", "application/json")
+		f.server().Handler().ServeHTTP(recorder, request)
+		var payload envelope
+		if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode %q: %v", recorder.Body.String(), err)
+		}
+		return recorder, payload
+	}
+
+	// Wrong code first: it must not create anything.
+	f := newHandlerFixture(t)
+	if err := f.codes.Issue(context.Background(), phone, "123456", time.Minute); err != nil {
+		t.Fatalf("issue code: %v", err)
+	}
+	recorder, payload := post(f, `{"username":"新用户","phone":"`+phone+`","password":"`+password+`","smsCode":"000000"}`)
+	if recorder.Code != http.StatusUnprocessableEntity || payload.Code != 20 {
+		t.Fatalf("wrong code: status = %d code = %d", recorder.Code, payload.Code)
+	}
+	if len(f.reader.registerCalls) != 0 {
+		t.Fatalf("a wrong code created an account: %#v", f.reader.registerCalls)
+	}
+
+	// Weak password: rejected before the code is consumed, so the caller can
+	// retry with the same code.
+	recorder, _ = post(f, `{"phone":"`+phone+`","password":"short","smsCode":"123456"}`)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("weak password status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	if len(f.reader.registerCalls) != 0 {
+		t.Fatal("a weak password created an account")
+	}
+
+	// Valid registration: 201 with a session, and the stored hash matches the
+	// password the caller sent.
+	recorder, payload = post(f, `{"username":"新用户","phone":"`+phone+`","password":"`+password+`","smsCode":"123456"}`)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("register status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	if payload.Data["accessToken"] == nil || payload.Data["accessToken"] == "" {
+		t.Fatalf("register data = %#v, want a session", payload.Data)
+	}
+	if len(f.reader.registerCalls) != 1 {
+		t.Fatalf("register calls = %d, want 1", len(f.reader.registerCalls))
+	}
+	call := f.reader.registerCalls[0]
+	if call.phone != phone || call.displayName != "新用户" {
+		t.Fatalf("register call = %#v", call)
+	}
+	if !VerifyPassword(password, call.passwordHash) {
+		t.Fatal("the stored hash does not verify against the password that was sent")
+	}
+
+	// The same phone again: 409 ALREADY_EXISTS, not a second account. A fresh
+	// code is required because the first one was consumed by the registration
+	// (single use), which is also why an attacker cannot probe whether a phone
+	// is registered without a code for that phone.
+	if err := f.codes.Issue(context.Background(), phone, "654321", time.Minute); err != nil {
+		t.Fatalf("issue second code: %v", err)
+	}
+	f.reader.registerErr = ErrAccountExists
+	recorder, payload = post(f, `{"phone":"`+phone+`","password":"`+password+`","smsCode":"654321"}`)
+	if recorder.Code != http.StatusConflict || payload.Code != 5 {
+		t.Fatalf("duplicate: status = %d code = %d", recorder.Code, payload.Code)
+	}
+
+	// Missing fields never reach the register path.
+	f.reader.registerErr = nil
+	f.reader.registerCalls = nil
+	recorder, _ = post(f, `{"phone":"","password":"`+password+`","smsCode":"123456"}`)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("missing phone status = %d", recorder.Code)
+	}
+	if len(f.reader.registerCalls) != 0 {
+		t.Fatal("an invalid phone reached the writer")
 	}
 }

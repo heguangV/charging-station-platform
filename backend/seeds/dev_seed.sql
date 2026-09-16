@@ -43,3 +43,20 @@ JOIN (VALUES
 ) AS c(code, connector_type, power_watt, price_per_kwh_cents, service_price_per_kwh_cents, off_peak, peak_start, peak_end) ON TRUE
 WHERE s.code = 'ST-DEV-01'
 ON CONFLICT DO NOTHING;
+
+-- A third charger, in a second station.
+--
+-- verify-closed-loop.sh drives the order flow and the successful device command on the two chargers
+-- of ST-DEV-01 and takes the failure path on any other idle charger, because a charger held by an
+-- active order refuses a restart command. Without a third one the gate cannot run at all, and it
+-- refuses with "expected at least three chargers in the database" before it tests anything.
+INSERT INTO stations (code, name, address, latitude, longitude, status)
+VALUES ('ST-DEV-02', '开发充电站二号', '成都市高新区天府三街', 30.546100, 104.071500, 'OPEN')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO chargers (station_id, code, connector_type, power_watt, status,
+                      price_per_kwh_cents, service_price_per_kwh_cents)
+SELECT s.id, 'C01', 'DC', 60000, 'IDLE', 120, 50
+FROM stations s
+WHERE s.code = 'ST-DEV-02'
+ON CONFLICT DO NOTHING;

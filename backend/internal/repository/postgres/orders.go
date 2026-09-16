@@ -23,14 +23,54 @@ const idempotencyTTL = 24 * time.Hour
 type OrderStore struct {
 	db    *sql.DB
 	clock func() time.Time
+	// reservationDuration is shared with the API janitor configuration. It
+	// controls both the returned reservedUntil value and the synchronous
+	// expiry check when the user tries to start.
+	reservationDuration time.Duration
+	// billingLocation is the wall-clock timezone the off-peak tariff window is
+	// expressed in (NCS_BILLING_TZ). Billing instants stay UTC; only the window
+	// lookup uses these wall-clock hours.
+	billingLocation *time.Location
+}
+
+// OrderStoreOption configures an OrderStore.
+type OrderStoreOption func(*OrderStore)
+
+// WithBillingLocation sets the timezone whose wall-clock hours define the off-peak tariff window.
+// Without it the store falls back to order.DefaultBillingLocation(), never to UTC: billing an
+// operator's 23:00-07:00 window in UTC hours is the defect this option exists to prevent.
+func WithBillingLocation(location *time.Location) OrderStoreOption {
+	return func(store *OrderStore) {
+		if location != nil {
+			store.billingLocation = location
+		}
+	}
+}
+
+// WithReservationDuration keeps reservation presentation and enforcement in
+// lockstep with NCS_ORDER_EXPIRE_AFTER. Invalid values leave the safe default
+// in place.
+func WithReservationDuration(duration time.Duration) OrderStoreOption {
+	return func(store *OrderStore) {
+		if duration > 0 {
+			store.reservationDuration = duration
+		}
+	}
 }
 
 // NewOrderStore binds the store to a connection pool.
-func NewOrderStore(db *sql.DB) (*OrderStore, error) {
+func NewOrderStore(db *sql.DB, options ...OrderStoreOption) (*OrderStore, error) {
 	if db == nil {
 		return nil, errors.New("postgres: order store requires a database")
 	}
-	return &OrderStore{db: db, clock: time.Now}, nil
+	store := &OrderStore{
+		db: db, clock: time.Now, billingLocation: order.DefaultBillingLocation(),
+		reservationDuration: order.DefaultReservationDuration,
+	}
+	for _, option := range options {
+		option(store)
+	}
+	return store, nil
 }
 
 // activeStatusSQL inlines the fixed active-status list from the order
@@ -139,7 +179,7 @@ VALUES ($1, $2, 'order', $3, $4::jsonb, $5)`,
 
 const orderSelectColumns = `id, order_no, user_id, station_id, charger_id, status, amount_cents, paid_cents, payment_status, energy_wh,
 price_per_kwh_cents, service_price_per_kwh_cents, off_peak_price_per_kwh_cents, off_peak_start_hour, off_peak_end_hour,
-started_at, created_at, updated_at`
+requested_at, started_at, created_at, updated_at, metered_energy_wh, metered_at`
 
 type orderRow struct {
 	ID int64 // internal surrogate key, never serialized
@@ -149,17 +189,32 @@ type orderRow struct {
 	OffPeakPrice          *int64
 	OffPeakStartHour      *int16
 	OffPeakEndHour        *int16
+	RequestedAt           time.Time
 	StartedAt             sql.NullTime
+	MeteredEnergyWh       int64
+	MeteredAt             sql.NullTime
 }
 
-func scanOrder(row *sql.Row) (orderRow, error) {
+// tariffConfig is the frozen tariff snapshot this order is billed with.
+func (r orderRow) tariffConfig() order.TariffConfig {
+	return order.TariffConfig{
+		PeakPrice:    r.PricePerKwhCents,
+		OffPeak:      r.OffPeakPrice,
+		WindowStart:  r.OffPeakStartHour,
+		WindowEnd:    r.OffPeakEndHour,
+		ServicePrice: r.ServicePricePerKwhCen,
+	}
+}
+
+func (s *OrderStore) scanOrder(row *sql.Row) (orderRow, error) {
 	var result orderRow
 	var offPeakPrice sql.NullInt64
 	var offPeakStartHour, offPeakEndHour sql.NullInt16
 	err := row.Scan(&result.ID, &result.OrderNo, &result.UserID, &result.StationID, &result.ChargerID,
 		&result.Status, &result.AmountCent, &result.PaidCent, &result.PaymentStatus, &result.EnergyWh,
 		&result.PricePerKwhCents, &result.ServicePricePerKwhCen, &offPeakPrice, &offPeakStartHour, &offPeakEndHour,
-		&result.StartedAt, &result.CreatedAt, &result.UpdatedAt)
+		&result.RequestedAt, &result.StartedAt, &result.CreatedAt, &result.UpdatedAt,
+		&result.MeteredEnergyWh, &result.MeteredAt)
 	if err != nil {
 		return orderRow{}, err
 	}
@@ -178,7 +233,17 @@ func scanOrder(row *sql.Row) (orderRow, error) {
 	// TIMESTAMPTZ values arrive in the session zone; the API contract speaks UTC.
 	result.CreatedAt = result.CreatedAt.UTC()
 	result.UpdatedAt = result.UpdatedAt.UTC()
+	s.setReservationWindow(&result.Order, result.RequestedAt)
 	return result, nil
+}
+
+func (s *OrderStore) setReservationWindow(result *order.Order, requestedAt time.Time) {
+	if result.Status != order.StatusCreated || requestedAt.IsZero() {
+		result.ReservedUntil = nil
+		return
+	}
+	expiresAt := requestedAt.UTC().Add(s.reservationDuration)
+	result.ReservedUntil = &expiresAt
 }
 
 // CreateOrder claims the idempotency slot, validates charger/station/balance/
@@ -248,7 +313,10 @@ WHERE user_id = $1 AND status = 'COMPLETED' AND payment_status <> 'PAID'`, comma
 		return order.Order{}, order.ErrDebtOutstanding
 	}
 
-	now := s.clock()
+	// PostgreSQL stores timestamptz at microsecond precision. Normalize before
+	// constructing the response so create/get/list expose the exact same
+	// reservation deadline instead of differing by discarded nanoseconds.
+	now := s.clock().UTC().Truncate(time.Microsecond)
 	orderNo, err := order.NewOrderNo(now)
 	if err != nil {
 		return order.Order{}, err
@@ -279,6 +347,7 @@ VALUES ($1, $2, $3, $4, 'CREATED', $5)`,
 		CreatedAt:  now.UTC(),
 		UpdatedAt:  now.UTC(),
 	}
+	s.setReservationWindow(&result, now)
 	if err := s.appendOutbox(tx, ctx, order.EventOrderCreated, orderNo, map[string]any{
 		"orderNo":   orderNo,
 		"userId":    command.UserID,
@@ -902,7 +971,7 @@ func (s *OrderStore) ReissueStopCommands(ctx context.Context, policy order.StopR
 			continue
 		}
 
-		commandNo, err := admin.NewCommandNo(now)
+		commandNo, err := admin.NewCommandID(now)
 		if err != nil {
 			return result, err
 		}
@@ -992,7 +1061,7 @@ func chargerCommandStatus(result string) string {
 // order_no is what lets the gateway - and the receipt it sends back - name the order a command
 // belongs to; the station-level RESTART compensation below carries none.
 func (s *OrderStore) appendOrderChargerCommand(tx *sql.Tx, ctx context.Context, o order.Order, action, traceID string) error {
-	commandNo, err := admin.NewCommandNo(s.clock())
+	commandNo, err := admin.NewCommandID(s.clock())
 	if err != nil {
 		return err
 	}
@@ -1061,6 +1130,32 @@ func (s *OrderStore) transitionOrder(ctx context.Context, command order.Transiti
 		return order.Order{}, err
 	}
 	result := row.Order
+	if targetStatus == order.StatusStarting {
+		if result.Status == order.StatusExpired {
+			return order.Order{}, order.ErrReservationExpired
+		}
+		if result.Status == order.StatusCreated && !s.clock().Before(row.RequestedAt.Add(s.reservationDuration)) {
+			if _, err := tx.ExecContext(ctx, `UPDATE charging_orders
+SET status = 'EXPIRED', version = version + 1, updated_at = CURRENT_TIMESTAMP
+WHERE id = $1`, row.ID); err != nil {
+				return order.Order{}, err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE chargers SET status = 'IDLE', updated_at = CURRENT_TIMESTAMP
+WHERE id = $1 AND status = 'OCCUPIED'`, result.ChargerID); err != nil {
+				return order.Order{}, err
+			}
+			// The request did not start a charge, so do not leave an IN_PROGRESS
+			// idempotency claim that would mask RESERVATION_EXPIRED on retry.
+			if _, err := tx.ExecContext(ctx, `DELETE FROM idempotency_records
+WHERE scope = $1 AND idempotency_key = $2 AND status = 'IN_PROGRESS'`, scope, command.IdempotencyKey); err != nil {
+				return order.Order{}, err
+			}
+			if err := tx.Commit(); err != nil {
+				return order.Order{}, err
+			}
+			return order.Order{}, order.ErrReservationExpired
+		}
+	}
 	if err := order.ValidateTransition(result.Status, targetStatus); err != nil {
 		return order.Order{}, err
 	}
@@ -1081,6 +1176,7 @@ WHERE id = $1`, row.ID, targetStatus); err != nil {
 		return order.Order{}, err
 	}
 	result.Status = targetStatus
+	result.ReservedUntil = nil
 	result.UpdatedAt = s.clock().UTC()
 
 	if err := s.appendOutbox(tx, ctx, eventType, result.OrderNo, map[string]any{
@@ -1268,6 +1364,67 @@ VALUES ($1, $2, 'CHARGER_EVENT_REJECTED', $3::jsonb)`, row.ID, auditID, string(p
 	return want
 }
 
+// ConfirmProgress applies one running-meter reading from the charger.
+//
+// A reading is absolute (energy delivered so far) and monotonic. A reading at or below the
+// stored one is a stale delivery - the gateway retried an older fact, or the network reordered
+// two of them - and is answered with the current order instead of lowering what the customer
+// sees. That is also why progress takes no idempotency key: applying the same reading twice
+// writes the same absolute value, so the update is idempotent by construction, and the
+// idempotency table does not grow by one row per reading.
+//
+// Progress never settles anything: the amount is derived from the reading at read time with the
+// same time-of-use engine as the final bill, and the stop receipt still decides the invoice.
+func (s *OrderStore) ConfirmProgress(ctx context.Context, command order.ConfirmProgressCommand) (order.Order, error) {
+	if command.OccurredAt.IsZero() {
+		return order.Order{}, fmt.Errorf("%w: occurredAt is required", order.ErrInvalidFactTime)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return order.Order{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	row, err := s.lockOrder(tx, ctx, command.OrderNo, 0)
+	if err != nil {
+		return order.Order{}, err
+	}
+	audit := receiptAudit{
+		EventType: order.ChargerEventProgress, EventID: strings.TrimSpace(command.EventID),
+		ChargerID: command.ChargerID, OccurredAt: command.OccurredAt, TraceID: command.TraceID,
+	}
+	if command.ChargerID > 0 && command.ChargerID != row.ChargerID {
+		audit.Reason = fmt.Sprintf("the order belongs to charger %d", row.ChargerID)
+		return order.Order{}, s.rejectReceipt(tx, ctx, row, false, audit, order.ErrChargerOrderMismatch)
+	}
+
+	result := row.Order
+	// Only a running charge has a running meter. A reading for anything else is either a very
+	// late delivery or a gateway that lost track of the order.
+	if result.Status != order.StatusCharging {
+		audit.Reason = fmt.Sprintf("a progress reading cannot be applied in status %s", result.Status)
+		return order.Order{}, s.rejectReceipt(tx, ctx, row, false, audit, order.ErrFactTimeOutOfOrder)
+	}
+	if !row.StartedAt.Valid || command.OccurredAt.Before(row.StartedAt.Time) {
+		audit.Reason = "the reading predates the recorded start of the charge"
+		return order.Order{}, s.rejectReceipt(tx, ctx, row, false, audit, order.ErrFactTimeOutOfOrder)
+	}
+	if command.EnergyWh <= row.MeteredEnergyWh {
+		// Stale or duplicate reading: keep the higher one and report the current state.
+		return result, nil
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE charging_orders
+SET metered_energy_wh = $2, metered_at = $3, updated_at = CURRENT_TIMESTAMP
+WHERE id = $1`, row.ID, command.EnergyWh, command.OccurredAt.UTC()); err != nil {
+		return order.Order{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return order.Order{}, err
+	}
+	return result, nil
+}
+
 // ConfirmStart moves STARTING → CHARGING on device confirmation.
 //
 // The receipt's fact time is what is written to started_at: the device reports
@@ -1407,19 +1564,24 @@ func (s *OrderStore) ConfirmStop(ctx context.Context, command order.ConfirmStopC
 	// follow the physical charge, otherwise a delayed report is billed in the
 	// wrong window. The server clock only stamps updated_at.
 	stoppedAt := command.OccurredAt.UTC()
-	cfg := order.TariffConfig{
-		PeakPrice:    row.PricePerKwhCents,
-		OffPeak:      row.OffPeakPrice,
-		WindowStart:  row.OffPeakStartHour,
-		WindowEnd:    row.OffPeakEndHour,
-		ServicePrice: row.ServicePricePerKwhCen,
+	cfg := row.tariffConfig()
+	// The billed interval is bounded by the device's fact times (UTC instants), but the tariff
+	// window is configured as wall-clock hours in the deployment's billing timezone: an operator
+	// that sets 23:00-07:00 means local night. The interval is therefore converted into the billing
+	// location for the window lookup only - the instants written to the database stay UTC.
+	//
+	// This fixes the window without reintroducing the older defect: previously the started_at was
+	// handed over in whatever zone the database session happened to use (Asia/Shanghai on the dev
+	// host), which priced a 03:00 UTC charge as 11:00. Explicit UTC fixed the session dependency but
+	// silently moved a 23:00-07:00 window to 07:00-15:00 local, so an afternoon charge was billed at
+	// the off-peak price.
+	bill := order.ComputeTOUBill(command.EnergyWh,
+		row.StartedAt.Time.In(s.billingLocation), stoppedAt.In(s.billingLocation), cfg)
+	// The audit payload keeps UTC instants so recorded bills stay comparable across deployments.
+	for index := range bill.Segments {
+		bill.Segments[index].From = bill.Segments[index].From.UTC()
+		bill.Segments[index].To = bill.Segments[index].To.UTC()
 	}
-	// Both ends of the billed interval are UTC. The device reports a UTC fact time, and the tariff
-	// window is defined in UTC hours; the row is read back through a database session whose zone is
-	// the server's, so the times are converted explicitly. Billing a charge in the session's local
-	// hours was a real defect: a charge at 03:00 UTC was priced as if it happened at 11:00 in a
-	// +08 session, which is a different window entirely.
-	bill := order.ComputeTOUBill(command.EnergyWh, row.StartedAt.Time.UTC(), stoppedAt, cfg)
 	amount := bill.AmountCent
 
 	if _, err := tx.ExecContext(ctx, `UPDATE charging_orders
@@ -1514,7 +1676,7 @@ func (s *OrderStore) lockOrder(tx *sql.Tx, ctx context.Context, orderNo string, 
 	}
 	query += ` FOR UPDATE`
 
-	result, err := scanOrder(tx.QueryRowContext(ctx, query, args...))
+	result, err := s.scanOrder(tx.QueryRowContext(ctx, query, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return orderRow{}, order.ErrOrderNotFound
 	}
@@ -1526,14 +1688,70 @@ func (s *OrderStore) lockOrder(tx *sql.Tx, ctx context.Context, orderNo string, 
 
 func (s *OrderStore) GetOrderByNo(ctx context.Context, userID int64, orderNo string) (order.Order, error) {
 	const query = `SELECT ` + orderSelectColumns + ` FROM charging_orders WHERE order_no = $1 AND user_id = $2`
-	row, err := scanOrder(s.db.QueryRowContext(ctx, query, orderNo, userID))
+	row, err := s.scanOrder(s.db.QueryRowContext(ctx, query, orderNo, userID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return order.Order{}, order.ErrOrderNotFound
 	}
 	if err != nil {
 		return order.Order{}, err
 	}
-	return row.Order, nil
+
+	result := row.Order
+	// The device's fact time is the only trustworthy start of a charge.
+	if row.StartedAt.Valid {
+		startedAt := row.StartedAt.Time.UTC()
+		result.StartedAt = &startedAt
+	}
+	// While an order is running, the charger reports its running meter. Expose what has been
+	// metered so far and what it costs at the frozen snapshot, priced with the same time-of-use
+	// engine as the final bill so the number the customer watches converges on the invoice.
+	if order.IsActive(result.Status) {
+		unitPrice := order.UnitPriceCents(s.clock().In(s.billingLocation), row.tariffConfig())
+		result.UnitPriceCentPerKwh = &unitPrice
+		powerWatt, err := s.chargerPowerWatt(ctx, result.ChargerID)
+		if err != nil {
+			return order.Order{}, err
+		}
+		result.ChargerPowerWatt = powerWatt
+		if row.MeteredAt.Valid {
+			meteredEnergy := row.MeteredEnergyWh
+			meteredAt := row.MeteredAt.Time.UTC()
+			// The interval ends at the reading's fact time, never at "now": the price of the energy
+			// already delivered cannot change because the request arrived later.
+			meteredAmount := order.ComputeTOUBill(meteredEnergy,
+				row.StartedAt.Time.In(s.billingLocation), row.MeteredAt.Time.In(s.billingLocation),
+				row.tariffConfig()).AmountCent
+			result.MeteredEnergyWh = &meteredEnergy
+			result.MeteredAmountCent = &meteredAmount
+			result.MeteredAt = &meteredAt
+		}
+	}
+	return result, nil
+}
+
+// chargerPowerWatt reads the rated power of the charger an order is bound to.
+func (s *OrderStore) chargerPowerWatt(ctx context.Context, chargerID int64) (*int64, error) {
+	var powerWatt int64
+	err := s.db.QueryRowContext(ctx, `SELECT power_watt FROM chargers WHERE id = $1`, chargerID).Scan(&powerWatt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &powerWatt, nil
+}
+
+// orderByClause turns the contract's sort value into SQL. The value is checked
+// against a fixed set here as well, so this function can never interpolate
+// caller text into the statement even if a future caller forgets to validate.
+func orderByClause(sort string) string {
+	switch sort {
+	case order.SortCreatedAtAsc:
+		return "created_at ASC, id ASC"
+	default:
+		return "created_at DESC, id DESC"
+	}
 }
 
 func (s *OrderStore) ListOrdersByUser(ctx context.Context, filter order.ListFilter) (order.OrderPage, error) {
@@ -1561,10 +1779,10 @@ func (s *OrderStore) ListOrdersByUser(ctx context.Context, filter order.ListFilt
 	}
 	args := []any{filter.UserID, filter.Status, stationID, filter.PaymentStatus, createdFrom, createdTo}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT id, order_no, user_id, station_id, charger_id, status, amount_cents, paid_cents, payment_status, energy_wh, created_at, updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id, order_no, user_id, station_id, charger_id, status, amount_cents, paid_cents, payment_status, energy_wh, requested_at, created_at, updated_at
 FROM charging_orders
 WHERE `+filterSQL+`
-ORDER BY created_at DESC
+ORDER BY `+orderByClause(filter.Sort)+`
 LIMIT $7 OFFSET $8`, append(args, filter.PageSize, (filter.Page-1)*filter.PageSize)...)
 	if err != nil {
 		return order.OrderPage{}, err
@@ -1575,13 +1793,15 @@ LIMIT $7 OFFSET $8`, append(args, filter.PageSize, (filter.Page-1)*filter.PageSi
 	for rows.Next() {
 		var result order.Order
 		var id int64
+		var requestedAt time.Time
 		if err := rows.Scan(&id, &result.OrderNo, &result.UserID, &result.StationID, &result.ChargerID,
 			&result.Status, &result.AmountCent, &result.PaidCent, &result.PaymentStatus, &result.EnergyWh,
-			&result.CreatedAt, &result.UpdatedAt); err != nil {
+			&requestedAt, &result.CreatedAt, &result.UpdatedAt); err != nil {
 			return order.OrderPage{}, err
 		}
 		result.CreatedAt = result.CreatedAt.UTC()
 		result.UpdatedAt = result.UpdatedAt.UTC()
+		s.setReservationWindow(&result, requestedAt)
 		page.Items = append(page.Items, result)
 	}
 	if err := rows.Err(); err != nil {

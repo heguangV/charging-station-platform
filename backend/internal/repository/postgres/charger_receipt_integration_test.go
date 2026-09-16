@@ -169,10 +169,16 @@ func TestChargerReceiptWritesTheDeviceFactTime(t *testing.T) {
 
 // The fact time decides the tariff window, so the same charge billed at a different time costs a
 // different amount. This is the reason occurredAt is not an audit field.
+//
+// The window is configured as wall-clock hours in the deployment's billing timezone (here the
+// product default, +08), which is what an operator means by 23:00-07:00. Pricing the same window
+// against UTC hours - the previous behaviour - billed a charge at 12:00 local (04:00 UTC) at the
+// off-peak price, and a real 23:00-07:00 local charge at the peak price.
 func TestChargerReceiptFactTimeDrivesTimeOfUseBilling(t *testing.T) {
 	db, ctx := integrationDB(t)
+	billing := order.DefaultBillingLocation()
 
-	// A tariff with a cheap off-peak window between 00:00 and 08:00 UTC. The window and the prices
+	// A tariff with a cheap off-peak window between 23:00 and 07:00 local. The window and the prices
 	// are read from the charger when the start transaction snapshots them, so they are set before
 	// the order starts charging.
 	charge := func(t *testing.T, startUTC time.Time, label string) int64 {
@@ -180,7 +186,7 @@ func TestChargerReceiptFactTimeDrivesTimeOfUseBilling(t *testing.T) {
 		fixture := newReceiptFixture(t, db, ctx)
 		if _, err := db.ExecContext(ctx, `UPDATE chargers
    SET price_per_kwh_cents = 120, service_price_per_kwh_cents = 0,
-       off_peak_electricity_price_per_kwh_cents = 50, off_peak_start_hour = 0, off_peak_end_hour = 8
+       off_peak_electricity_price_per_kwh_cents = 50, off_peak_start_hour = 23, off_peak_end_hour = 7
  WHERE id = $1`, fixture.chargerID); err != nil {
 			t.Fatalf("configure tariff: %v", err)
 		}
@@ -218,16 +224,21 @@ func TestChargerReceiptFactTimeDrivesTimeOfUseBilling(t *testing.T) {
 		return completed.AmountCent
 	}
 
-	day := time.Now().UTC().Truncate(24 * time.Hour)
-	offPeak := charge(t, day.Add(3*time.Hour), "offpeak")
-	peak := charge(t, day.Add(12*time.Hour), "peak")
+	now := time.Now().In(billing)
+	night := time.Date(now.Year(), now.Month(), now.Day(), 23, 30, 0, 0, billing)
+	midday := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, billing)
+
+	offPeak := charge(t, night, "offpeak")
+	peak := charge(t, midday, "peak")
 
 	// 1 kWh at 50 cents off-peak and at 120 cents in the peak window; the service fee is zero.
 	if offPeak != 50 {
-		t.Fatalf("off-peak charge cost %d cents, want 50 (the fact time must pick the cheap window)", offPeak)
+		t.Fatalf("off-peak charge cost %d cents, want 50 (the local fact time must pick the cheap window)", offPeak)
 	}
+	// 12:00 local is 04:00 UTC: inside a 00:00-08:00 UTC window, outside a 23:00-07:00 local one.
+	// Billing the window in UTC used to charge this one at the off-peak price.
 	if peak != 120 {
-		t.Fatalf("peak charge cost %d cents, want 120", peak)
+		t.Fatalf("peak charge cost %d cents, want 120 (the window is local, not UTC)", peak)
 	}
 }
 

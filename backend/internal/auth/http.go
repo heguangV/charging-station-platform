@@ -18,6 +18,7 @@ const bearerPrefix = "Bearer "
 // Registry codes for SMS verification outcomes (docs/database-api.md §1.10).
 const (
 	codeSMSCodeInvalid      = 20 // CODE_INVALID
+	codeAlreadyExists       = 5  // ALREADY_EXISTS
 	codeExternalServiceDown = 12 // EXTERNAL_SERVICE_UNAVAILABLE
 )
 
@@ -90,6 +91,7 @@ func (h *Handlers) Register(server interface {
 	server.Register("/api/v1/auth/user/sms/code", h.RequestSMSCode)
 	server.Register("/api/v1/auth/user/login/sms", h.SMSLogin)
 	server.Register("/api/v1/auth/user/login", h.UserLogin)
+	server.Register("/api/v1/auth/user/register", h.RegisterUser)
 	server.Register("/api/v1/auth/admin/login", h.AdminLogin)
 	server.Register("/api/v1/auth/logout", h.Logout)
 	server.Register("/api/v1/me", h.RequireIdentity(h.meRoutes))
@@ -162,6 +164,45 @@ func (h *Handlers) SMSLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // UserLogin handles POST /api/v1/auth/user/login.
+// registerUserRequest is the registration body. username is optional: the SMS
+// login path names an account from its phone, and registration keeps that shape
+// when the caller does not supply a name.
+type registerUserRequest struct {
+	Username string `json:"username"`
+	Phone    string `json:"phone"`
+	Password string `json:"password"`
+	SmsCode  string `json:"smsCode"`
+	DeviceID string `json:"deviceId"`
+}
+
+// RegisterUser creates an account and returns a session (201). The account is
+// created only after the SMS code proves the caller owns the phone, and a phone
+// that already has an account is 409 rather than taken over.
+func (h *Handlers) RegisterUser(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	body, ok := decodeJSONBody(w, r, &registerUserRequest{})
+	if !ok {
+		return
+	}
+	request := body.(*registerUserRequest)
+
+	result, err := h.service.Register(r.Context(), request.Username, request.Phone, request.Password, request.SmsCode)
+	if err != nil {
+		writeAuthError(w, r, err)
+		return
+	}
+
+	httpapi.WriteJSON(w, http.StatusCreated, httpapi.Response{
+		Success: true,
+		Code:    httpapi.CodeOK,
+		Message: "ok",
+		Data:    newLoginResponse(result),
+	})
+}
+
 func (h *Handlers) UserLogin(w http.ResponseWriter, r *http.Request) {
 	h.login(w, r, h.service.Login)
 }
@@ -488,6 +529,10 @@ func writeAuthError(w http.ResponseWriter, r *http.Request, err error) {
 		httpapi.WriteError(w, r, http.StatusServiceUnavailable, codeExternalServiceDown, "no sms provider is configured", nil)
 	case errors.Is(err, ErrInvalidCredentials):
 		httpapi.WriteError(w, r, http.StatusUnauthorized, httpapi.CodeUnauthorized, "invalid credentials", nil)
+	case errors.Is(err, ErrAccountExists):
+		httpapi.WriteError(w, r, http.StatusConflict, codeAlreadyExists, "phone is already registered", nil)
+	case errors.Is(err, ErrPasswordLength):
+		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "password must be 8..128 characters", nil)
 	case errors.Is(err, ErrUserFrozen):
 		httpapi.WriteError(w, r, http.StatusForbidden, httpapi.CodeUserFrozen, "account is disabled", nil)
 	case errors.Is(err, ErrUnauthorized):

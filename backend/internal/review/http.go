@@ -49,9 +49,10 @@ func (h *Handlers) Register(server interface {
 }) {
 	server.Register("/api/v1/orders/{orderNo}/review", h.auth.RequireIdentity(h.reviewRoutes))
 	server.Register("/api/v1/stations/{stationId}/reviews", h.auth.RequireIdentity(h.wall))
-	server.Register("/api/v1/orders/{orderNo}/appeal", h.auth.RequireIdentity(h.createAppeal))
+	server.Register("/api/v1/orders/{orderNo}/appeal", h.auth.RequireIdentity(h.appealRoutes))
 	server.Register("/api/v1/admin/appeals", h.auth.RequireRole(auth.RoleAdmin, h.adminListAppeals))
 	server.Register("/api/v1/admin/appeals/{appealId}/approve", h.admin.RequireAdminWrite(h.adminApprove))
+	server.Register("/api/v1/admin/appeals/{appealId}/reject", h.admin.RequireAdminWrite(h.adminReject))
 }
 
 type reviewRequest struct {
@@ -148,11 +149,43 @@ func (h *Handlers) wall(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// createAppeal handles POST /api/v1/orders/{orderNo}/appeal.
-func (h *Handlers) createAppeal(w http.ResponseWriter, r *http.Request) {
-	if !requireMethodReview(w, r, http.MethodPost) {
+// appealRoutes dispatches GET (the caller's own appeal) and POST (create) on
+// the order appeal resource, mirroring the review resource.
+func (h *Handlers) appealRoutes(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.getAppeal(w, r)
+	case http.MethodPost:
+		h.createAppeal(w, r)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		httpapi.WriteError(w, r, http.StatusMethodNotAllowed, httpapi.CodeMethodNotAllowed, "method not allowed", nil)
+	}
+}
+
+// getAppeal handles GET /api/v1/orders/{orderNo}/appeal: the caller's own
+// appeal, so the app can show 审核中/已通过/已驳回 instead of offering the form
+// again. No appeal yet is a 404, the same shape the review resource uses.
+func (h *Handlers) getAppeal(w http.ResponseWriter, r *http.Request) {
+	identity, ok := identityFromReview(w, r)
+	if !ok {
 		return
 	}
+	view, err := h.service.GetAppeal(r.Context(), identity.ID, r.PathValue("orderNo"))
+	if err != nil {
+		writeReviewError(w, r, err)
+		return
+	}
+	httpapi.WriteJSON(w, http.StatusOK, httpapi.Response{
+		Success: true,
+		Code:    httpapi.CodeOK,
+		Message: "ok",
+		Data:    view,
+	})
+}
+
+// createAppeal handles POST /api/v1/orders/{orderNo}/appeal.
+func (h *Handlers) createAppeal(w http.ResponseWriter, r *http.Request) {
 	identity, ok := identityFromReview(w, r)
 	if !ok {
 		return
@@ -217,6 +250,44 @@ func (h *Handlers) adminApprove(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.Approve(r.Context(), appealID, identity.ID); err != nil {
+		writeReviewError(w, r, err)
+		return
+	}
+	view, err := h.service.store.GetAppeal(r.Context(), appealID)
+	if err != nil {
+		writeReviewError(w, r, err)
+		return
+	}
+	httpapi.WriteJSON(w, http.StatusOK, httpapi.Response{
+		Success: true,
+		Code:    httpapi.CodeOK,
+		Message: "ok",
+		Data:    view,
+	})
+}
+
+// adminReject handles POST /api/v1/admin/appeals/{appealId}/reject: the appeal is dismissed with the
+// operator's reason, and the order and the wallet stay untouched (unlike approval, which cancels
+// the order and refunds). Repeating the decision is a no-op that returns the current state.
+func (h *Handlers) adminReject(w http.ResponseWriter, r *http.Request) {
+	if !requireMethodReview(w, r, http.MethodPost) {
+		return
+	}
+	identity, ok := identityFromReview(w, r)
+	if !ok {
+		return
+	}
+	appealID, err := strconv.ParseInt(r.PathValue("appealId"), 10, 64)
+	if err != nil || appealID < 1 {
+		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid appeal id", nil)
+		return
+	}
+	var request appealRequest
+	if err := decodeJSONReview(w, r, &request); err != nil {
+		return
+	}
+
+	if err := h.service.Reject(r.Context(), appealID, identity.ID, request.Reason); err != nil {
 		writeReviewError(w, r, err)
 		return
 	}

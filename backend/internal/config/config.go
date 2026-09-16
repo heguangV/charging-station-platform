@@ -32,22 +32,46 @@ const (
 	envSMSSenderURL         = "NCS_SMS_SENDER_URL"
 	envSMSSenderToken       = "NCS_SMS_SENDER_TOKEN"
 	envOrderExpireAfter     = "NCS_ORDER_EXPIRE_AFTER"
+	envBillingTimezone      = "NCS_BILLING_TZ"
 	envChargerGatewayToken  = "NCS_CHARGER_GATEWAY_TOKEN"
 	envFactTimeSkew         = "NCS_CHARGER_EVENT_MAX_FUTURE_SKEW"
 	envStopRecoveryAttempts = "NCS_STOP_RECOVERY_MAX_ATTEMPTS"
 	envStopRecoveryBackoff  = "NCS_STOP_RECOVERY_BACKOFF"
+	envMapServerKey         = "TENCENT_MAP_SERVER_KEY"
+	envMapBaseURL           = "TENCENT_MAP_BASE_URL"
+	envLLMProvider          = "AI_PROVIDER"
+	envLLMModel             = "AI_MODEL"
+	envLLMBaseURL           = "AI_BASE_URL"
+	envLLMAPIKey            = "AI_API_KEY"
+	envLLMTimeoutMS         = "AI_TIMEOUT_MS"
 	sessionMinIdleTTL       = time.Second
 	sessionMinAbsoluteTTL   = 168 * time.Hour // A-03 review: the absolute session window may not be shortened below seven days
 	loginMinRateLimit       = 1
 	loginMinRateWindow      = time.Second
 	defaultOrderExpireAfter = 15 * time.Minute // UC-U-07: 15-minute reservation window
+	// defaultBillingTimezone is the wall-clock timezone whose hours define the
+	// off-peak tariff window. The fleet bills Chinese operators, whose off-peak
+	// window is local night (23:00-07:00); pricing those hours against UTC put the
+	// discount in the middle of the local day.
+	defaultBillingTimezone = "Asia/Shanghai"
 	// BE-I-02 receipt and STOP recovery bounds. The skew is the frozen 5-minute
 	// default; the recovery limit is deliberately conservative, because every
 	// re-send talks to a device that has already refused one command.
 	defaultFactTimeSkew         = 5 * time.Minute
 	defaultStopRecoveryAttempts = 3
 	defaultStopRecoveryBackoff  = 5 * time.Minute
+	defaultLLMTimeoutMS         = 15000
 )
+
+type AssistantConfig struct {
+	MapServerKey string
+	MapBaseURL   string
+	LLMProvider  string
+	LLMModel     string
+	LLMBaseURL   string
+	LLMAPIKey    string
+	LLMTimeout   time.Duration
+}
 
 // Config contains process-level settings for the API service.
 //
@@ -72,6 +96,10 @@ type Config struct {
 	// OrderExpireAfter bounds how long an unstarted CREATED order may hold
 	// its charger before the janitor expires it.
 	OrderExpireAfter time.Duration
+	// BillingLocation is the wall-clock timezone the off-peak tariff window is
+	// expressed in (NCS_BILLING_TZ, default Asia/Shanghai). Billing itself stays
+	// in UTC instants; only the window lookup uses these wall-clock hours.
+	BillingLocation *time.Location
 	// SMSSenderURL and SMSSenderToken configure the HTTP SMS gateway used
 	// when simulated delivery is off (see auth.SMSSender).
 	SMSSenderURL   string
@@ -89,6 +117,7 @@ type Config struct {
 	// and how long the sweep waits between two of them.
 	StopRecoveryAttempts int
 	StopRecoveryBackoff  time.Duration
+	Assistant            AssistantConfig
 }
 
 // Load reads configuration from the process environment and applies safe
@@ -122,6 +151,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	billingLocation, err := locationFromEnv(envBillingTimezone, defaultBillingTimezone)
+	if err != nil {
+		return Config{}, err
+	}
 	factTimeSkew, err := durationFromEnv(envFactTimeSkew, defaultFactTimeSkew)
 	if err != nil {
 		return Config{}, err
@@ -133,6 +166,13 @@ func Load() (Config, error) {
 	stopRecoveryAttempts, err := intFromEnv(envStopRecoveryAttempts, defaultStopRecoveryAttempts)
 	if err != nil {
 		return Config{}, err
+	}
+	llmTimeoutMS, err := intFromEnv(envLLMTimeoutMS, defaultLLMTimeoutMS)
+	if err != nil {
+		return Config{}, err
+	}
+	if llmTimeoutMS < 1 {
+		return Config{}, fmt.Errorf("invalid %s=%d: must be at least 1", envLLMTimeoutMS, llmTimeoutMS)
 	}
 	if stopRecoveryAttempts < 1 {
 		return Config{}, fmt.Errorf("invalid %s=%d: must be at least 1", envStopRecoveryAttempts, stopRecoveryAttempts)
@@ -177,6 +217,7 @@ func Load() (Config, error) {
 		LoginRateWindow:  rateWindow,
 		SMSMock:          smsMockFromEnv(environment),
 		OrderExpireAfter: expireAfter,
+		BillingLocation:  billingLocation,
 		SMSSenderURL:     strings.TrimSpace(os.Getenv(envSMSSenderURL)),
 		SMSSenderToken:   strings.TrimSpace(os.Getenv(envSMSSenderToken)),
 		// No default: an empty token keeps the receipt endpoint closed and the
@@ -186,6 +227,15 @@ func Load() (Config, error) {
 		FactTimeSkew:         factTimeSkew,
 		StopRecoveryAttempts: stopRecoveryAttempts,
 		StopRecoveryBackoff:  stopRecoveryBackoff,
+		Assistant: AssistantConfig{
+			MapServerKey: strings.TrimSpace(os.Getenv(envMapServerKey)),
+			MapBaseURL:   strings.TrimSpace(os.Getenv(envMapBaseURL)),
+			LLMProvider:  strings.TrimSpace(os.Getenv(envLLMProvider)),
+			LLMModel:     strings.TrimSpace(os.Getenv(envLLMModel)),
+			LLMBaseURL:   strings.TrimSpace(os.Getenv(envLLMBaseURL)),
+			LLMAPIKey:    strings.TrimSpace(os.Getenv(envLLMAPIKey)),
+			LLMTimeout:   time.Duration(llmTimeoutMS) * time.Millisecond,
+		},
 	}, nil
 }
 
@@ -203,6 +253,22 @@ func valueOrDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// locationFromEnv resolves a timezone name (IANA, e.g. Asia/Shanghai) into a
+// location. A missing value keeps the product default; a name the runtime cannot
+// resolve is a hard error, because silently falling back to UTC would move the
+// off-peak window by the deployment's offset.
+func locationFromEnv(name string, fallback string) (*time.Location, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		value = fallback
+	}
+	location, err := time.LoadLocation(value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s=%q: %w", name, value, err)
+	}
+	return location, nil
 }
 
 func durationFromEnv(name string, fallback time.Duration) (time.Duration, error) {

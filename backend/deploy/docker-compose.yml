@@ -9,7 +9,7 @@
 #   docker compose up -d
 #   docker compose --profile mock up -d mock-gateway     # 开发用模拟设备网关
 #
-# 迁移：api 容器启动时由进程内的迁移 runner 执行（0001..0007），无需手工 psql。
+# 迁移：api 容器启动时由进程内的迁移 runner 执行（0001..0011），无需手工 psql。
 
 name: ncs-backend
 
@@ -57,6 +57,7 @@ services:
     restart: "no"
     environment:
       NCS_POSTGRES_DSN: postgres://${NCS_DB_USER:-ncs}:${NCS_DB_PASSWORD}@postgres:5432/${NCS_DB_NAME:-ncs_dev}?sslmode=disable
+      NCS_CHARGER_GATEWAY_TOKEN: ${NCS_CHARGER_GATEWAY_TOKEN:?set NCS_CHARGER_GATEWAY_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy
@@ -140,6 +141,12 @@ services:
     restart: unless-stopped
     environment:
       NCS_MOCK_GATEWAY_ADDR: 0.0.0.0:8090
+      NCS_MOCK_GATEWAY_RECEIPTS: ${NCS_MOCK_GATEWAY_RECEIPTS:-true}
+      NCS_MOCK_GATEWAY_API_URL: http://api:8080
+      NCS_CHARGER_GATEWAY_TOKEN: ${NCS_CHARGER_GATEWAY_TOKEN:?set NCS_CHARGER_GATEWAY_TOKEN}
+      NCS_MOCK_GATEWAY_ENERGY_WH: ${NCS_MOCK_GATEWAY_ENERGY_WH:-1000}
+      NCS_MOCK_GATEWAY_METER_INTERVAL: ${NCS_MOCK_GATEWAY_METER_INTERVAL:-3s}
+      NCS_MOCK_GATEWAY_CHARGE_SECONDS: ${NCS_MOCK_GATEWAY_CHARGE_SECONDS:-60}
     expose:
       - "8090"
 

@@ -21,17 +21,63 @@ import (
 
 // fakeStore records admin commands and returns canned results.
 type fakeStore struct {
-	createResult StationRecord
-	createErr    error
-	stations     StationPage
-	restartCmd   Command
-	restartErr   error
-	users        UserPage
-	orders       OrderPage
-	chargers     ChargerPage
-	restarts     []RestartCommand
-	tariffErr    error
-	releaseErr   error
+	orderFilter          AdminOrderFilter
+	orderFilterSet       bool
+	command              DeviceCommand
+	commandErr           error
+	commandID            string
+	commandLookup        bool
+	stationStatus        StationRecord
+	stationStatusErr     error
+	stationStatusCommand ChangeStationStatusCommand
+	stationStatusCalled  bool
+	chargerStatus        ChargerStatusRecord
+	chargerStatusErr     error
+	chargerStatusCommand ChangeChargerStatusCommand
+	chargerStatusCalled  bool
+	createResult         StationRecord
+	createErr            error
+	stations             StationPage
+	restartCmd           Command
+	restartErr           error
+	users                UserPage
+	orders               OrderPage
+	chargers             ChargerPage
+	restarts             []RestartCommand
+	tariffErr            error
+	releaseErr           error
+
+	// Station editing and the fleet tariff.
+	updateResult    StationRecord
+	updateErr       error
+	updateCommands  []UpdateStationCommand
+	globalTariff    []GlobalTariff
+	globalTariffErr error
+	globalResult    GlobalTariffResult
+	globalErr       error
+	globalUpdates   []GlobalTariffUpdate
+	batchResult     ChargerBatchResult
+	batchErr        error
+	batchCommands   []CreateChargersCommand
+
+	// Manual user archiving.
+	userResult        UserRecord
+	userErr           error
+	userCommands      []CreateUserCommand
+	userBatchResult   UserBatchResult
+	userBatchErr      error
+	userBatchCommands []CreateUsersCommand
+
+	// The statistics reads. Their canned results are separate from the page
+	// fixtures because an aggregate is not a page: a test that configured one
+	// would otherwise silently configure the other.
+	revenueTotals  RevenueTotals
+	revenueBuckets []RevenueBucket
+	chargerCounts  ChargerCounts
+	fleetCounts    FleetCounts
+	statsErr       error
+	revenueQueries []RevenueQuery
+	stationFilters []int64
 }
 
 func (f *fakeStore) CreateStation(context.Context, CreateStationCommand) (StationRecord, error) {
@@ -50,13 +96,90 @@ func (f *fakeStore) ListUsers(context.Context, UserFilter) (UserPage, error) {
 	return f.users, nil
 }
 
-func (f *fakeStore) ListOrders(context.Context, AdminOrderFilter) (OrderPage, error) {
+func (f *fakeStore) ListOrders(_ context.Context, filter AdminOrderFilter) (OrderPage, error) {
+	f.orderFilter = filter
+	f.orderFilterSet = true
 	return f.orders, nil
+}
+
+func (f *fakeStore) ChangeStationStatus(_ context.Context, command ChangeStationStatusCommand) (StationRecord, error) {
+	f.stationStatusCommand = command
+	f.stationStatusCalled = true
+	if f.stationStatusErr != nil {
+		return StationRecord{}, f.stationStatusErr
+	}
+	return f.stationStatus, nil
+}
+
+func (f *fakeStore) ChangeChargerStatus(_ context.Context, command ChangeChargerStatusCommand) (ChargerStatusRecord, error) {
+	f.chargerStatusCommand = command
+	f.chargerStatusCalled = true
+	if f.chargerStatusErr != nil {
+		return ChargerStatusRecord{}, f.chargerStatusErr
+	}
+	return f.chargerStatus, nil
+}
+
+func (f *fakeStore) FindDeviceCommand(_ context.Context, commandID string) (DeviceCommand, error) {
+	f.commandID = commandID
+	f.commandLookup = true
+	if f.commandErr != nil {
+		return DeviceCommand{}, f.commandErr
+	}
+	return f.command, nil
 }
 
 func (f *fakeStore) RestartCharger(_ context.Context, command RestartCommand) (Command, error) {
 	f.restarts = append(f.restarts, command)
 	return f.restartCmd, f.restartErr
+}
+
+func (f *fakeStore) RevenueTotals(_ context.Context, query RevenueQuery) (RevenueTotals, error) {
+	f.revenueQueries = append(f.revenueQueries, query)
+	return f.revenueTotals, f.statsErr
+}
+
+func (f *fakeStore) RevenueBuckets(_ context.Context, query RevenueQuery) ([]RevenueBucket, error) {
+	f.revenueQueries = append(f.revenueQueries, query)
+	return f.revenueBuckets, f.statsErr
+}
+
+func (f *fakeStore) ChargerCounts(_ context.Context, stationID int64) (ChargerCounts, error) {
+	f.stationFilters = append(f.stationFilters, stationID)
+	return f.chargerCounts, f.statsErr
+}
+
+func (f *fakeStore) FleetCounts(context.Context) (FleetCounts, error) {
+	return f.fleetCounts, f.statsErr
+}
+
+func (f *fakeStore) CreateChargers(_ context.Context, command CreateChargersCommand) (ChargerBatchResult, error) {
+	f.batchCommands = append(f.batchCommands, command)
+	return f.batchResult, f.batchErr
+}
+
+func (f *fakeStore) CreateUser(_ context.Context, command CreateUserCommand) (UserRecord, error) {
+	f.userCommands = append(f.userCommands, command)
+	return f.userResult, f.userErr
+}
+
+func (f *fakeStore) CreateUsers(_ context.Context, command CreateUsersCommand) (UserBatchResult, error) {
+	f.userBatchCommands = append(f.userBatchCommands, command)
+	return f.userBatchResult, f.userBatchErr
+}
+
+func (f *fakeStore) UpdateStation(_ context.Context, command UpdateStationCommand) (StationRecord, error) {
+	f.updateCommands = append(f.updateCommands, command)
+	return f.updateResult, f.updateErr
+}
+
+func (f *fakeStore) GlobalTariff(context.Context) ([]GlobalTariff, error) {
+	return f.globalTariff, f.globalTariffErr
+}
+
+func (f *fakeStore) UpdateGlobalTariff(_ context.Context, update GlobalTariffUpdate) (GlobalTariffResult, error) {
+	f.globalUpdates = append(f.globalUpdates, update)
+	return f.globalResult, f.globalErr
 }
 
 func (f *fakeStore) GetTariff(context.Context, int64) (TariffView, error) {
@@ -221,14 +344,14 @@ func TestAdminRestartChargerRoleAndValidation(t *testing.T) {
 	}
 
 	operator := newFixture(t, adminIdentity(auth.AdminRoleOperator), true)
-	operator.store.restartCmd = Command{CommandNo: "CMD20260915000000deadbeef", Status: CommandPending}
+	operator.store.restartCmd = Command{CommandID: "CMD20260915000000deadbeef", Status: CommandPending}
 	recorder, payload = do(t, operator.server.Handler(), http.MethodPost, "/api/v1/admin/chargers/5/restart",
 		`{"reason":"例行维护"}`, map[string]string{"Idempotency-Key": idemKey})
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("operator restart status = %d body = %s", recorder.Code, recorder.Body.String())
 	}
 	data := payload["data"].(map[string]any)
-	if data["commandNo"] == "" || data["status"] != CommandPending {
+	if data["commandId"] == "" || data["status"] != CommandPending {
 		t.Fatalf("command = %#v", data)
 	}
 	if operator.store.restarts[0].ChargerID != 5 || operator.store.restarts[0].Reason != "例行维护" {
@@ -410,5 +533,208 @@ func TestAuditQueryEndpoint(t *testing.T) {
 	}
 	if data["meta"].(map[string]any)["total"].(float64) != 1 {
 		t.Fatalf("audit meta = %#v", data["meta"])
+	}
+}
+
+// TestAdminOrderListFiltersByUser covers the userId filter the management UI
+// needs when it opens a user's detail page: it must reach the store, and a
+// malformed or non-positive value must be a 400 rather than a silent full list.
+func TestAdminOrderListFiltersByUser(t *testing.T) {
+	f := newFixture(t, adminIdentity(auth.AdminRoleSuper), true)
+	f.store.orders = OrderPage{Items: []order.Order{{OrderNo: "ORD20260914120000aaaa", UserID: 42, Status: "COMPLETED"}},
+		Meta: order.PageMeta{Page: 1, PageSize: 20, Total: 1}}
+
+	recorder, _ := do(t, f.server.Handler(), http.MethodGet, "/api/v1/admin/orders?userId=42", "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !f.store.orderFilterSet || f.store.orderFilter.UserID != 42 {
+		t.Fatalf("order filter = %#v (set=%v), want UserID 42", f.store.orderFilter, f.store.orderFilterSet)
+	}
+
+	for _, raw := range []string{"0", "-3", "abc", "4.2"} {
+		recorder, payload := do(t, f.server.Handler(), http.MethodGet, "/api/v1/admin/orders?userId="+raw, "", nil)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("userId=%s status = %d body = %s", raw, recorder.Code, recorder.Body.String())
+		}
+		if payload["code"].(float64) != httpapi.CodeInvalidArgument {
+			t.Fatalf("userId=%s code = %v", raw, payload["code"])
+		}
+	}
+
+	// 未提供 userId 时仍然列出全部（0 表示不过滤），并确实到达了服务层。
+	f.store.orderFilterSet = false
+	recorder, _ = do(t, f.server.Handler(), http.MethodGet, "/api/v1/admin/orders", "", nil)
+	if recorder.Code != http.StatusOK || !f.store.orderFilterSet || f.store.orderFilter.UserID != 0 {
+		t.Fatalf("no-filter status = %d filter = %#v", recorder.Code, f.store.orderFilter)
+	}
+}
+
+// TestGetDeviceCommand covers the command-status lookup: an administrator (any
+// role, including the read-only AUDITOR) can follow a command to its recorded
+// outcome, an unknown id is a 404 rather than an empty 200, a plain user is
+// refused, and the id reaches the store unchanged.
+func TestGetDeviceCommand(t *testing.T) {
+	f := newFixture(t, adminIdentity(auth.AdminRoleAuditor), true)
+	f.store.command = DeviceCommand{
+		CommandID:  "CMD20260915000000deadbeef",
+		ChargerID:  5,
+		OrderNo:    "ORD20260914120000aaaa",
+		Action:     "START",
+		Result:     "SUCCESS",
+		Applied:    true,
+		RecordedAt: "2026-09-15T00:00:00Z",
+	}
+
+	recorder, payload := do(t, f.server.Handler(), http.MethodGet,
+		"/api/v1/admin/device-commands/CMD20260915000000deadbeef", "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !f.store.commandLookup || f.store.commandID != "CMD20260915000000deadbeef" {
+		t.Fatalf("store lookup = %q (called=%v)", f.store.commandID, f.store.commandLookup)
+	}
+	data := payload["data"].(map[string]any)
+	if data["commandId"] != "CMD20260915000000deadbeef" || data["result"] != "SUCCESS" || data["applied"] != true {
+		t.Fatalf("device command = %#v", data)
+	}
+	if _, ok := data["commandNo"]; ok {
+		t.Fatalf("response still carries the old name: %#v", data)
+	}
+
+	f.store.commandErr = ErrDeviceCommandNotFound
+	recorder, payload = do(t, f.server.Handler(), http.MethodGet,
+		"/api/v1/admin/device-commands/CMD20260915000000ffffffff", "", nil)
+	if recorder.Code != http.StatusNotFound || payload["code"].(float64) != httpapi.CodeResourceNotFound {
+		t.Fatalf("missing command: status = %d code = %v", recorder.Code, payload["code"])
+	}
+
+	// A user session must not reach an admin endpoint at all.
+	user := newFixture(t, auth.Identity{ID: 7, Role: auth.RoleUser, Status: auth.StatusActive}, true)
+	recorder, _ = do(t, user.server.Handler(), http.MethodGet, "/api/v1/admin/device-commands/CMD1", "", nil)
+	if recorder.Code != http.StatusForbidden && recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("user status = %d, want 401/403", recorder.Code)
+	}
+}
+
+// TestChangeStationStatus covers the station status endpoint: the write role
+// reaches the store, an unregistered status is a 400 before any store call, an
+// illegal transition surfaces as 409, an unknown station as 404, and the
+// read-only AUDITOR role cannot write at all.
+func TestChangeStationStatus(t *testing.T) {
+	f := newFixture(t, adminIdentity(auth.AdminRoleOperator), true)
+	f.store.stationStatus = StationRecord{ID: 9, Code: "ST-9", Name: "站9", Status: station.StatusClosed}
+
+	recorder, payload := do(t, f.server.Handler(), http.MethodPut, "/api/v1/admin/stations/9/status",
+		`{"status":"CLOSED"}`, nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !f.store.stationStatusCalled || f.store.stationStatusCommand.StationID != 9 || f.store.stationStatusCommand.Status != station.StatusClosed {
+		t.Fatalf("store command = %#v (called=%v)", f.store.stationStatusCommand, f.store.stationStatusCalled)
+	}
+	if payload["data"].(map[string]any)["status"] != station.StatusClosed {
+		t.Fatalf("data = %#v", payload["data"])
+	}
+
+	// An unregistered status never reaches the store.
+	f.store.stationStatusCalled = false
+	recorder, payload = do(t, f.server.Handler(), http.MethodPut, "/api/v1/admin/stations/9/status",
+		`{"status":"MAINTENANCE"}`, nil)
+	if recorder.Code != http.StatusBadRequest || payload["code"].(float64) != httpapi.CodeInvalidArgument {
+		t.Fatalf("unknown status: status = %d payload = %#v", recorder.Code, payload)
+	}
+	if f.store.stationStatusCalled {
+		t.Fatal("an unregistered status reached the store")
+	}
+
+	recorder, _ = do(t, f.server.Handler(), http.MethodPut, "/api/v1/admin/stations/9/status", `{}`, nil)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("empty status = %d", recorder.Code)
+	}
+	recorder, _ = do(t, f.server.Handler(), http.MethodPut, "/api/v1/admin/stations/abc/status", `{"status":"CLOSED"}`, nil)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("bad id = %d", recorder.Code)
+	}
+
+	// The transition itself is decided by the store; the handler must not turn
+	// the conflict into a success or a 500.
+	f.store.stationStatusErr = ErrInvalidStateTransition
+	recorder, _ = do(t, f.server.Handler(), http.MethodPut, "/api/v1/admin/stations/9/status", `{"status":"CLOSED"}`, nil)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("illegal transition = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	f.store.stationStatusErr = ErrStationNotFound
+	recorder, _ = do(t, f.server.Handler(), http.MethodPut, "/api/v1/admin/stations/9/status", `{"status":"CLOSED"}`, nil)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("missing station = %d", recorder.Code)
+	}
+	f.store.stationStatusErr = nil
+
+	// AUDITOR is an administrator but read-only.
+	auditor := newFixture(t, adminIdentity(auth.AdminRoleAuditor), true)
+	recorder, _ = do(t, auditor.server.Handler(), http.MethodPut, "/api/v1/admin/stations/9/status", `{"status":"CLOSED"}`, nil)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("auditor write = %d, want 403", recorder.Code)
+	}
+}
+
+// TestChangeChargerStatus is the charger half, including the in-use rejection
+// that keeps a charger held by a live order out of the operator's reach.
+func TestChangeChargerStatus(t *testing.T) {
+	f := newFixture(t, adminIdentity(auth.AdminRoleSuper), true)
+	f.store.chargerStatus = ChargerStatusRecord{ChargerID: 5, ChargerCode: "C01", Status: station.ChargerStatusDisabled}
+
+	recorder, payload := do(t, f.server.Handler(), http.MethodPut, "/api/v1/admin/chargers/5/status",
+		`{"status":"DISABLED"}`, nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	if f.store.chargerStatusCommand.ChargerID != 5 || f.store.chargerStatusCommand.Status != station.ChargerStatusDisabled {
+		t.Fatalf("store command = %#v", f.store.chargerStatusCommand)
+	}
+	if payload["data"].(map[string]any)["chargerId"].(float64) != 5 {
+		t.Fatalf("data = %#v", payload["data"])
+	}
+
+	f.store.chargerStatusErr = ErrInvalidStateTransition
+	recorder, _ = do(t, f.server.Handler(), http.MethodPut, "/api/v1/admin/chargers/5/status", `{"status":"IDLE"}`, nil)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("illegal transition = %d", recorder.Code)
+	}
+	f.store.chargerStatusErr = nil
+
+	recorder, _ = do(t, f.server.Handler(), http.MethodPut, "/api/v1/admin/chargers/5/status", `{"status":"BUSY"}`, nil)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unknown status = %d", recorder.Code)
+	}
+	recorder, _ = do(t, f.server.Handler(), http.MethodGet, "/api/v1/admin/chargers/5/status", "", nil)
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET = %d, want 405", recorder.Code)
+	}
+}
+
+// TestCreateStationResponseUsesContractKeys guards the fix that came out of the
+// status-change work: StationRecord had no JSON tags, so POST /admin/stations
+// answered with Go field names (ID, Code, Status) while the operation is
+// registered as returning the Station schema, whose properties are camelCase.
+func TestCreateStationResponseUsesContractKeys(t *testing.T) {
+	f := newFixture(t, adminIdentity(auth.AdminRoleSuper), true)
+	f.store.createResult = StationRecord{ID: 3, Code: "ST-3", Name: "站3", Status: station.StatusOpen}
+
+	recorder, payload := do(t, f.server.Handler(), http.MethodPost, "/api/v1/admin/stations",
+		`{"code":"ST-3","name":"站3","address":"路1","latitudeE6":31230000,"longitudeE6":121470000}`,
+		map[string]string{"Idempotency-Key": idemKey})
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	data := payload["data"].(map[string]any)
+	if data["id"].(float64) != 3 || data["code"] != "ST-3" || data["status"] != station.StatusOpen {
+		t.Fatalf("data = %#v", data)
+	}
+	for _, wrong := range []string{"ID", "Code", "Status", "LatitudeE6"} {
+		if _, ok := data[wrong]; ok {
+			t.Fatalf("response still carries the Go-style key %q: %#v", wrong, data)
+		}
 	}
 }

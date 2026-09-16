@@ -25,6 +25,8 @@ const chargerEventToken = "gateway-service-token-01"
 // receiptStore records the receipts that reach the order service and lets a test
 // decide what the service answers.
 type receiptStore struct {
+	progress    []ConfirmProgressCommand
+	progressErr error
 	*fakeStore
 	starts      []ConfirmStartCommand
 	stops       []ConfirmStopCommand
@@ -37,6 +39,14 @@ type receiptStore struct {
 func (s *receiptStore) ConfirmStart(_ context.Context, command ConfirmStartCommand) (Order, error) {
 	s.starts = append(s.starts, command)
 	return s.startResult, s.startErr
+}
+
+func (s *receiptStore) ConfirmProgress(_ context.Context, command ConfirmProgressCommand) (Order, error) {
+	s.progress = append(s.progress, command)
+	if s.progressErr != nil {
+		return Order{}, s.progressErr
+	}
+	return Order{OrderNo: command.OrderNo, Status: StatusCharging, MeteredEnergyWh: &command.EnergyWh}, nil
 }
 
 func (s *receiptStore) ConfirmStop(_ context.Context, command ConfirmStopCommand) (Order, error) {

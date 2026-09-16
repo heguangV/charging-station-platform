@@ -18,18 +18,43 @@
 # Environment (defaults shown):
 #   NCS_REDIS_ADDR=127.0.0.1:6379     NCS_REDIS_DB=14
 #   NCS_HTTP_ADDR=127.0.0.1:8080      NCS_CHARGER_GATEWAY_TOKEN=dev-gateway-token
+#   NCS_MOCK_GATEWAY_RECEIPTS=true     NCS_MOCK_GATEWAY_API_URL=http://127.0.0.1:8080
+#   NCS_MOCK_GATEWAY_ENERGY_WH=1000    NCS_MOCK_GATEWAY_METER_INTERVAL=3s
+#   NCS_MOCK_GATEWAY_CHARGE_SECONDS=60
+#   NCS_API_METRICS_ADDR=127.0.0.1:9090 NCS_WORKER_METRICS_ADDR=127.0.0.1:9091
+#   NCS_PUBLISHER_METRICS_ADDR=127.0.0.1:9092
 #   NCS_STATIC_ROOT=apps/dashboard    (only needed with --with-nginx)
+#   NCS_ENV_FILE=backend/.env.local   (map/model credentials; loaded before defaults)
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 backend_dir="$(cd "${script_dir}/.." && pwd)"
 repo_root="$(cd "${backend_dir}/.." && pwd)"
 
+# Keep local credentials out of source control while making restarts reproducible. Previously the
+# assistant only worked when the shell that launched this script happened to inherit the map/model
+# variables; a restart from another terminal silently dropped both providers.
+env_file="${NCS_ENV_FILE:-${backend_dir}/.env.local}"
+if [[ -f "${env_file}" ]]; then
+    set -a
+    # shellcheck disable=SC1090 -- NCS_ENV_FILE is an explicit local operator setting.
+    source "${env_file}"
+    set +a
+fi
+
 : "${NCS_POSTGRES_DSN:?set NCS_POSTGRES_DSN to a disposable database}"
 redis_addr="${NCS_REDIS_ADDR:-127.0.0.1:6379}"
 redis_db="${NCS_REDIS_DB:-14}"
 http_addr="${NCS_HTTP_ADDR:-127.0.0.1:8080}"
 gateway_token="${NCS_CHARGER_GATEWAY_TOKEN:-dev-gateway-token}"
+mock_receipts="${NCS_MOCK_GATEWAY_RECEIPTS:-true}"
+mock_api_url="${NCS_MOCK_GATEWAY_API_URL:-http://${http_addr}}"
+mock_energy_wh="${NCS_MOCK_GATEWAY_ENERGY_WH:-1000}"
+mock_meter_interval="${NCS_MOCK_GATEWAY_METER_INTERVAL:-3s}"
+mock_charge_seconds="${NCS_MOCK_GATEWAY_CHARGE_SECONDS:-60}"
+api_metrics_addr="${NCS_API_METRICS_ADDR:-127.0.0.1:9090}"
+worker_metrics_addr="${NCS_WORKER_METRICS_ADDR:-127.0.0.1:9091}"
+publisher_metrics_addr="${NCS_PUBLISHER_METRICS_ADDR:-127.0.0.1:9092}"
 with_nginx="false"
 static_root="${NCS_STATIC_ROOT:-${repo_root}/apps/dashboard}"
 build="true"
@@ -83,12 +108,24 @@ common_env=(
     "NCS_REDIS_ADDR=${redis_addr}"
     "NCS_REDIS_DB=${redis_db}"
     "NCS_REDIS_REQUIRED=true"
+    # The migration gate runs the API binary, which validates its configuration before it does
+    # anything - including the gateway token that has no default. Leaving it out of this array meant
+    # `-migrate-only` refused to start unless the caller happened to export the token, so the stack
+    # could not migrate a fresh database at all; the documented default never reached it.
+    "NCS_CHARGER_GATEWAY_TOKEN=${gateway_token}"
 )
 
+step "migration gate"
+env "${common_env[@]}" "${run_dir}/ncs-api" -migrate-only 2>&1 | tail -1
+
 if [[ "${seed}" == "true" ]]; then
-    # Development seed data (users, station, chargers). The seed is idempotent and refuses nothing, so
-    # the guard is here: seeding a database whose name does not look disposable is how a production
-    # database ends up with demo users.
+    # The seed runs AFTER the migration gate on purpose. Loading it first is what a fresh disposable
+    # database used to hit: dev_seed.sql inserts into user_accounts, wallet_accounts, stations and the
+    # rest, so on a database whose schema does not exist yet every statement fails with "relation ...
+    # does not exist" and the stack never comes up. The schema has to exist before the rows.
+    #
+    # The seed is idempotent and refuses nothing, so the guard is here: seeding a database whose name
+    # does not look disposable is how a production database ends up with demo users.
     database_name="$(python3 - "$NCS_POSTGRES_DSN" <<'READDB'
 import sys, urllib.parse
 print(urllib.parse.urlparse(sys.argv[1]).path.lstrip('/') or '')
@@ -99,27 +136,33 @@ READDB
         *) fail "--seed refused: database \"${database_name}\" does not look disposable" ;;
     esac
     step "seed development data into ${database_name}"
-    psql "${NCS_POSTGRES_DSN}" -q -f "${backend_dir}/seeds/dev_seed.sql"
+    # ON_ERROR_STOP is what makes a failed seed visible: without it psql prints the error, exits 0 and
+    # the stack starts against a half-seeded database.
+    psql "${NCS_POSTGRES_DSN}" -q -v ON_ERROR_STOP=1 -f "${backend_dir}/seeds/dev_seed.sql"
 fi
-
-step "migration gate"
-env "${common_env[@]}" "${run_dir}/ncs-api" -migrate-only 2>&1 | tail -1
 
 step "start mock gateway, API, publisher and worker"
 env "${common_env[@]}" NCS_MOCK_GATEWAY_ADDR="127.0.0.1:${gateway_port}" \
+    NCS_MOCK_GATEWAY_RECEIPTS="${mock_receipts}" NCS_MOCK_GATEWAY_API_URL="${mock_api_url}" \
+    NCS_MOCK_GATEWAY_ENERGY_WH="${mock_energy_wh}" \
+    NCS_MOCK_GATEWAY_METER_INTERVAL="${mock_meter_interval}" \
+    NCS_MOCK_GATEWAY_CHARGE_SECONDS="${mock_charge_seconds}" \
     "${run_dir}/ncs-mock-gateway" >"${run_dir}/gateway.log" 2>&1 &
 pids+=("$!")
 
 env "${common_env[@]}" NCS_HTTP_ADDR="${http_addr}" \
+    NCS_METRICS_ADDR="${api_metrics_addr}" \
     NCS_CHARGER_GATEWAY_TOKEN="${gateway_token}" NCS_SMS_MOCK=true \
     "${run_dir}/ncs-api" >"${run_dir}/api.log" 2>&1 &
 pids+=("$!")
 
 env "${common_env[@]}" NCS_OUTBOX_INTERVAL=100ms NCS_OUTBOX_BATCH=50 \
+    NCS_METRICS_ADDR="${publisher_metrics_addr}" \
     "${run_dir}/ncs-outbox-publisher" >"${run_dir}/publisher.log" 2>&1 &
 pids+=("$!")
 
 env "${common_env[@]}" NCS_WORKER_CONSUMER="worker-local" \
+    NCS_METRICS_ADDR="${worker_metrics_addr}" \
     NCS_CHARGER_GATEWAY_URL="http://127.0.0.1:${gateway_port}" \
     NCS_CHARGER_GATEWAY_TIMEOUT=5s \
     "${run_dir}/ncs-worker" >"${run_dir}/worker.log" 2>&1 &
@@ -138,7 +181,7 @@ done
 [[ "$(curl -s -o /dev/null -w '%{http_code}' "${api_url}/readyz")" == "200" ]] || fail "the API never reported ready; see ${run_dir}/api.log"
 
 step "smoke"
-curl -fsS "http://127.0.0.1:9090/metrics" >/dev/null && echo "metrics reachable"
+curl -fsS "http://${api_metrics_addr}/metrics" >/dev/null && echo "metrics reachable"
 login_body="$(curl -s -X POST "${api_url}/api/v1/auth/user/login" -H 'Content-Type: application/json' \
     -d '{"account":"13800000001","password":"Dev-Password-01"}')"
 if [[ "$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("success"))' <<<"${login_body}" 2>/dev/null)" == "True" ]]; then
@@ -158,7 +201,7 @@ if [[ "${with_nginx}" == "true" ]]; then
     # Local development allows loopback for the ops endpoints; the restrictive ranges are what the
     # nginx drill proves (backend/scripts/nginx-render.sh --drill).
     export NCS_PUBLIC_HOST="localhost" NCS_HTTP_PORT="$(( nginx_port + 1 ))" NCS_HTTPS_PORT="${nginx_port}"
-    export NCS_STATIC_ROOT="${static_root}" NCS_API_UPSTREAM="${http_addr}" NCS_METRICS_UPSTREAM="127.0.0.1:9090"
+    export NCS_STATIC_ROOT="${static_root}" NCS_API_UPSTREAM="${http_addr}" NCS_METRICS_UPSTREAM="${api_metrics_addr}"
     export NCS_TLS_CERT="${run_dir}/certs/ncs.crt" NCS_TLS_KEY="${run_dir}/certs/ncs.key"
     export NCS_GATEWAY_ALLOW="127.0.0.1" NCS_OPS_ALLOW="127.0.0.1"
     export NCS_ACCESS_LOG="${run_dir}/nginx-prefix/logs/access.log" NCS_ERROR_LOG="${run_dir}/nginx-prefix/logs/error.log"

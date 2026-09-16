@@ -13,10 +13,13 @@ import (
 	"time"
 
 	"github.com/heguangV/charging-station-platform/backend/internal/admin"
+	"github.com/heguangV/charging-station-platform/backend/internal/agent"
 	"github.com/heguangV/charging-station-platform/backend/internal/auth"
 	"github.com/heguangV/charging-station-platform/backend/internal/config"
 	"github.com/heguangV/charging-station-platform/backend/internal/event"
+	"github.com/heguangV/charging-station-platform/backend/internal/geo"
 	"github.com/heguangV/charging-station-platform/backend/internal/httpapi"
+	"github.com/heguangV/charging-station-platform/backend/internal/llm"
 	"github.com/heguangV/charging-station-platform/backend/internal/observability"
 	"github.com/heguangV/charging-station-platform/backend/internal/order"
 	"github.com/heguangV/charging-station-platform/backend/internal/repository/postgres"
@@ -120,7 +123,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	orderStore, err := postgres.NewOrderStore(db)
+	// The billing timezone decides which wall-clock hours the off-peak tariff window means.
+	orderStore, err := postgres.NewOrderStore(db,
+		postgres.WithBillingLocation(cfg.BillingLocation),
+		postgres.WithReservationDuration(cfg.OrderExpireAfter),
+	)
 	if err != nil {
 		return err
 	}
@@ -244,6 +251,46 @@ func run() error {
 	}
 	reviewHandlers.Register(instrumented)
 	chargerEventHandlers.Register(instrumented)
+
+	// Agent is read-only. Map and model providers are optional; without them
+	// the service still returns deterministic station answers with degraded=true.
+	summaryService, err := station.NewSummaryService(stationStore)
+	if err != nil {
+		return err
+	}
+	mapClient := geo.NewClient(geo.ClientConfig{
+		ServerKey: cfg.Assistant.MapServerKey,
+		BaseURL:   cfg.Assistant.MapBaseURL,
+		Logger:    logger,
+	})
+	modelClient, err := llm.New(llm.Config{
+		Provider: cfg.Assistant.LLMProvider,
+		Model:    cfg.Assistant.LLMModel,
+		BaseURL:  cfg.Assistant.LLMBaseURL,
+		APIKey:   cfg.Assistant.LLMAPIKey,
+		Timeout:  cfg.Assistant.LLMTimeout,
+		Logger:   logger,
+	})
+	if err != nil {
+		return err
+	}
+	assistantService, err := agent.NewService(agent.Config{
+		Stations:  summaryService,
+		Pois:      mapClient,
+		Routes:    mapClient,
+		LLM:       modelClient,
+		Converter: mapClient,
+		Logger:    logger,
+	})
+	if err != nil {
+		return err
+	}
+	assistantHandlers, err := agent.NewHandlers(assistantService, authHandlers)
+	if err != nil {
+		return err
+	}
+	logger.Info("assistant capability", "map_provider", mapClient.Configured(), "model", modelClient.Available(), "tools", assistantService.ToolNames())
+	assistantHandlers.Register(instrumented)
 
 	metrics, err := metricsServer(metricsConfig{
 		envName:        metricsAddrEnv,

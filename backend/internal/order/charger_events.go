@@ -39,6 +39,10 @@ const (
 	// frozen contract. Nothing else may reach the order service.
 	chargerEventStarted = "CHARGE_STARTED"
 	chargerEventStopped = "CHARGE_STOPPED"
+	// ChargerEventProgress is the running-meter receipt a charger posts while it is charging.
+	// Unlike the start and stop facts it publishes nothing: it updates the order's metered
+	// reading, and the settled bill still comes from the stop receipt.
+	ChargerEventProgress = "CHARGE_PROGRESS"
 )
 
 // ChargerEventConfig configures the receipt endpoint.
@@ -173,6 +177,26 @@ func (h *ChargerEventHandlers) chargerEvents(w http.ResponseWriter, r *http.Requ
 			TraceID:     traceID,
 		})
 		h.respond(w, r, eventType, request, occurredAt, result, err)
+	case ChargerEventProgress:
+		// The running meter is the whole point of the receipt; without it there is nothing to apply.
+		if request.EnergyWh == nil {
+			h.refuse(w, r, "energyWh is required for CHARGE_PROGRESS", nil)
+			return
+		}
+		if *request.EnergyWh < 0 {
+			h.refuse(w, r, "energyWh must not be negative", nil)
+			return
+		}
+		result, err := h.service.ConfirmProgress(r.Context(), ConfirmProgressCommand{
+			OrderNo:     strings.TrimSpace(request.OrderNo),
+			ChargerID:   request.ChargerID.value,
+			EnergyWh:    *request.EnergyWh,
+			OccurredAt:  request.OccurredAt,
+			EventID:     strings.TrimSpace(request.EventID),
+			RequestHash: chargerEventDigest(eventType, request),
+			TraceID:     traceID,
+		})
+		h.respond(w, r, eventType, request, occurredAt, result, err)
 	case chargerEventStopped:
 		if request.EnergyWh == nil {
 			h.refuse(w, r, "energyWh is required for CHARGE_STOPPED", nil)
@@ -195,7 +219,7 @@ func (h *ChargerEventHandlers) chargerEvents(w http.ResponseWriter, r *http.Requ
 		})
 		h.respond(w, r, eventType, request, occurredAt, result, err)
 	default:
-		h.refuse(w, r, "eventType must be "+chargerEventStarted+" or "+chargerEventStopped, nil)
+		h.refuse(w, r, "eventType must be "+chargerEventStarted+", "+chargerEventStopped+" or "+ChargerEventProgress, nil)
 	}
 }
 

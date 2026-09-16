@@ -29,29 +29,31 @@ func NewReviewStore(db *sql.DB) (*ReviewStore, error) {
 // reviewability check shared by CreateReview and CreateAppeal: the order
 // must be COMPLETED, owned by the user, and returns its id, station and
 // payment state.
-func (s *ReviewStore) checkOrderUsable(tx *sql.Tx, ctx context.Context, userID int64, orderNo string) (int64, int64, int64, string, error) {
-	var orderID, stationID, amountCents int64
+func (s *ReviewStore) checkOrderUsable(tx *sql.Tx, ctx context.Context, userID int64, orderNo string) (int64, int64, int64, int64, string, error) {
+	var orderID, stationID, amountCents, paidCents int64
 	var status, paymentStatus string
-	err := tx.QueryRowContext(ctx, `SELECT id, station_id, amount_cents, status, payment_status FROM charging_orders
+	err := tx.QueryRowContext(ctx, `SELECT id, station_id, amount_cents, paid_cents, status, payment_status FROM charging_orders
 WHERE order_no = $1 AND user_id = $2 AND status = 'COMPLETED' FOR UPDATE`,
-		orderNo, userID).Scan(&orderID, &stationID, &amountCents, &status, &paymentStatus)
+		orderNo, userID).Scan(&orderID, &stationID, &amountCents, &paidCents, &status, &paymentStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Cross-user access is indistinguishable from a missing record
 		// (UC-U-12: 无权限访问按订单不存在处理).
-		return 0, 0, 0, "", review.ErrNotOrderOwner
+		return 0, 0, 0, 0, "", review.ErrNotOrderOwner
 	}
 	if err != nil {
-		return 0, 0, 0, "", err
+		return 0, 0, 0, 0, "", err
 	}
-	return orderID, stationID, amountCents, paymentStatus, nil
+	return orderID, stationID, amountCents, paidCents, paymentStatus, nil
 }
 
-// blockedByAppeal reports whether any appeal (pending or approved) blocks
-// the requested mutation (UC-U-09: 申诉禁止扣款和评论). The order's
-// business number is the appeals table key.
+// blockedByAppeal reports whether a live appeal blocks the requested mutation
+// (UC-U-09: 申诉禁止扣款和评论). A REJECTED appeal is dismissed and therefore
+// does not block anything - otherwise a dismissed appeal would lock the order
+// out of reviews forever. The order's business number is the appeals table key.
 func (s *ReviewStore) blockedByAppeal(tx *sql.Tx, ctx context.Context, orderNo string) (bool, error) {
 	var blocked int64
-	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM order_appeals WHERE order_no = $1`, orderNo).Scan(&blocked)
+	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM order_appeals
+WHERE order_no = $1 AND status <> 'REJECTED'`, orderNo).Scan(&blocked)
 	if err != nil {
 		return false, err
 	}
@@ -68,7 +70,7 @@ func (s *ReviewStore) CreateReview(ctx context.Context, userID int64, orderNo st
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, _, _, _, err := s.checkOrderUsable(tx, ctx, userID, orderNo); err != nil {
+	if _, _, _, _, _, err := s.checkOrderUsable(tx, ctx, userID, orderNo); err != nil {
 		return review.ReviewView{}, err
 	}
 	if blocked, err := s.blockedByAppeal(tx, ctx, orderNo); err != nil || blocked {
@@ -173,8 +175,10 @@ LIMIT $2 OFFSET $3`
 // order index is the concurrency guard and, because the replay lookup runs
 // after the order lock, a same-content retry — including two racing submits
 // — returns the stored appeal, while a different-content one conflicts. An
-// unsettled (PENDING) bill has nothing to appeal yet — the confirmation
-// collects it first.
+// A completed bill is appealable before payment confirmation: UC-U-09 makes
+// "confirm payment" and "appeal" the two alternatives presented after a
+// charge stops. A live appeal then blocks settlement until an administrator
+// decides it.
 func (s *ReviewStore) CreateAppeal(ctx context.Context, userID int64, orderNo string, reason string) (review.AppealView, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -182,12 +186,9 @@ func (s *ReviewStore) CreateAppeal(ctx context.Context, userID int64, orderNo st
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, _, amountCents, paymentStatus, err := s.checkOrderUsable(tx, ctx, userID, orderNo)
+	_, _, amountCents, paidCents, _, err := s.checkOrderUsable(tx, ctx, userID, orderNo)
 	if err != nil {
 		return review.AppealView{}, err
-	}
-	if paymentStatus == walletPaymentPending && amountCents > 0 {
-		return review.AppealView{}, review.ErrOrderNotAppealable
 	}
 
 	// At most one appeal per order: a same-content replay returns the first
@@ -197,11 +198,11 @@ func (s *ReviewStore) CreateAppeal(ctx context.Context, userID int64, orderNo st
 	var existing review.AppealView
 	var decidedAt sql.NullTime
 	err = tx.QueryRowContext(ctx, `SELECT a.id, a.reason, a.status, a.created_at, a.decided_at,
-COALESCE(o.amount_cents, 0), COALESCE(o.paid_cents, 0)
+COALESCE(o.amount_cents, 0), COALESCE(o.paid_cents, 0), a.decision_reason
 FROM order_appeals a
 LEFT JOIN charging_orders o ON o.order_no = a.order_no
 WHERE a.order_no = $1`, orderNo).Scan(&existing.ID, &existing.Reason, &existing.Status,
-		&existing.CreatedAt, &decidedAt, &existing.OrderAmountCent, &existing.OrderPaidCent)
+		&existing.CreatedAt, &decidedAt, &existing.OrderAmountCent, &existing.OrderPaidCent, &existing.DecisionReason)
 	if err == nil {
 		if existing.Reason != reason {
 			return review.AppealView{}, review.ErrAppealConflict
@@ -231,7 +232,11 @@ RETURNING id, created_at`, orderNo, userID, reason).Scan(&appealID, &createdAt)
 		ID:      appealID,
 		OrderNo: orderNo, Reason: reason, Status: review.AppealPending,
 		OrderAmountCent: amountCents,
-		CreatedAt:       createdAt.UTC(),
+		// The settled amount is what an approval would refund, so it has to be
+		// part of the response: leaving it out reported "0 to refund" on an order
+		// that was paid in full.
+		OrderPaidCent: paidCents,
+		CreatedAt:     createdAt.UTC(),
 	}
 	if err := tx.Commit(); err != nil {
 		return review.AppealView{}, err
@@ -243,7 +248,7 @@ RETURNING id, created_at`, orderNo, userID, reason).Scan(&appealID, &createdAt)
 func (s *ReviewStore) ListAppeals(ctx context.Context, filter review.AppealFilter) (review.AppealPage, error) {
 	const filterSQL = `($1 = '' OR a.status = $1)`
 	const pageQuery = `SELECT a.id, a.order_no, a.reason, a.status, a.created_at, a.decided_at,
-COALESCE(o.amount_cents, 0), COALESCE(o.paid_cents, 0)
+COALESCE(o.amount_cents, 0), COALESCE(o.paid_cents, 0), a.decision_reason
 FROM order_appeals a
 LEFT JOIN charging_orders o ON o.order_no = a.order_no
 WHERE ` + filterSQL + `
@@ -263,7 +268,7 @@ LIMIT $2 OFFSET $3`
 		var view review.AppealView
 		var decidedAt sql.NullTime
 		if err := rows.Scan(&view.ID, &view.OrderNo, &view.Reason, &view.Status, &view.CreatedAt,
-			&decidedAt, &view.OrderAmountCent, &view.OrderPaidCent); err != nil {
+			&decidedAt, &view.OrderAmountCent, &view.OrderPaidCent, &view.DecisionReason); err != nil {
 			return review.AppealPage{}, err
 		}
 		if decidedAt.Valid {
@@ -285,14 +290,15 @@ LIMIT $2 OFFSET $3`
 // GetAppeal returns one appeal by id.
 func (s *ReviewStore) GetAppeal(ctx context.Context, appealID int64) (review.AppealView, error) {
 	const query = `SELECT a.id, a.order_no, a.reason, a.status, a.created_at, a.decided_at,
-COALESCE(o.amount_cents, 0), COALESCE(o.paid_cents, 0)
+COALESCE(o.amount_cents, 0), COALESCE(o.paid_cents, 0), a.decision_reason
 FROM order_appeals a
 LEFT JOIN charging_orders o ON o.order_no = a.order_no
 WHERE a.id = $1`
 	var view review.AppealView
 	var decidedAt sql.NullTime
 	err := s.db.QueryRowContext(ctx, query, appealID).Scan(&view.ID, &view.OrderNo, &view.Reason,
-		&view.Status, &view.CreatedAt, &decidedAt, &view.OrderAmountCent, &view.OrderPaidCent)
+		&view.Status, &view.CreatedAt, &decidedAt, &view.OrderAmountCent, &view.OrderPaidCent,
+		&view.DecisionReason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return review.AppealView{}, review.ErrNotFound
 	}
@@ -305,6 +311,81 @@ WHERE a.id = $1`
 	}
 	view.CreatedAt = view.CreatedAt.UTC()
 	return view, nil
+}
+
+// GetAppealByOrder returns the caller's own appeal for one order.
+//
+// Scoped by user_id so one customer can never read another's appeal; a missing
+// appeal and someone else's appeal both come back as ErrNotFound.
+func (s *ReviewStore) GetAppealByOrder(ctx context.Context, userID int64, orderNo string) (review.AppealView, error) {
+	const query = `SELECT a.id, a.order_no, a.reason, a.status, a.created_at, a.decided_at,
+COALESCE(o.amount_cents, 0), COALESCE(o.paid_cents, 0), a.decision_reason
+FROM order_appeals a
+LEFT JOIN charging_orders o ON o.order_no = a.order_no
+WHERE a.order_no = $1 AND a.user_id = $2`
+	var view review.AppealView
+	var decidedAt sql.NullTime
+	err := s.db.QueryRowContext(ctx, query, orderNo, userID).Scan(&view.ID, &view.OrderNo, &view.Reason,
+		&view.Status, &view.CreatedAt, &decidedAt, &view.OrderAmountCent, &view.OrderPaidCent,
+		&view.DecisionReason)
+	if errors.Is(err, sql.ErrNoRows) {
+		return review.AppealView{}, review.ErrNotFound
+	}
+	if err != nil {
+		return review.AppealView{}, err
+	}
+	if decidedAt.Valid {
+		value := decidedAt.Time.UTC()
+		view.DecidedAt = &value
+	}
+	view.CreatedAt = view.CreatedAt.UTC()
+	return view, nil
+}
+
+// RejectAppeal records the admin decision to dismiss an appeal in one
+// transaction: the appeal becomes REJECTED with the operator's reason, and the
+// order and the wallet stay exactly as they are (rejection refunds nothing and
+// cancels nothing - that is what approval is for). Returns false when the
+// appeal already carries a decision, which the caller treats as a no-op.
+func (s *ReviewStore) RejectAppeal(ctx context.Context, appealID int64, adminID int64, reason string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var orderNo, appealStatus string
+	err = tx.QueryRowContext(ctx, `SELECT order_no, status FROM order_appeals WHERE id = $1 FOR UPDATE`,
+		appealID).Scan(&orderNo, &appealStatus)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, review.ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	// A decision is final: approving after rejecting (or rejecting twice) never
+	// re-acts, so a repeated request cannot flip a refunded order.
+	if appealStatus != review.AppealPending {
+		return false, nil
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE order_appeals
+SET status = 'REJECTED', decided_by = $2, decided_at = CURRENT_TIMESTAMP, decision_reason = $3
+WHERE id = $1`, appealID, adminID, reason); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO operation_logs
+    (actor_type, actor_id, action, resource_type, resource_id, request_id, payload)
+VALUES ('ADMIN', $1, 'appeal.reject', 'appeal', $2, '', $3::jsonb)`,
+		fmt.Sprintf("%d", adminID), fmt.Sprintf("%d", appealID),
+		fmt.Sprintf(`{"orderNo":%q,"reason":%q}`, orderNo, reason)); err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // walletPaymentPending mirrors the order payment state without importing
@@ -387,7 +468,7 @@ WHERE id = (SELECT charger_id FROM charging_orders WHERE id = $1) AND status = '
 
 	if _, err := tx.ExecContext(ctx, `UPDATE order_appeals
 SET status = 'APPROVED', decided_by = $2, decided_at = CURRENT_TIMESTAMP
-WHERE id = $1`, appealID, fmt.Sprintf("%d", adminID)); err != nil {
+WHERE id = $1`, appealID, adminID); err != nil {
 		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO operation_logs

@@ -20,6 +20,8 @@ import (
 const (
 	AppealPending  = "PENDING"
 	AppealApproved = "APPROVED"
+	// AppealRejected dismisses the appeal: the order and the wallet stay as they are.
+	AppealRejected = "REJECTED"
 
 	AuthorDeleted = "已注销用户"
 )
@@ -121,6 +123,8 @@ type AppealView struct {
 	DecidedAt       *time.Time `json:"decidedAt,omitempty"`
 	OrderAmountCent int64      `json:"orderAmountCent"`
 	OrderPaidCent   int64      `json:"orderPaidCent"`
+	// DecisionReason is the operator's reason, present when the appeal was rejected.
+	DecisionReason *string `json:"decisionReason,omitempty"`
 }
 
 // AppealPage is one page of appeals (admin queue).
@@ -138,7 +142,7 @@ type WallFilter struct {
 
 // AppealFilter carries the admin queue parameters.
 type AppealFilter struct {
-	Status   string // "", PENDING or APPROVED
+	Status   string // "", PENDING, APPROVED or REJECTED
 	Page     int64
 	PageSize int64
 }
@@ -165,11 +169,18 @@ type Store interface {
 	ListAppeals(ctx context.Context, filter AppealFilter) (AppealPage, error)
 	// GetAppeal returns one appeal by id.
 	GetAppeal(ctx context.Context, appealID int64) (AppealView, error)
+	// GetAppealByOrder returns the caller's own appeal for the order.
+	GetAppealByOrder(ctx context.Context, userID int64, orderNo string) (AppealView, error)
 	// ApproveAppeal marks the appeal approved, cancels the order and
 	// refunds the settled amount to the user's wallet — all in the same
 	// transaction. It returns false when the appeal was already approved;
 	// the service treats that repeated decision as a no-op success.
 	ApproveAppeal(ctx context.Context, appealID int64, adminID int64) (bool, error)
+	// RejectAppeal dismisses the appeal: it becomes REJECTED with the
+	// operator's reason, while the order and the wallet stay untouched.
+	// It returns false when the appeal already carries a decision, which the
+	// service treats as a no-op success (repeated decisions never re-act).
+	RejectAppeal(ctx context.Context, appealID int64, adminID int64, reason string) (bool, error)
 }
 
 // Service validates commands and delegates persistence to a Store.
@@ -236,13 +247,21 @@ func (s *Service) CreateAppeal(ctx context.Context, userID int64, orderNo string
 	return view, nil
 }
 
+// GetAppeal returns the caller's own appeal for one order.
+func (s *Service) GetAppeal(ctx context.Context, userID int64, orderNo string) (AppealView, error) {
+	if orderNo == "" {
+		return AppealView{}, ErrNotFound
+	}
+	return s.store.GetAppealByOrder(ctx, userID, orderNo)
+}
+
 // Appeals returns one page of the admin appeal queue.
 func (s *Service) Appeals(ctx context.Context, filter AppealFilter) (AppealPage, error) {
 	if filter.Page < 1 || filter.PageSize < 1 || filter.PageSize > 100 {
 		return AppealPage{}, ErrInvalidReason
 	}
 	switch filter.Status {
-	case "", AppealPending, AppealApproved:
+	case "", AppealPending, AppealApproved, AppealRejected:
 	default:
 		return AppealPage{}, ErrInvalidReason
 	}
@@ -258,6 +277,21 @@ func (s *Service) Approve(ctx context.Context, appealID int64, adminID int64) er
 		return ErrAppealAlreadyApproved
 	}
 	_, err := s.store.ApproveAppeal(ctx, appealID, adminID)
+	return err
+}
+
+// Reject dismisses an appeal: the operator's reason is audited and shown to the
+// customer. Repeating the decision is a no-op that succeeds - an appeal that
+// already carries a decision is never re-acted on.
+func (s *Service) Reject(ctx context.Context, appealID int64, adminID int64, reason string) error {
+	if adminID < 1 {
+		return ErrAppealAlreadyApproved
+	}
+	trimmed, err := TrimReason(reason)
+	if err != nil {
+		return err
+	}
+	_, err = s.store.RejectAppeal(ctx, appealID, adminID, trimmed)
 	return err
 }
 

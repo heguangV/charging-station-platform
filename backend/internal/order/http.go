@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/heguangV/charging-station-platform/backend/internal/auth"
 	"github.com/heguangV/charging-station-platform/backend/internal/httpapi"
@@ -55,6 +57,7 @@ func (h *Handlers) Register(server interface {
 	server.Register("/api/v1/orders/{orderNo}/start", h.auth.RequireRole(auth.RoleUser, h.startCharging))
 	server.Register("/api/v1/orders/{orderNo}/stop", h.auth.RequireRole(auth.RoleUser, h.stopCharging))
 	server.Register("/api/v1/orders/{orderNo}/cancel", h.auth.RequireRole(auth.RoleUser, h.cancelOrder))
+	server.Register("/api/v1/orders/{orderNo}/confirm", h.auth.RequireRole(auth.RoleUser, h.confirmOrder))
 }
 
 type createOrderRequest struct {
@@ -126,12 +129,23 @@ func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid query parameter", nil)
 		return
 	}
+	createdFrom, ok := parseTimeQuery(w, r, "createdFrom")
+	if !ok {
+		return
+	}
+	createdTo, ok := parseTimeQuery(w, r, "createdTo")
+	if !ok {
+		return
+	}
 
 	result, err := h.service.List(r.Context(), ListFilter{
-		UserID:   identity.ID,
-		Page:     page,
-		PageSize: pageSize,
-		Status:   r.URL.Query().Get("status"),
+		UserID:      identity.ID,
+		Page:        page,
+		PageSize:    pageSize,
+		Status:      r.URL.Query().Get("status"),
+		CreatedFrom: createdFrom,
+		CreatedTo:   createdTo,
+		Sort:        r.URL.Query().Get("sort"),
 	})
 	if err != nil {
 		writeOrderError(w, r, err)
@@ -188,6 +202,17 @@ func (h *Handlers) stopCharging(w http.ResponseWriter, r *http.Request) {
 // contract declares a synchronous 200, unlike the 202 start/stop commands.
 func (h *Handlers) cancelOrder(w http.ResponseWriter, r *http.Request) {
 	h.respondWithStatus(w, r, http.StatusOK, h.service.Cancel)
+}
+
+// confirmOrder handles POST /api/v1/orders/{orderNo}/confirm (UC-U-09): the
+// user settles a completed order's pending bill from the wallet. It is a
+// synchronous 200 like cancel - the settlement commits in this response and
+// no device round-trip is involved. Until this runs, the one-unsettled-order
+// rule keeps the user from opening a new flow.
+func (h *Handlers) confirmOrder(w http.ResponseWriter, r *http.Request) {
+	h.respondWithStatus(w, r, http.StatusOK, func(ctx context.Context, command TransitionCommand) (Order, error) {
+		return h.service.Settle(ctx, SettleCommand{TransitionCommand: command})
+	})
 }
 
 func (h *Handlers) transition(w http.ResponseWriter, r *http.Request, action func(ctx context.Context, command TransitionCommand) (Order, error)) {
@@ -280,6 +305,26 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 }
 
 // writeOrderError maps domain errors to the shared error-code registry.
+// parseTimeQuery reads an RFC3339 timestamp query parameter. Empty means "no
+// bound". The registered parameter names for this endpoint are createdFrom and
+// createdTo, so a value that does not parse is a 400 rather than a silently
+// ignored filter - a user who typed a date and got the unfiltered list would
+// have no way to notice.
+func parseTimeQuery(w http.ResponseWriter, r *http.Request, name string) (*time.Time, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return nil, true
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument,
+			name+" must be an RFC3339 timestamp", nil)
+		return nil, false
+	}
+	utc := parsed.UTC()
+	return &utc, true
+}
+
 func writeOrderError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, ErrOrderNotFound):
@@ -287,12 +332,15 @@ func writeOrderError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrInvalidOrderNo), errors.Is(err, ErrInvalidPagination),
 		errors.Is(err, ErrInvalidStatusFilter), errors.Is(err, ErrInvalidChargerID),
 		errors.Is(err, ErrInvalidPaymentStatus), errors.Is(err, ErrInvalidFactTime),
-		errors.Is(err, ErrInvalidReceiptID):
+		errors.Is(err, ErrInvalidReceiptID), errors.Is(err, ErrInvalidSort),
+		errors.Is(err, ErrInvalidTimeWindow):
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid request parameter", nil)
 	case errors.Is(err, ErrUserFrozen):
 		httpapi.WriteError(w, r, http.StatusForbidden, httpapi.CodeUserFrozen, "account is disabled", nil)
 	case errors.Is(err, ErrDebtOutstanding):
 		httpapi.WriteError(w, r, http.StatusConflict, codeDebtOutstanding, "user has an unsettled order", nil)
+	case errors.Is(err, ErrReservationExpired):
+		httpapi.WriteError(w, r, http.StatusConflict, codeReservationExpired, "reservation has expired", nil)
 	case errors.Is(err, ErrInvalidStateTransition):
 		httpapi.WriteError(w, r, http.StatusConflict, codeInvalidStateTransition, "invalid state transition", nil)
 	case errors.Is(err, ErrChargerUnavailable):
@@ -325,6 +373,7 @@ const (
 	codeActiveFlowExists       = 9  // ACTIVE_FLOW_EXISTS
 	codeIdempotencyConflict    = 14 // IDEMPOTENCY_CONFLICT
 	codeInvalidStateTransition = 15 // INVALID_STATE_TRANSITION
+	codeReservationExpired     = 17 // RESERVATION_EXPIRED
 	codeDebtOutstanding        = 18 // DEBT_OUTSTANDING
 )
 

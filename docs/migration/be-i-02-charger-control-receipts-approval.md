@@ -468,6 +468,17 @@ trace_id       链路追踪
       SplitChargeSegments / EffectiveElectricityPrice（按 time.Hour() 判断峰谷）。本实例会话时区为
       Asia/Shanghai（+08），03:00 UTC 的充电会被当作 11:00 计费，落在完全不同的窗口。
       已改为两端都显式 UTC（orders.go ConfirmStop），并在闭环脚本中用真实回执断言低价窗口生效。
+
+后续修正（峰谷窗口按哪个时区）：把两端固定成 UTC 只消除了"会话时区"这个隐式输入，
+      但运营配置的窗口本来就是**本地墙上时间**（seeds/dev_seed.sql 里是 23:00-07:00）。
+      按 UTC 判定等于把窗口挪到本地 07:00-15:00：实测本地 14:15（06:15 UTC）的充电拿到了
+      谷时价 60（BILL_DETAIL 分段 price=60），而真正的本地夜间谷时反而按峰价计。
+      现改为按业务时区判定：`NCS_BILLING_TZ`（默认 Asia/Shanghai，见
+      `order.DefaultBillingLocation()` 与 `postgres.WithBillingLocation`），
+      **计费时刻本身仍是 UTC**，只有窗口查表用本地小时。
+      用例：TestChargerReceiptFactTimeDrivesTimeOfUseBilling（窗口 23:00-07:00 本地，
+      12:00 本地必须按峰价）、TestTariffWindowFollowsTheBillingLocation、
+      TestOrderDetailExposesEstimateBasisWhileCharging。
 ```
 
 ### 真实 PostgreSQL + Redis 全链路（验收计划第 4 项）

@@ -773,6 +773,70 @@ func TestExpireStaleOrdersReleasesChargers(t *testing.T) {
 	assertChargerStatus(t, db, ctx, chargerA, "IDLE")
 }
 
+func TestReservationDeadlineIsReturnedAndEnforcedAtStart(t *testing.T) {
+	db, ctx := integrationDB(t)
+	store, err := NewOrderStore(db, WithReservationDuration(15*time.Minute))
+	if err != nil {
+		t.Fatalf("NewOrderStore() error = %v", err)
+	}
+	suffix := uniqueSuffix(t)
+	userA, _, _, _, chargerA := orderFlowFixture(t, db, ctx, suffix)
+
+	beforeCreate := time.Now().UTC()
+	created, err := store.CreateOrder(ctx, order.CreateOrderCommand{
+		UserID: userA, ChargerID: chargerA, IdempotencyKey: "reserve-create-" + suffix, RequestHash: "h", TraceID: "t",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder() error = %v", err)
+	}
+	if created.ReservedUntil == nil {
+		t.Fatal("created reservation has no reservedUntil")
+	}
+	if created.ReservedUntil.Before(beforeCreate.Add(14*time.Minute+50*time.Second)) ||
+		created.ReservedUntil.After(time.Now().UTC().Add(15*time.Minute+10*time.Second)) {
+		t.Fatalf("reservedUntil = %v, want a 15-minute hold", created.ReservedUntil)
+	}
+	got, err := store.GetOrderByNo(ctx, userA, created.OrderNo)
+	if err != nil || got.ReservedUntil == nil || !got.ReservedUntil.Equal(*created.ReservedUntil) {
+		t.Fatalf("GetOrderByNo() reservation = %#v, %v", got.ReservedUntil, err)
+	}
+	page, err := store.ListOrdersByUser(ctx, order.ListFilter{UserID: userA, Page: 1, PageSize: 20})
+	if err != nil || len(page.Items) == 0 || page.Items[0].ReservedUntil == nil {
+		t.Fatalf("ListOrdersByUser() = %#v, %v; reservation deadline must survive list mapping", page, err)
+	}
+
+	// Simulate a user leaving the reservation page open beyond its deadline.
+	// Start itself must enforce the deadline; correctness cannot depend on the
+	// minute-based janitor having run first.
+	if _, err := db.ExecContext(ctx, `UPDATE charging_orders
+SET requested_at = requested_at - interval '16 minutes'
+WHERE order_no = $1`, created.OrderNo); err != nil {
+		t.Fatalf("backdate reservation: %v", err)
+	}
+	_, err = store.StartCharging(ctx, order.TransitionCommand{
+		UserID: userA, OrderNo: created.OrderNo, IdempotencyKey: "reserve-start-" + suffix, RequestHash: "h", TraceID: "t",
+	})
+	if !errors.Is(err, order.ErrReservationExpired) {
+		t.Fatalf("StartCharging() error = %v, want ErrReservationExpired", err)
+	}
+	var status string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM charging_orders WHERE order_no = $1`, created.OrderNo).Scan(&status); err != nil {
+		t.Fatalf("read expired order: %v", err)
+	}
+	if status != order.StatusExpired {
+		t.Fatalf("order status = %s, want EXPIRED", status)
+	}
+	assertChargerStatus(t, db, ctx, chargerA, "IDLE")
+
+	// The failed start does not strand an IN_PROGRESS idempotency claim.
+	_, err = store.StartCharging(ctx, order.TransitionCommand{
+		UserID: userA, OrderNo: created.OrderNo, IdempotencyKey: "reserve-start-" + suffix, RequestHash: "h", TraceID: "t",
+	})
+	if !errors.Is(err, order.ErrReservationExpired) {
+		t.Fatalf("repeated StartCharging() error = %v, want ErrReservationExpired", err)
+	}
+}
+
 func TestIdempotencyRecordExpiryAllowsFreshRequest(t *testing.T) {
 	db, ctx := integrationDB(t)
 	store, err := NewOrderStore(db)
@@ -973,5 +1037,69 @@ func TestSTARTINGCancelKeepsChargerUntilRevocationConfirmed(t *testing.T) {
 	released, err = store.CompleteChargerCommand(ctx, chargerA, "RESTART", "COMPLETED")
 	if err != nil || released {
 		t.Fatalf("duplicate completion = %v, %v; want no-op", released, err)
+	}
+}
+
+// TestOrderListSortAndWindowOnRealDatabase covers the two query features the
+// front end's order list needs and that the contract registers: the creation-time
+// window (createdFrom/createdTo) and the page order (sort). Both are asserted
+// against real rows, because a filter that is accepted but not applied is
+// indistinguishable from a working one at the HTTP edge.
+func TestOrderListSortAndWindowOnRealDatabase(t *testing.T) {
+	db, ctx := integrationDB(t)
+	store, err := NewOrderStore(db)
+	if err != nil {
+		t.Fatalf("NewOrderStore() error = %v", err)
+	}
+	suffix := uniqueSuffix(t)
+	userA, _, _, _, chargerA := orderFlowFixture(t, db, ctx, suffix)
+
+	// The first order is settled (a user may only have one active flow), which
+	// also gives the second order a different amount and a later created_at.
+	olderNo := b07SettledOrder(t, db, ctx, store, userA, chargerA, suffix)
+	newer, err := store.CreateOrder(ctx, order.CreateOrderCommand{
+		UserID: userA, ChargerID: chargerA, IdempotencyKey: "b07-list-sort-" + suffix, RequestHash: "h", TraceID: "t",
+	})
+	if err != nil {
+		t.Fatalf("second CreateOrder() error = %v", err)
+	}
+
+	descending, err := store.ListOrdersByUser(ctx, order.ListFilter{UserID: userA, Page: 1, PageSize: 100})
+	if err != nil || len(descending.Items) != 2 {
+		t.Fatalf("default order = %d items, %v; want 2 (newest first)", len(descending.Items), err)
+	}
+	if descending.Items[0].OrderNo != newer.OrderNo {
+		t.Fatalf("default order first item = %s, want the newest %s", descending.Items[0].OrderNo, newer.OrderNo)
+	}
+
+	ascending, err := store.ListOrdersByUser(ctx, order.ListFilter{UserID: userA, Page: 1, PageSize: 100, Sort: order.SortCreatedAtAsc})
+	if err != nil || len(ascending.Items) != 2 {
+		t.Fatalf("ascending order = %d items, %v; want 2", len(ascending.Items), err)
+	}
+	if ascending.Items[0].OrderNo != olderNo {
+		t.Fatalf("ascending first item = %s, want the oldest %s", ascending.Items[0].OrderNo, olderNo)
+	}
+	if !ascending.Items[0].CreatedAt.Before(ascending.Items[1].CreatedAt) {
+		t.Fatalf("ascending created_at = %s then %s", ascending.Items[0].CreatedAt, ascending.Items[1].CreatedAt)
+	}
+
+	// A window that starts in the future and one that ends in the past both match
+	// nothing; a window that starts an hour ago matches both rows.
+	future := time.Now().UTC().Add(time.Hour)
+	if page, err := store.ListOrdersByUser(ctx, order.ListFilter{UserID: userA, Page: 1, PageSize: 100, CreatedFrom: &future}); err != nil {
+		t.Fatalf("future window error = %v", err)
+	} else if len(page.Items) != 0 || page.Meta.Total != 0 {
+		t.Fatalf("future window items/total = %d/%d, want 0/0", len(page.Items), page.Meta.Total)
+	}
+	past := time.Now().UTC().Add(-time.Hour)
+	if page, err := store.ListOrdersByUser(ctx, order.ListFilter{UserID: userA, Page: 1, PageSize: 100, CreatedTo: &past}); err != nil {
+		t.Fatalf("past window error = %v", err)
+	} else if len(page.Items) != 0 || page.Meta.Total != 0 {
+		t.Fatalf("past window items/total = %d/%d, want 0/0", len(page.Items), page.Meta.Total)
+	}
+	if page, err := store.ListOrdersByUser(ctx, order.ListFilter{UserID: userA, Page: 1, PageSize: 100, CreatedFrom: &past}); err != nil {
+		t.Fatalf("recent window error = %v", err)
+	} else if len(page.Items) != 2 || page.Meta.Total != 2 {
+		t.Fatalf("recent window items/total = %d/%d, want 2/2", len(page.Items), page.Meta.Total)
 	}
 }

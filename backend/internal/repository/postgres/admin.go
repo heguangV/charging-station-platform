@@ -159,18 +159,26 @@ WHERE ($1 = '' OR u.phone ILIKE $1 OR u.display_name ILIKE $1)
 // ListOrders returns one page of orders across all users with the payment
 // fields, optionally filtered by business number prefix and status.
 func (s *AdminStore) ListOrders(ctx context.Context, filter admin.AdminOrderFilter) (order.OrderPage, error) {
+	// $5 filters by user when the caller asked for one user's orders; 0 means no
+	// filter, which keeps the argument list fixed instead of building SQL text.
+	// The filter parameters come first and the pagination parameters last, so the
+	// count query - which has no LIMIT/OFFSET - can pass a contiguous prefix of
+	// the same argument list. Numbering the user filter $5 while $3/$4 belonged to
+	// LIMIT/OFFSET left the count query with two referenced-but-untyped
+	// placeholders and PostgreSQL rejected it with 42P18.
 	const filterSQL = `($1 = '' OR status = $1)
-  AND ($2 = '' OR order_no ILIKE $2)`
+  AND ($2 = '' OR order_no ILIKE $2)
+  AND ($3 = 0 OR user_id = $3)`
 	const pageQuery = `SELECT ` + orderSelectColumns + ` FROM charging_orders
 WHERE ` + filterSQL + `
-ORDER BY created_at DESC
-LIMIT $3 OFFSET $4`
+ORDER BY created_at DESC, id DESC
+LIMIT $4 OFFSET $5`
 	const countQuery = `SELECT count(*) FROM charging_orders WHERE ` + filterSQL
 
 	offset := (filter.Page - 1) * filter.PageSize
 	keyword := likePattern(filter.OrderNo)
 
-	rows, err := s.db.QueryContext(ctx, pageQuery, filter.Status, keyword, filter.PageSize, offset)
+	rows, err := s.db.QueryContext(ctx, pageQuery, filter.Status, keyword, filter.UserID, filter.PageSize, offset)
 	if err != nil {
 		return order.OrderPage{}, err
 	}
@@ -178,7 +186,7 @@ LIMIT $3 OFFSET $4`
 
 	page := order.OrderPage{Meta: order.PageMeta{Page: filter.Page, PageSize: filter.PageSize}}
 	for rows.Next() {
-		result, err := scanAdminOrderRow(rows)
+		result, err := s.scanAdminOrderRow(rows)
 		if err != nil {
 			return order.OrderPage{}, err
 		}
@@ -187,7 +195,7 @@ LIMIT $3 OFFSET $4`
 	if err := rows.Err(); err != nil {
 		return order.OrderPage{}, err
 	}
-	if err := s.db.QueryRowContext(ctx, countQuery, filter.Status, keyword).Scan(&page.Meta.Total); err != nil {
+	if err := s.db.QueryRowContext(ctx, countQuery, filter.Status, keyword, filter.UserID).Scan(&page.Meta.Total); err != nil {
 		return order.OrderPage{}, err
 	}
 	return page, nil
@@ -236,7 +244,7 @@ func (s *AdminStore) RestartCharger(ctx context.Context, command admin.RestartCo
 		return admin.Command{}, admin.ErrChargerUnavailable
 	}
 
-	commandNo, err := admin.NewCommandNo(s.clock())
+	commandID, err := admin.NewCommandID(s.clock())
 	if err != nil {
 		return admin.Command{}, err
 	}
@@ -247,17 +255,17 @@ func (s *AdminStore) RestartCharger(ctx context.Context, command admin.RestartCo
 	// The payload must match the B-04 consumer contract exactly: command_id,
 	// charger_id and action (the only supported action is RESTART).
 	if err := s.appendOutbox(tx, ctx, order.EventChargerCommandRequested, strconvFormatInt64(command.ChargerID),
-		map[string]any{"command_id": commandNo, "charger_id": strconvFormatInt64(command.ChargerID), "action": "RESTART", "reason": command.Reason},
+		map[string]any{"command_id": commandID, "charger_id": strconvFormatInt64(command.ChargerID), "action": "RESTART", "reason": command.Reason},
 		command.TraceID); err != nil {
 		return admin.Command{}, err
 	}
 	if err := s.appendAudit(tx, ctx, command.AdminID, "charger.restart", "charger",
 		strconvFormatInt64(command.ChargerID), command.TraceID,
-		map[string]any{"commandNo": commandNo, "reason": command.Reason}); err != nil {
+		map[string]any{"commandId": commandID, "reason": command.Reason}); err != nil {
 		return admin.Command{}, err
 	}
 
-	result := admin.Command{CommandNo: commandNo, Status: admin.CommandPending}
+	result := admin.Command{CommandID: commandID, Status: admin.CommandPending}
 	body, err := json.Marshal(result)
 	if err != nil {
 		return admin.Command{}, err
@@ -287,20 +295,25 @@ VALUES ('ADMIN', $1, $2, $3, $4, $5, $6::jsonb)`,
 // claimIdempotency and finalizeIdempotency are shared with the order store;
 // they are defined once in orders.go and reused here.
 
-func scanAdminOrderRow(rows *sql.Rows) (order.Order, error) {
+func (s *AdminStore) scanAdminOrderRow(rows *sql.Rows) (order.Order, error) {
 	var result order.Order
 	var id int64
 	var pricePerKwh, servicePrice, offPeakPrice sql.NullInt64
 	var offPeakStartHour, offPeakEndHour sql.NullInt16
-	var startedAt sql.NullTime
+	var startedAt, meteredAt sql.NullTime
+	var meteredEnergyWh int64
+	var requestedAt time.Time
+	// The admin list shares orderSelectColumns with the user-side reads, so it has to consume every
+	// column that list selects - including the running meter added for CHARGE_PROGRESS.
 	if err := rows.Scan(&id, &result.OrderNo, &result.UserID, &result.StationID, &result.ChargerID,
 		&result.Status, &result.AmountCent, &result.PaidCent, &result.PaymentStatus, &result.EnergyWh,
-		&pricePerKwh, &servicePrice, &offPeakPrice, &offPeakStartHour, &offPeakEndHour, &startedAt,
-		&result.CreatedAt, &result.UpdatedAt); err != nil {
+		&pricePerKwh, &servicePrice, &offPeakPrice, &offPeakStartHour, &offPeakEndHour, &requestedAt, &startedAt,
+		&result.CreatedAt, &result.UpdatedAt, &meteredEnergyWh, &meteredAt); err != nil {
 		return order.Order{}, err
 	}
 	result.CreatedAt = result.CreatedAt.UTC()
 	result.UpdatedAt = result.UpdatedAt.UTC()
+	s.setReservationWindow(&result, requestedAt)
 	return result, nil
 }
 
@@ -309,6 +322,121 @@ func strconvFormatInt64(value int64) string {
 }
 
 // GetTariff returns the charger tariff view.
+// FindDeviceCommand returns what the platform recorded for one device command.
+//
+// The row is written by the receipt path (charger_command_outcomes), so this is
+// a read of the durable fact rather than of a queue: a command that was never
+// answered has no row yet, and the caller reports that as "not found" instead of
+// inventing a PENDING state it cannot observe.
+func (s *AdminStore) FindDeviceCommand(ctx context.Context, commandID string) (admin.DeviceCommand, error) {
+	var (
+		result     admin.DeviceCommand
+		orderNo    sql.NullString
+		recordedAt time.Time
+	)
+	err := s.db.QueryRowContext(ctx, `SELECT command_id, charger_id, order_no, action, result, applied, recorded_at
+FROM charger_command_outcomes WHERE command_id = $1`, commandID).
+		Scan(&result.CommandID, &result.ChargerID, &orderNo, &result.Action, &result.Result, &result.Applied, &recordedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return admin.DeviceCommand{}, admin.ErrDeviceCommandNotFound
+	}
+	if err != nil {
+		return admin.DeviceCommand{}, err
+	}
+	result.OrderNo = orderNo.String
+	result.RecordedAt = recordedAt.UTC().Format(time.RFC3339)
+	return result, nil
+}
+
+// ChangeStationStatus moves a station to another status and records the change.
+//
+// The current status is read under a row lock and the transition is checked
+// against the domain's table inside the same transaction, so two administrators
+// racing for the same station cannot both succeed on the strength of a stale
+// read. An illegal transition is reported as a conflict, not applied silently.
+func (s *AdminStore) ChangeStationStatus(ctx context.Context, command admin.ChangeStationStatusCommand) (admin.StationRecord, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return admin.StationRecord{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		record              admin.StationRecord
+		latitude, longitude sql.NullFloat64
+	)
+	// The columns are numeric degrees; the contract carries E6 integers, so the
+	// same toE6 conversion the read paths use is applied here too.
+	err = tx.QueryRowContext(ctx, `SELECT id, code, name, address, COALESCE(latitude::float8, 0), COALESCE(longitude::float8, 0), status
+FROM stations WHERE id = $1 FOR UPDATE`, command.StationID).
+		Scan(&record.ID, &record.Code, &record.Name, &record.Address, &latitude, &longitude, &record.Status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return admin.StationRecord{}, admin.ErrStationNotFound
+	}
+	if err != nil {
+		return admin.StationRecord{}, err
+	}
+	if !station.CanChangeStationStatus(record.Status, command.Status) {
+		return admin.StationRecord{}, admin.ErrInvalidStateTransition
+	}
+	record.LatitudeE6 = toE6(latitude.Float64)
+	record.LongitudeE6 = toE6(longitude.Float64)
+	previous := record.Status
+	if _, err := tx.ExecContext(ctx, `UPDATE stations SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+		command.StationID, command.Status); err != nil {
+		return admin.StationRecord{}, err
+	}
+	if err := s.appendAudit(tx, ctx, command.AdminID, "station.status", "station",
+		strconvFormatInt64(command.StationID), command.TraceID,
+		map[string]any{"from": previous, "to": command.Status}); err != nil {
+		return admin.StationRecord{}, err
+	}
+	record.Status = command.Status
+	if err := tx.Commit(); err != nil {
+		return admin.StationRecord{}, err
+	}
+	return record, nil
+}
+
+// ChangeChargerStatus moves a charger to another status and records the change.
+// The charger carries a version, so the update increments it: a client that
+// cached the row can tell the status moved.
+func (s *AdminStore) ChangeChargerStatus(ctx context.Context, command admin.ChangeChargerStatusCommand) (admin.ChargerStatusRecord, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return admin.ChargerStatusRecord{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var record admin.ChargerStatusRecord
+	err = tx.QueryRowContext(ctx, `SELECT id, code, status FROM chargers WHERE id = $1 FOR UPDATE`, command.ChargerID).
+		Scan(&record.ChargerID, &record.ChargerCode, &record.Status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return admin.ChargerStatusRecord{}, admin.ErrChargerNotFound
+	}
+	if err != nil {
+		return admin.ChargerStatusRecord{}, err
+	}
+	if !station.CanChangeChargerStatus(record.Status, command.Status) {
+		return admin.ChargerStatusRecord{}, admin.ErrInvalidStateTransition
+	}
+	previous := record.Status
+	if _, err := tx.ExecContext(ctx, `UPDATE chargers SET status = $2, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+		command.ChargerID, command.Status); err != nil {
+		return admin.ChargerStatusRecord{}, err
+	}
+	if err := s.appendAudit(tx, ctx, command.AdminID, "charger.status", "charger",
+		strconvFormatInt64(command.ChargerID), command.TraceID,
+		map[string]any{"from": previous, "to": command.Status}); err != nil {
+		return admin.ChargerStatusRecord{}, err
+	}
+	record.Status = command.Status
+	if err := tx.Commit(); err != nil {
+		return admin.ChargerStatusRecord{}, err
+	}
+	return record, nil
+}
+
 func (s *AdminStore) GetTariff(ctx context.Context, chargerID int64) (admin.TariffView, error) {
 	const query = `SELECT id, price_per_kwh_cents, service_price_per_kwh_cents,
 off_peak_electricity_price_per_kwh_cents, off_peak_start_hour, off_peak_end_hour

@@ -174,6 +174,51 @@ func TestEffectiveElectricityPriceResolvesTimeOfUse(t *testing.T) {
 	}
 }
 
+// The window is read in the location of the instant it is given, so the same UTC instant can be
+// peak or off-peak depending on the billing timezone. That is the whole reason the store converts
+// into NCS_BILLING_TZ before billing: an operator's 23:00-07:00 means local night.
+func TestTariffWindowFollowsTheBillingLocation(t *testing.T) {
+	offPeak := int64(60)
+	windowStart := int16(23)
+	windowEnd := int16(7)
+	cfg := TariffConfig{PeakPrice: 120, OffPeak: &offPeak, WindowStart: &windowStart, WindowEnd: &windowEnd}
+
+	// 04:00 UTC is 12:00 in +08.
+	instant := time.Date(2026, 9, 15, 4, 0, 0, 0, time.UTC)
+
+	if got := EffectiveElectricityPrice(instant, cfg); got != 60 {
+		t.Fatalf("04:00 UTC price = %d, want off-peak 60 when the window is read in UTC", got)
+	}
+	if got := EffectiveElectricityPrice(instant.In(DefaultBillingLocation()), cfg); got != 120 {
+		t.Fatalf("04:00 UTC (=12:00 local) price = %d, want peak 120 when the window is read in +08", got)
+	}
+}
+
+func TestDefaultBillingLocationIsChinaStandardTime(t *testing.T) {
+	_, offset := time.Date(2026, 9, 15, 0, 0, 0, 0, DefaultBillingLocation()).Zone()
+	if offset != 8*60*60 {
+		t.Fatalf("default billing offset = %d seconds, want +08 (an operator's off-peak window is local night)", offset)
+	}
+}
+
+func TestUnitPriceCentsAddsTheServiceFee(t *testing.T) {
+	offPeak := int64(60)
+	windowStart := int16(23)
+	windowEnd := int16(7)
+	cfg := TariffConfig{PeakPrice: 120, OffPeak: &offPeak, WindowStart: &windowStart, WindowEnd: &windowEnd, ServicePrice: 50}
+	billing := DefaultBillingLocation()
+
+	if got := UnitPriceCents(time.Date(2026, 9, 15, 12, 0, 0, 0, billing), cfg); got != 170 {
+		t.Fatalf("midday unit price = %d, want 170 (120 peak + 50 service)", got)
+	}
+	if got := UnitPriceCents(time.Date(2026, 9, 15, 23, 30, 0, 0, billing), cfg); got != 110 {
+		t.Fatalf("night unit price = %d, want 110 (60 off-peak + 50 service)", got)
+	}
+	if got := UnitPriceCents(time.Date(2026, 9, 15, 12, 0, 0, 0, billing), TariffConfig{PeakPrice: 100}); got != 100 {
+		t.Fatalf("flat unit price = %d, want 100", got)
+	}
+}
+
 func TestComputeTOUBillSplitsEnergyAcrossSegments(t *testing.T) {
 	offPeak := int64(60)
 	windowStart := int16(23)

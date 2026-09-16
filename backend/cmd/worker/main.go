@@ -366,8 +366,11 @@ func servePipeline(ctx context.Context, runner *worker.Runner, collector *observ
 // It is the composition BE-I-01 exists for: the A line owns the order rules and the PostgreSQL
 // store, the B line owns the worker interfaces, and the adapters in adapters.go are the only
 // place the two meet. Neither side has to know about the other.
-func ordersOf(db *sql.DB) *order.Service {
-	store, err := postgres.NewOrderStore(db)
+// The worker does not serve the receipt endpoint and therefore never bills, so it keeps the
+// default billing timezone; the option is threaded through so a future caller can pass
+// NCS_BILLING_TZ without another signature change.
+func ordersOf(db *sql.DB, options ...postgres.OrderStoreOption) *order.Service {
+	store, err := postgres.NewOrderStore(db, options...)
 	if err != nil {
 		// NewOrderStore only rejects a nil database, which the caller has already ruled out.
 		panic(fmt.Sprintf("create order store: %v", err))
