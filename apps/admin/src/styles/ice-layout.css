@@ -1,0 +1,46 @@
+/* 控制台保留原有抽屉与折叠逻辑，仅改变视觉容器。 */
+.admin-shell .top-bar {
+  background: rgba(246,250,255,.78);
+  border-bottom-color: rgba(255,255,255,.85);
+  min-height: 78px;
+}
+.top-bar::after { opacity: .12; }
+.top-bar__title { font-size: 21px; line-height: 1.6; }
+.admin-shell .side-rail { background: rgba(252,254,255,.94); }
+.side-rail .side-rail__nav { gap: 8px; }
+.side-rail .rail-item { min-height: 44px; border-radius: 12px; }
+.side-rail .rail-item.is-active {
+  background: linear-gradient(100deg, #d9e9fd, #eef5fe);
+  color: var(--ncs-brand-strong);
+}
+.admin-shell .stat-card {
+  background: var(--ncs-glass);
+  border-color: #fff;
+  box-shadow: var(--ncs-shadow-2);
+  border-radius: 20px;
+}
+.stat-card .stat-card__value { color: var(--ncs-brand-strong); }
+.admin-shell .data-table th,
+.admin-shell .data-table td { padding: 14px 12px; }
+.admin-shell .table-scroll { border-radius: 12px; }
+.login-view .login-view__card { padding: 36px; border-radius: 28px; }
+.login-view .login-view__logo { width: 52px; height: 52px; border-radius: 16px; }
+
+@media (min-width: 1024px) {
+  .admin-shell { padding: 18px; gap: 12px; }
+  .admin-shell .side-rail {
+    top: 18px;
+    height: calc(100dvh - 36px);
+    border: 1px solid #fff;
+    border-radius: 22px;
+    box-shadow: var(--ncs-shadow-2);
+    padding-top: 28px;
+    gap: 32px;
+  }
+  .admin-shell .top-bar { top: 0; border-radius: 18px; padding-inline: 24px; }
+  .admin-content { padding: 24px 12px 40px; }
+}
+@media (max-width: 640px) {
+  .top-bar__title { font-size: 18px; }
+  .login-view .login-view__card { padding: 24px; }
+}

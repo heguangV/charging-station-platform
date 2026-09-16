@@ -25,8 +25,7 @@ bool containsUrlToken(const crow::request& request)
     if (query == std::string::npos)
         return false;
     std::string lower = url.substr(query + 1);
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                   [](const unsigned char value)
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](const unsigned char value)
                    { return static_cast<char>(std::tolower(value)); });
     return lower.find("token=") != std::string::npos ||
            lower.find("accesstoken=") != std::string::npos ||
@@ -345,9 +344,12 @@ std::size_t RequestPolicyMiddleware::bodyLimitForPath(const std::string_view pat
     return 1024 * 1024;
 }
 
-// 按路径返回请求处理截止时间：统计类 /stats/ 路径放宽到 30 秒，其余统一 10 秒。
+// 按路径返回请求处理截止时间：Agent 对话包含工具调用与大模型往返，放宽到 60 秒；
+// 统计类 /stats/ 路径放宽到 30 秒；其余统一 10 秒。
 std::chrono::seconds RequestPolicyMiddleware::deadlineForPath(const std::string_view path)
 {
+    if (path.find("/user/agent/") != std::string_view::npos)
+        return std::chrono::seconds(60);
     return path.find("/stats/") != std::string_view::npos ? std::chrono::seconds(30)
                                                           : std::chrono::seconds(10);
 }

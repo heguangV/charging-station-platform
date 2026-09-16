@@ -1,6 +1,6 @@
-// 服务就绪探针端口：检查 schema 版本、数据库读写、WAL 开启与迁移完成，全部通过 ready() 才算就绪。
+// 服务就绪探针端口：检查 schema 版本、数据库读写、WAL 能力与迁移完成，全部通过 ready() 才算就绪。
 // 供服务端启动自检/健康检查使用；UnavailableReadinessProbe 为恒不可用的兜底实现。
-// 属端口接口，生产实现由基础设施层（SQLite 检查）提供。
+// 属端口接口，生产实现由 PostgreSQL 基础设施适配器提供。
 
 #pragma once
 

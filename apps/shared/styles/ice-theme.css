@@ -1,0 +1,101 @@
+/* 两端共用的冰蓝视觉层。仅控制外观，不承载业务状态或示例数据。 */
+:root {
+  --ncs-brand: #2466c2;
+  --ncs-brand-strong: #194f9e;
+  --ncs-brand-bright: #3985dc;
+  --ncs-brand-soft: rgba(48, 117, 203, .12);
+  --ncs-brand-softer: rgba(48, 117, 203, .06);
+  --ncs-bg: #eaf2fb;
+  --ncs-surface: #fff;
+  --ncs-surface-2: #f6f9fe;
+  --ncs-surface-3: #eaf2fc;
+  --ncs-border: #dce7f4;
+  --ncs-line: #dce7f4;
+  --ncs-line-strong: #bdcfe6;
+  --ncs-text: #203755;
+  --ncs-text-2: #405571;
+  --ncs-muted: #61738c;
+  --ncs-skeleton: #e3ecf7;
+  --ncs-r-lg: 22px;
+  --ncs-shadow-1: 0 4px 20px rgba(47, 83, 132, .055), inset 0 1px 0 #fff;
+  --ncs-shadow-2: 0 12px 32px rgba(47, 83, 132, .09), inset 0 1px 0 #fff;
+  --ncs-shadow-3: 0 24px 64px rgba(31, 66, 114, .16);
+  --ncs-glass: linear-gradient(135deg, rgba(255,255,255,.97), rgba(248,251,255,.91));
+}
+
+body {
+  background:
+    radial-gradient(ellipse at 85% 0%, #fff 0%, transparent 48%),
+    radial-gradient(ellipse at 0% 60%, #dceafa 0%, transparent 55%),
+    linear-gradient(155deg, #edf5ff, #e6effa 65%, #d7e6f7);
+  background-attachment: fixed;
+}
+
+/* 静态山峦装饰，始终位于内容后方，不模拟地图、天气或实时信息。 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: url('./landscape.svg') center bottom / 100% auto no-repeat;
+}
+
+#app { isolation: isolate; }
+
+.panel,
+.dialog {
+  background: var(--ncs-glass);
+  border-color: rgba(255,255,255,.95);
+  box-shadow: var(--ncs-shadow-2);
+}
+
+.panel h2 { letter-spacing: -.025em; }
+
+.btn {
+  border-radius: 12px;
+  min-height: 40px;
+  box-shadow: 0 2px 4px rgba(47,83,132,.035);
+}
+
+.btn.btn--primary {
+  background: linear-gradient(115deg, #337bd3, #245eb4);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 6px 14px rgba(36,94,180,.19), inset 0 1px 0 rgba(255,255,255,.2);
+}
+
+.btn.btn--primary:hover { background: linear-gradient(115deg, #286bc3, #194f9e); }
+.btn:disabled { box-shadow: none; }
+
+input:not([type='checkbox']):not([type='radio']), select, textarea {
+  border-radius: 11px;
+  background-color: #f8fbff;
+  border-color: var(--ncs-line);
+}
+
+:where(button, a, input, select, textarea):focus-visible {
+  outline: 3px solid #2466c2;
+  outline-offset: 3px;
+}
+
+.chip.is-active {
+  background: #e1edfd;
+  border-color: #acc9f0;
+  color: var(--ncs-brand-strong);
+}
+
+.data-table th {
+  background: #edf4fd;
+  color: #526985;
+  font-weight: 600;
+}
+
+.data-table td { border-color: #e7eef7; }
+.data-table tbody tr:hover { background: #f0f6ff; }
+.empty-state { background: #f6f9fe; border-radius: 16px; }
+.alert { border-radius: 12px; }
+
+@media (prefers-reduced-transparency: reduce) {
+  :root { --ncs-glass: #fff; }
+}

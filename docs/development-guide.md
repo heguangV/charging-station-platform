@@ -4,8 +4,8 @@
 | --- | --- |
 | 用途 | 规定工程拆分、研发顺序、质量门禁和完成条件 |
 | 需求基线 | [软件需求规格说明书](01-requirements-specification.md) |
-| 版本 | 1.1 |
-| 更新日期 | 2026-09-02 |
+| 版本 | 1.3 |
+| 更新日期 | 2026-09-14 |
 
 本文不重复业务规则、数值指标或验收条款。功能实现直接引用 SRS 的 `UC-*`、`BR-*` 和 `NFR-*`；数据库与通信细节分别引用[数据库设计](database-design.md)和[接口文档](database-api.md)。
 
@@ -15,8 +15,8 @@
 | --- | --- |
 | `01-requirements-specification.md` | 定义系统必须实现的功能、规则、指标和验收结果 |
 | `development-guide.md` | 定义如何组织工程、安排研发和判断任务完成 |
-| `database-design.md` | 定义 SQLite 物理模型、约束、事务和迁移 |
-| `database-api.md` | 定义 HTTPS REST / WebSocket 通信契约 |
+| `database-design.md` | 定义 PostgreSQL 物理模型、约束、事务和迁移 |
+| `database-api.md` | 定义 HTTPS REST / WebSocket 通信契约（含 §5A Agent 对话接口） |
 | `tencent-map-setup.md` | 定义腾讯地图本地配置与排错步骤 |
 | `enhancement-tasks-implementation-plan.md` | 定义 `UC-U-11`、`UC-X-01` 的模块边界、实施顺序、产物和验证门禁 |
 | `database-milestone-implementation-plan.md` | 定义数据库里程碑六条工作流的模块边界、文件归属、实施顺序与验证门禁 |
@@ -26,38 +26,49 @@
 ## 2. 架构落地
 
 ```text
-Qt 用户端 ─────┐
-Qt 管理端 ─────┼── HTTPS REST / WebSocket ── Crow 服务端 ── SQLite
-Vue 数据大屏 ──┘                              │
-                                              ├── 腾讯地图 WebService
-                                              └── Python ML 子进程
+Vue/HTML5 车主端（PC + 手机同一套页面）─┐
+Vue/HTML5 管理端（宽屏控制台）──────────┼── HTTPS REST / WebSocket ── Crow 服务端 ── PostgreSQL
+Vue 数据大屏 ──────────────────────────┘                                  │
+                                                                          ├── Core 业务服务
+                                                                          ├── Agent（LLM + Tool Calling）
+                                                                          ├── 腾讯地图 WebService（地理编码 / POI / 路线）
+                                                                          ├── 大模型服务（OpenAI-compatible）
+                                                                          └── Python ML 子进程
 ```
 
-- Qt 客户端负责交互和展示，不保存服务端业务真相。
-- Crow Controller 只处理协议、鉴权入口和 DTO 转换；业务规则位于应用服务层。
-- 领域层不依赖 Qt Widgets、Crow、SQLite 或外部地图。
-- SQLite 仅由服务端数据访问层打开；ML 通过内部接口交换数据。
+- 三个 Web 前端（车主端、管理端、大屏）负责交互和展示，不保存服务端业务真相；它们只通过已定义的 REST/WebSocket 契约取数，且共用同一套设计令牌与动效层。
+- Crow Controller 只处理协议、鉴权入口和 DTO 转换；业务规则位于应用服务层；Agent Controller 同样只做 HTTP、鉴权、DTO 转换与参数校验。
+- 领域层不依赖 UI 框架、Crow、PostgreSQL 或外部地图；`core` 与 `infrastructure` 不得依赖 `agent`。
+- Agent 是根目录一级模块，依赖方向固定为 `server → agent → core / infrastructure`：站点能力复用 `core/application` 的应用服务，地图与 LLM 通过 core 端口注入，具体厂商协议只出现在 `infrastructure/map` 与 `infrastructure/ai`。
+- 腾讯地图分工：前端 JavaScript API 只负责地图显示（只持有受来源限制的 JS Key），服务端 WebService 只负责地理编码、POI 与路线规划（Server Key 只在服务端进程）。
+- PostgreSQL 仅由服务端数据访问层连接；Agent 与 ML 都不得直接访问数据库，ML 通过内部接口交换数据。
 - 实时事件用于及时更新，REST 快照用于首次加载和断线恢复。
 
 ## 3. 目标工程结构
 
 ```text
 apps/
-├── user/                  Qt Widgets 用户端
-├── admin/                 Qt Widgets 管理端
-└── dashboard/             Vue/ECharts 大屏
+├── user/                  Vue 3 + Vite 响应式 Web 车主端（PC 与手机同一套页面，npm 独立构建）
+├── admin/                 Vue 3 + Vite Web 管理控制台（宽屏优先，npm 独立构建）
+├── dashboard/             Vue/ECharts 大屏
+└── mobile/                Qt Quick Android 实验端（已停止开发，仅作迁移参考，默认不构建）
+agent/                     AI 出行助手一级模块（AgentService、工具抽象、station/POI/route 工具）
 server/
-├── controller/            Crow 路由和 DTO 转换
+├── controller/            Crow 路由和 DTO 转换（含 Agent Controller）
 ├── middleware/            鉴权、错误、限流和日志
-└── runtime/               计费、调度、到期和通知
+└── runtime/               配置、计费、调度、到期和通知
 core/
 ├── domain/                实体、值对象和状态机
-└── application/           用例、服务接口和权限边界
+├── application/           用例、服务接口和权限边界（含 LLM/POI 等外部能力端口）
+└── include/ncs/core/      公共 Result/Error 值类型
 infrastructure/
-├── sqlite/                schema、迁移、仓储、事务和备份
+├── database/              仓储组合端口与后端工厂
+├── postgres/              schema、迁移、仓储、事务和备份
+├── sqlite/                仅测试/历史数据转换期间保留，不进入正式服务链接
 ├── config/                环境配置加载与校验
 ├── logging/               应用日志、请求 ID 和脱敏
-├── map/                   地图服务和本地距离计算
+├── ai/                    OpenAI-compatible 大模型客户端与配置
+├── map/                   腾讯 WebService 客户端、地理编码、POI、路线与本地距离降级
 └── files/                 头像和大屏快照
 ml/                        训练、预测和评估
 tests/                     单元、集成、契约、并发、UI 和端到端测试
@@ -75,9 +86,11 @@ docs/                      需求、设计和接入文档
 | 3. 服务端通信 | REST、WebSocket、会话、调度、模拟计费和恢复 | Crow 服务、契约测试、虚拟客户端 | 鉴权、幂等、断线恢复和持续计费通过 |
 | 4. 用户端 | 实现 `UC-U-*` | 完整竖屏用户流程 | 所有用户用例正常流与异常流通过 |
 | 5. 管理端 | 实现 `UC-A-*` | 管理页面、图表和运维操作 | 权限、管理操作和错误处理通过 |
+| 5A. 管理端 Web 化 | `UC-A-01`~`UC-A-09` 的界面形态迁移 | `apps/admin`（Vue 3 + Vite + ECharts）替代原 Qt 管理端，共用车主端设计语言 | 管理端 npm 构建与前端测试通过；管理接口契约仍由 `ncs_admin_routes`、`ncs_admin_account_routes` 覆盖 |
 | 6. 大屏与 ML | 实现 `UC-W-*`、`UC-M-*` 及地图 | 大屏、地图、训练和预测产物 | 对应用例及模型验收通过 |
 | 7. 系统验收 | 验证全部 `NFR-*` 和验收清单 | 测试报告、恢复记录、截图和运行说明 | SRS 追踪矩阵无未验证条目 |
 | 8. 新增增强任务 | `UC-U-11` 拍照头像与 `UC-X-01` 独立设备通信模拟器 | 用户端可选摄像头能力、独立模拟器子工程及自动化证据 | 专项实施路径的 A0～A5、S0～S4 门禁全部通过 |
+| 9. 响应式 Web 用户端与 Agent | `UC-U-13` 统一响应式 Web 用户端、`UC-U-14` AI 出行助手 | `apps/user`（Vue 3 + Vite）、`agent/`、`infrastructure/ai`、`infrastructure/map` 扩展、Agent Controller 与专项测试 | Web 端 npm 构建与前端测试通过；Agent 契约、工具调度与降级路径测试通过；地图与 LLM 均在无 Key 时仍能降级 |
 
 阶段内优先完成可端到端验证的纵向切片，避免长期维护只有接口没有调用方的半成品。
 
@@ -99,14 +112,23 @@ docs/                      需求、设计和接入文档
 | 单元测试 | 值对象、公式、状态机和纯领域规则 |
 | 数据库测试 | schema、迁移、约束、事务、幂等和恢复 |
 | 契约测试 | HTTP 方法、路径、DTO、错误码、鉴权和 WebSocket 事件 |
-| 集成测试 | 服务端与 SQLite、地图降级、ML 子进程和文件服务 |
+| 集成测试 | 服务端与 PostgreSQL、地图降级、ML 子进程和文件服务 |
 | UI 测试 | 页面状态、尺寸、导航、输入校验和错误提示 |
 | 端到端测试 | 用户与管理端通过真实 API 完成关键业务流程 |
+| Agent 测试 | 工具调度与锚点注入、工具参数校验、大模型与地图失败降级、Agent Controller 契约 |
+| 前端测试 | Web 用户端的响应式布局、定位与地图状态、API 解包与错误路径、Agent 结构化结果渲染 |
 | 非功能测试 | SRS 规定的性能、容量、安全、备份和恢复指标 |
 
 测试数据库、日志、模型和截图使用隔离目录，不得污染开发或演示数据。
 
-`scripts/check.sh` 在本地检查相对 `HEAD` 的已暂存、未暂存和未跟踪 C/C++ 文件；CI 通过
+PostgreSQL 集成门禁由 Ubuntu CI 安装 PostgreSQL 18 与 QPSQL 驱动后执行；设置
+`NCS_REQUIRE_POSTGRES_TESTS=1`，缺少工具或版本不符时失败，不允许静默跳过。
+`ncs_postgres_repository` 包含隔离库实际恢复校验；Windows 作源码构建及其余契约验证，
+不以 Windows 跳过的 Unix 临时数据库测试作为 PostgreSQL 验收证据。
+
+Web 前端不作为 CMake 目标：改动后在对应的 `apps/user`、`apps/admin` 或 `apps/dashboard`
+执行 `npm install`、`npm run test` 与 `npm run build`，三者是前端改动的完成条件。
+`scripts/check.sh` 的 C/C++ 检查范围包含 `agent/`；CI 通过
 `NCS_CHECK_BASE_REF` 传入 Pull Request 或推送前的基线提交，检查该变更集。历史格式债不得阻断
 无关变更，但新改动必须符合仓库 `.clang-format` 和 `NFR-M-01`。
 

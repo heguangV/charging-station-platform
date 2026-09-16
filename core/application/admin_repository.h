@@ -1,5 +1,5 @@
 // 管理端仓储端口（端口-适配器模式）：管理员账号、审计事件、站点/充电桩/资费开通、调价、模拟设备命令、ML
-// 任务与备份记录的持久化接口。 生产实现为 infrastructure/sqlite 的 SqliteRepository，测试用
+// 任务与备份记录的持久化接口。生产实现由 infrastructure/database 工厂装配 PostgreSQL，测试用
 // in_memory_admin_repository；服务层只依赖本接口。 约束：管理操作与其审计事件必须在 withTransaction
 // 同一事务内写入；并发变更用 expectedVersion 乐观锁控制。
 
@@ -183,7 +183,7 @@ class AdminRepository
   public:
     virtual ~AdminRepository() = default;
     virtual void withTransaction(const std::function<void()>& work) = 0;
-    // Coherent read snapshot without reserving SQLite's single writer slot.
+    // Coherent read snapshot without holding application-level write locks.
     virtual void withReadTransaction(const std::function<void()>& work)
     {
         work();

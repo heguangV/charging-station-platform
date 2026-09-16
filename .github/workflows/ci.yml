@@ -36,6 +36,9 @@ jobs:
   ubuntu:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
+    env:
+      NCS_PG_BIN: /usr/lib/postgresql/18/bin
+      NCS_REQUIRE_POSTGRES_TESTS: "1"
 
     steps:
       - name: Checkout
@@ -46,7 +49,9 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-format ninja-build qt6-base-dev libgl1-mesa-dev
+          sudo apt-get install --yes clang-format ninja-build qt6-base-dev libgl1-mesa-dev libqt6sql6-psql libqt6sql6-sqlite postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install --yes postgresql-18 postgresql-client-18
           python3 -m pip install --disable-pip-version-check cmake==3.31.6
 
       - name: Configure
@@ -95,7 +100,8 @@ jobs:
         run: cmake --build build/windows --config Debug --parallel 2
 
       - name: Test
-        run: ctest --test-dir build/windows -C Debug --output-on-failure
+        # Isolated Unix PostgreSQL clusters are mandatory in the Ubuntu job above.
+        run: ctest --test-dir build/windows -C Debug --output-on-failure -E "^(ncs_postgres_repository|ncs_sqlite_to_postgres|ncs_server_smoke)$"
 
   dashboard:
     runs-on: ubuntu-22.04

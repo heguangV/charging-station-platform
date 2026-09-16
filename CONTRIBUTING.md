@@ -22,7 +22,7 @@ export QT_CMAKE=/path/to/Qt/6.2.x/gcc_64/bin/qt-cmake
 ## 变更原则
 
 - 需求变化先改 SRS；数据库结构和公开契约分别先改对应设计文档及测试。
-- UI、Controller、应用服务、领域和基础设施保持单向依赖；客户端不得打开 SQLite。
+- UI、Controller、应用服务、领域和基础设施保持单向依赖；客户端不得直连 PostgreSQL。
 - 提交应聚焦单一目的，建议使用 `feat:`、`fix:`、`docs:`、`test:`、`refactor:` 或 `chore:` 前缀。
 - Pull Request 使用仓库模板，填写实际执行的验证命令及结果，不用计划中的测试代替证据。
 

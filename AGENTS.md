@@ -31,10 +31,14 @@
 
 ## 工程边界
 
-- 按研发实施指南分离 Qt UI、Crow Controller、应用服务、领域逻辑和基础设施。
-- 正式可执行目标为 `ncs_user`、`ncs_admin` 和 `ncs_server`；公共目标为 `ncs_core` 和 `ncs_infrastructure`。`src/` 旧原型与 `apps/mobile/` 实验默认不构建，不得作为正式功能入口。
-- 正式代码进入 `apps/user`、`apps/admin`、`server`、`core`、`infrastructure` 和 `tests`；不得重新建立 `client_user`、`client_admin` 或客户端数据访问层。
+- 按研发实施指南分离 Web UI、Crow Controller、应用服务、领域逻辑和基础设施。
+- `apps/user`（车主端）与 `apps/admin`（管理端）都是 Vue 3 + Vite 响应式 Web，用 npm 独立构建，**不是 CMake 目标**；两者共用同一套设计令牌与动效层，各自只通过已定义契约取数。`apps/dashboard` 是 Vue/ECharts 运营大屏。
+- `apps/mobile` 是已停止开发的 Qt Quick 实验端，只作迁移参考，不得作为正式功能入口。
+- 唯一的正式可执行目标是 `ncs_server`；公共目标为 `ncs_core`、`ncs_infrastructure` 和 `ncs_agent`。`src/` 旧原型默认不构建。
+- 正式代码进入 `apps/user`、`apps/admin`、`apps/dashboard`、`agent`、`server`、`core`、`infrastructure` 和 `tests`；不得重新建立 `client_user`、`client_admin`、Qt 管理端或客户端数据访问层。
+- `agent/` 是 AI 出行助手一级模块，依赖方向固定为 `server → agent → core / infrastructure`；`core` 与 `infrastructure` 不得依赖 `agent`。Agent 只读，不得直接访问 SQLite、不得重新实现订单/充电/钱包逻辑、不得修改余额或任何业务状态。
 - 客户端只通过已定义的 REST/WebSocket 契约访问服务，不得直接打开 SQLite。
+- 腾讯地图分工固定：`apps/user` 浏览器只用 JavaScript API 显示地图（只持有受来源限制的 `TENCENT_MAP_JS_KEY`），服务端只用 WebService 做地理编码、POI 与路线（`TENCENT_MAP_SERVER_KEY` 只在服务端）。大模型 Key 同样只在服务端（`infrastructure/ai`），厂商协议不得散落到 Agent 或 Controller。管理端 Web 客户端不持有任何密钥。
 - 数据库访问必须参数化，并保持事务、幂等、线程归属和故障恢复约束。
 - 金额和价格使用整数分，电量使用整数毫瓦时，时间使用 UTC Unix 秒；显示层才换算单位和本地时间。
 - 不得阻塞 Qt 或 Crow 事件循环；后台工作线程不得直接操作 UI 对象。
@@ -46,7 +50,8 @@
 ## 验证要求
 
 - 执行足以覆盖本次改动的最小构建，以及相关单元、集成、契约、UI 或端到端测试。
-- UI 改动应按需检查加载、空数据、失败和恢复状态。
+- 改动 Web 前端（`apps/user`、`apps/admin`、`apps/dashboard`）时，在对应目录运行 `npm run test` 与 `npm run build`；前端改动不以 CTest 为证据，且必须同时覆盖加载、空数据、失败与恢复状态。
+- UI 改动应按需检查加载、空数据、失败和恢复状态；Web 端动效必须提供 `prefers-reduced-motion: reduce` 降级，且不得改变文案、数值与字段取值。
 - 数据库或协议改动应检查失败回滚、并发、幂等重试和兼容性。
 - 可执行目标发生变化时运行烟雾测试；每次修改均运行 `git diff --check`。
 - 提交前运行 `./scripts/check.sh`。脚本在本地检查相对 `HEAD` 的已暂存、未暂存和未跟踪

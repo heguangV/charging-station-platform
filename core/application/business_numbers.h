@@ -1,6 +1,6 @@
 // 业务编号生成器：按“前缀 + UTC 日期 + 每前缀当日序号”生成形如 RC202609030001
 // 的业务编号（FL/OR/RC/WT 等），非 UUID。 内存计数器加互斥锁并处理 UTC 日切换；可注入
-// BusinessNumberSequenceStore 做序号持久化（生产为 SQLite 序列存储）。
+// BusinessNumberSequenceStore 做序号持久化（生产为 PostgreSQL 序列存储）。
 // 约束：唯一性依赖每前缀计数器加持久层唯一约束兜底；用于充电流程、订单、充值单等业务编号。
 
 #pragma once

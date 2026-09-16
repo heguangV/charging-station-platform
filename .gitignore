@@ -51,6 +51,12 @@ Thumbs.db
 
 # Frontend & Node.js
 node_modules/
+/apps/user/node_modules/
+/apps/user/.npm-cache/
+/apps/user/dist/
+/apps/admin/node_modules/
+/apps/admin/dist/
+.vite/
 .pnpm-store/
 __pycache__/
 *.py[cod]
