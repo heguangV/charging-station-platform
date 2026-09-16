@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ChargersView from '../src/views/ChargersView.vue'
 import { vReveal } from '../src/directives/reveal'
-import { useChargersStore, COMMAND_POLL_INTERVAL_MS } from '../src/stores/chargers'
+import { useChargersStore, COMMAND_POLL_MAX_ATTEMPTS, COMMAND_POLL_INTERVAL_MS } from '../src/stores/chargers'
 import { formatDateTime } from '../src/utils/format'
 import { failResponse, installFetch, okResponse } from './helpers'
 
@@ -233,6 +233,17 @@ describe('远程重启与命令查询（Go 契约，标识为 commandId）', () 
 })
 
 describe('重启命令面板', () => {
+  it('等待回执到达轮询上限时提示真实 commandId', async () => {
+    vi.useFakeTimers()
+    chargers.command = { commandId: 'CMD-WAIT-01', status: 'PENDING' }
+    vi.spyOn(chargers, 'pollCommand').mockResolvedValue(chargers.command)
+    chargers.startPolling()
+    await vi.advanceTimersByTimeAsync(COMMAND_POLL_INTERVAL_MS * COMMAND_POLL_MAX_ATTEMPTS)
+    expect(chargers.commandPolling).toBe(false)
+    expect(chargers.notice).toContain('CMD-WAIT-01')
+    expect(chargers.notice).not.toContain('undefined')
+  })
+
   it('回执到达后显示完成时间，且不渲染契约里没有的受理时间', async () => {
     window.matchMedia = vi.fn(() => ({
       matches: false,

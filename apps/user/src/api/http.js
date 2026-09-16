@@ -125,19 +125,35 @@ export function buildQuery(params = {}) {
 function buildSignal(milliseconds, external) {
   // 优先使用标准 AbortSignal.timeout；旧环境退化为 AbortController + 定时器。
   if (!external && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
-    return { signal: AbortSignal.timeout(milliseconds), cleanup: () => {} }
+    const signal = AbortSignal.timeout(milliseconds)
+    return {
+      signal,
+      timedOut: () => signal.aborted && signal.reason?.name === 'TimeoutError',
+      externallyAborted: () => false,
+      cleanup: () => {}
+    }
   }
   const controller = new AbortController()
+  let timedOut = false
+  let externallyAborted = Boolean(external?.aborted)
   const timer = setTimeout(() => {
+    if (controller.signal.aborted) return
+    timedOut = true
     controller.abort(typeof DOMException === 'function' ? new DOMException('请求超时', 'TimeoutError') : new Error('timeout'))
   }, milliseconds)
-  const forward = () => controller.abort(external?.reason)
+  const forward = () => {
+    if (controller.signal.aborted) return
+    externallyAborted = true
+    controller.abort(external?.reason)
+  }
   if (external) {
     if (external.aborted) forward()
     else external.addEventListener('abort', forward, { once: true })
   }
   return {
     signal: controller.signal,
+    timedOut: () => timedOut,
+    externallyAborted: () => externallyAborted,
     cleanup: () => {
       clearTimeout(timer)
       external?.removeEventListener('abort', forward)
@@ -145,12 +161,12 @@ function buildSignal(milliseconds, external) {
   }
 }
 
-function transportError(error, requestId) {
+function transportError(error, requestId, { timedOut = false, externallyAborted = false } = {}) {
   const name = error?.name
-  if (name === 'TimeoutError') {
+  if (timedOut || name === 'TimeoutError') {
     return new ApiError({ code: ApiErrorKind.TIMEOUT, message: 'timeout', userMessage: '请求超时，请检查网络后重试', requestId })
   }
-  if (name === 'AbortError') {
+  if (externallyAborted || name === 'AbortError') {
     return new ApiError({ code: ApiErrorKind.ABORTED, message: 'aborted', userMessage: '请求已取消', requestId })
   }
   return new ApiError({ code: ApiErrorKind.NETWORK, message: 'network', userMessage: '网络不可用，请检查网络连接后重试', requestId })
@@ -209,25 +225,39 @@ export async function request(path, options = {}) {
       cache: 'no-store'
     })
   } catch (error) {
-    throw transportError(error, requestId)
-  } finally {
     timeoutControl.cleanup()
+    throw transportError(error, requestId, {
+      timedOut: timeoutControl.timedOut(),
+      externallyAborted: timeoutControl.externallyAborted()
+    })
   }
 
   let envelope = null
   try {
     envelope = await response.json()
-  } catch {
+  } catch (error) {
+    if (timeoutControl.signal.aborted || error?.name === 'AbortError' || error?.name === 'TimeoutError') {
+      throw transportError(error, requestId, {
+        timedOut: timeoutControl.timedOut(),
+        externallyAborted: timeoutControl.externallyAborted()
+      })
+    }
     envelope = null
+  } finally {
+    timeoutControl.cleanup()
   }
   if (!envelope || typeof envelope !== 'object') {
-    throw new ApiError({
+    const sessionExpired = response.status === 401 || response.status === 403
+    const apiError = new ApiError({
       status: response.status,
       code: ApiErrorKind.INVALID_RESPONSE,
       message: 'invalid envelope',
       userMessage: statusUserMessage(response.status),
-      requestId
+      requestId,
+      sessionExpired
     })
+    if (sessionExpired) notifySessionExpired(apiError)
+    throw apiError
   }
 
   if (envelope.success !== true || envelope.code !== 0) {

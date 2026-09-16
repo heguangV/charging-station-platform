@@ -132,6 +132,34 @@ describe('统一信封与请求头', () => {
     expect(error.userMessage).toContain('请求超时')
   })
 
+  it('外部信号取消请求时映射为 ABORTED，即使取消原因是普通 Error', async () => {
+    const controller = new AbortController()
+    mockFetch((url, init) =>
+      new Promise((resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(init.signal.reason || new Error('cancelled')))
+        controller.abort(new Error('cancelled'))
+      })
+    )
+
+    const error = await request('/user/wallet', { signal: controller.signal }).catch(caught => caught)
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error.code).toBe(ApiErrorKind.ABORTED)
+  })
+
+  it('读取响应体期间仍受超时控制', async () => {
+    mockFetch(async (url, init) => ({
+      status: 200,
+      json: () =>
+        new Promise((resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(init.signal.reason || new Error('timeout')))
+        })
+    }))
+
+    const error = await request('/user/wallet', { timeout: 5 }).catch(caught => caught)
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error.code).toBe(ApiErrorKind.TIMEOUT)
+  })
+
   it('网络异常映射为 NETWORK 错误，而不是抛出原生异常', async () => {
     mockFetch(async () => {
       throw new TypeError('Failed to fetch')
@@ -152,6 +180,18 @@ describe('统一信封与请求头', () => {
     const error = await request('/user/wallet').catch(caught => caught)
     expect(error.code).toBe(ApiErrorKind.INVALID_RESPONSE)
     expect(error.userMessage).not.toContain('JSON')
+  })
+
+  it('401 非 JSON 响应仍清理失效会话', async () => {
+    const expired = vi.fn()
+    setSessionExpiredHandler(expired)
+    setAccessToken('token-abc')
+    mockFetch(async () => ({ status: 401, json: async () => { throw new SyntaxError('html') } }))
+
+    const error = await request('/user/me').catch(caught => caught)
+    expect(error).toMatchObject({ code: ApiErrorKind.INVALID_RESPONSE, sessionExpired: true })
+    expect(expired).toHaveBeenCalledTimes(1)
+    expect(getAccessToken()).toBeNull()
   })
 
   it('超时常量：普通请求 8 秒，AI 会话 20 秒', () => {

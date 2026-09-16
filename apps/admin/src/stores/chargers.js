@@ -249,7 +249,7 @@ export const useChargersStore = defineStore('adminChargers', {
         if (!this.commandPolling || this.commandFinished) return
         if (this.commandAttempts >= COMMAND_POLL_MAX_ATTEMPTS) {
           this.stopPolling()
-          this.notice = `命令 ${this.command?.commandNo} 仍在处理中，请稍后刷新设备状态`
+          this.notice = `命令 ${this.command?.commandId} 仍在处理中，请稍后刷新设备状态`
           return
         }
         pollTimer = setTimeout(tick, COMMAND_POLL_INTERVAL_MS)

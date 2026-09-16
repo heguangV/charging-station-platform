@@ -60,6 +60,20 @@ describe('信封解包', () => {
       status: 502
     })
   })
+
+  it('401 非 JSON 响应仍清理失效会话', async () => {
+    setAccessToken('token-1')
+    const onExpired = vi.fn()
+    setSessionExpiredHandler(onExpired)
+    harness = installFetch([{ ok: false, status: 401, json: async () => { throw new Error('html') } }])
+
+    await expect(request('/admin/stations')).rejects.toMatchObject({
+      code: ApiErrorKind.INVALID_RESPONSE,
+      sessionExpired: true
+    })
+    expect(onExpired).toHaveBeenCalledTimes(1)
+    expect(getAccessToken()).toBeNull()
+  })
 })
 
 describe('会话失效与重新验证的区分', () => {
@@ -156,6 +170,43 @@ describe('路径、查询参数与超时', () => {
     await expect(request('/admin/stations')).rejects.toMatchObject({
       code: ApiErrorKind.TIMEOUT,
       userMessage: '请求超时，请检查网络后重试'
+    })
+  })
+
+  it('外部信号取消请求时映射为 ABORTED，即使取消原因是普通 Error', async () => {
+    const controller = new AbortController()
+    harness = installFetch([
+      (url, options) =>
+        new Promise((resolve, reject) => {
+          options.signal.addEventListener('abort', () => reject(options.signal.reason || new Error('cancelled')))
+          controller.abort(new Error('cancelled'))
+        })
+    ])
+
+    await expect(request('/admin/stations', { signal: controller.signal })).rejects.toMatchObject({
+      code: ApiErrorKind.ABORTED,
+      userMessage: '请求已取消'
+    })
+  })
+
+  it('读取响应体期间仍响应外部取消', async () => {
+    const controller = new AbortController()
+    harness = installFetch([
+      async (url, options) => ({
+        status: 200,
+        json: () =>
+          new Promise((resolve, reject) => {
+            options.signal.addEventListener('abort', () =>
+              reject(options.signal.reason || new Error('cancelled'))
+            )
+            controller.abort(new Error('cancelled'))
+          })
+      })
+    ])
+
+    await expect(request('/admin/stations', { signal: controller.signal })).rejects.toMatchObject({
+      code: ApiErrorKind.ABORTED,
+      userMessage: '请求已取消'
     })
   })
 
