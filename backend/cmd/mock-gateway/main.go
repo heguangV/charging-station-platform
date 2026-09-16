@@ -10,6 +10,17 @@
 // gateway address is explicitly pointed at it, and the worker's default configuration has no
 // gateway address at all, so a deployment that forgot to set one fails instead of silently
 // dispatching to a mock.
+//
+// Answering a command is only half of what a gateway does. A charge command that the device merely
+// accepted advances no order - the platform deliberately waits for the device to report what
+// physically happened - so a mock that never sends a receipt leaves every order parked in STARTING
+// and no charge flow can be exercised through the UI. With -receipts the mock also plays the
+// device's reporting half: after a charge command completes it posts the matching CHARGE_STARTED or
+// CHARGE_STOPPED fact to backend/internal/order's receipt endpoint (see receipts.go).
+//
+// That reporting is off by default. verify-closed-loop.sh asserts that an accepted command does not
+// move an order, and it drives the receipts itself so it can place the device fact times inside a
+// known tariff window; a mock that reported on its own would silently change what that gate proves.
 package main
 
 import (
@@ -23,6 +34,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -31,6 +43,16 @@ import (
 
 // defaultAddr keeps the mock off the ports the platform itself uses.
 const defaultAddr = "127.0.0.1:8091"
+
+// Device statuses the mock answers with. Only a COMPLETED charge command is a physical fact worth
+// reporting: a device that refused to start did not start, so there is no receipt to send.
+const statusCompleted = "COMPLETED"
+
+// The two charge actions of the frozen command contract that name an order.
+const (
+	actionStartCharging = "START_CHARGING"
+	actionStopCharging  = "STOP_CHARGING"
+)
 
 // mockHeader marks every response so nobody mistakes this process for a device.
 const mockHeader = "X-NCS-Mock-Gateway"
@@ -41,12 +63,16 @@ func main() {
 		delayFlag   = flag.Duration("delay", durationOr(os.Getenv("NCS_MOCK_GATEWAY_DELAY"), 0), "simulated device latency before answering")
 		resultFlag  = flag.String("result", envOr("NCS_MOCK_GATEWAY_RESULT", "COMPLETED"), "outcome to report: COMPLETED or FAILED")
 		failingFlag = flag.String("failing-chargers", envOr("NCS_MOCK_GATEWAY_FAILING_CHARGERS", ""), "comma separated charger ids answered with FAILED")
+		receiptFlag = flag.Bool("receipts", boolOr("NCS_MOCK_GATEWAY_RECEIPTS", false), "also report the device's CHARGE_STARTED/CHARGE_STOPPED facts to the platform after a charge command completes")
+		apiFlag     = flag.String("api-url", envOr("NCS_MOCK_GATEWAY_API_URL", defaultAPIURL), "platform API base URL the device facts are reported to (only used with -receipts)")
+		tokenFlag   = flag.String("gateway-token", envOr("NCS_CHARGER_GATEWAY_TOKEN", ""), "service token the receipt endpoint accepts; required with -receipts, never invented")
+		energyFlag  = flag.Int64("energy-wh", int64Or("NCS_MOCK_GATEWAY_ENERGY_WH", defaultEnergyWh), "metered energy a simulated stop reports, in watt-hours")
 	)
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	logger.Warn("starting the development mock charger gateway; it implements no device protocol and must not be used in production",
-		"addr", *addrFlag, "result", *resultFlag, "delay", delayFlag.String())
+		"addr", *addrFlag, "result", *resultFlag, "delay", delayFlag.String(), "receipts", *receiptFlag)
 
 	gateway := &mockGateway{
 		logger:   logger,
@@ -54,6 +80,28 @@ func main() {
 		result:   strings.ToUpper(strings.TrimSpace(*resultFlag)),
 		failing:  parseIDSet(*failingFlag),
 		commands: map[string]*commandRecord{},
+	}
+
+	if *receiptFlag {
+		// The token has no default for the same reason the endpoint has none: a receipt advances an
+		// order and starts or ends a bill, so a gateway that guesses a credential is a gateway that
+		// either fails every report or, worse, is pointed at a platform that accepts it.
+		token := strings.TrimSpace(*tokenFlag)
+		if token == "" {
+			logger.Error("device fact reporting needs NCS_CHARGER_GATEWAY_TOKEN: the platform refuses every receipt without it")
+			os.Exit(2)
+		}
+		reporter, err := newReceiptReporter(receiptReporterConfig{
+			httpClient: &http.Client{Timeout: receiptTimeout},
+			logger:     logger,
+		}, *apiFlag, token, *energyFlag)
+		if err != nil {
+			logger.Error("invalid device fact reporting configuration", "error", err)
+			os.Exit(2)
+		}
+		gateway.receipts = reporter
+		logger.Info("the mock gateway will report device facts",
+			"api_url", reporter.baseURL, "endpoint", chargerEventPath, "energy_wh", reporter.energyWh)
 	}
 
 	mux := http.NewServeMux()
@@ -95,6 +143,11 @@ type mockGateway struct {
 	result  string
 	failing map[string]bool
 
+	// receipts is the device's reporting half, and it is nil unless the operator asked for it: the
+	// mock is a command simulator by default, because the closed-loop gate asserts that a device
+	// accepting a command does not by itself move an order.
+	receipts *receiptReporter
+
 	mu       sync.Mutex
 	commands map[string]*commandRecord
 
@@ -118,6 +171,7 @@ type commandRecord struct {
 	// outcome would attach a device result to the wrong order.
 	orderNo string
 	action  string
+	traceID string
 	// done is closed when the outcome is decided. A duplicate that arrives while the first request
 	// is still waiting for the device waits on it instead of executing the command again.
 	done        chan struct{}
@@ -126,6 +180,16 @@ type commandRecord struct {
 	detail      string
 	attempts    int
 	firstSeenAt time.Time
+
+	// The device fact this command produces, decided once and then kept.
+	//
+	// A receipt is idempotent on its id AND on its payload: re-sending the same fact must replay the
+	// first result, while reusing the id with a different fact time is a conflict. So the id and the
+	// fact time are fixed the first time the fact is built and reused by every later attempt, which
+	// is what lets a report that failed be retried instead of lost.
+	receiptID         string
+	receiptOccurredAt string
+	receiptSent       bool
 }
 
 // outcome is the decided result, or ok=false while the device has not answered yet.
@@ -150,7 +214,7 @@ var supportedActions = map[string]bool{"RESTART": true, "START_CHARGING": true, 
 
 // actionNeedsOrder mirrors the same contract's field requirement.
 func actionNeedsOrder(action string) bool {
-	return action == "START_CHARGING" || action == "STOP_CHARGING"
+	return action == actionStartCharging || action == actionStopCharging
 }
 
 type commandResponse struct {
@@ -212,7 +276,7 @@ func (g *mockGateway) handleCommand(w http.ResponseWriter, r *http.Request) {
 	// saw before waking is what produced a fabricated FAILED receipt for a device that had simply
 	// not been reached.
 	for {
-		claim, conflict := g.claim(commandID, chargerID, request.OrderNo, action)
+		claim, conflict := g.claim(commandID, chargerID, request.OrderNo, action, request.TraceID)
 		if conflict {
 			writeCommandError(w, http.StatusConflict, "command_id was already used for a different request", commandID)
 			return
@@ -264,6 +328,10 @@ func (g *mockGateway) handleCommand(w http.ResponseWriter, r *http.Request) {
 		replayed := *claim.record
 		g.mu.Unlock()
 		g.logger.Info("device command replayed", "command_id", commandID, "attempts", replayed.attempts)
+		// A fact whose report failed is retried by the next delivery of the same command. The device
+		// is not asked to do the work again - only the platform is told again what it already did -
+		// and the receipt is byte-for-byte the one the first attempt would have sent.
+		g.reportReceipt(claim.record)
 		writeCommandResponse(w, &replayed)
 		return
 	}
@@ -286,7 +354,7 @@ func (g *mockGateway) simulate(ctx context.Context, commandID, chargerID, orderN
 
 	status = g.result
 	if status == "" {
-		status = "COMPLETED"
+		status = statusCompleted
 	}
 	if g.failing[chargerID] {
 		status = "FAILED"
@@ -298,7 +366,7 @@ func (g *mockGateway) simulate(ctx context.Context, commandID, chargerID, orderN
 	if !exists {
 		// Somebody abandoned this id while the device was answering. The work did happen, so a
 		// fresh record is written rather than dropping the outcome on the floor.
-		record = &commandRecord{commandID: commandID, chargerID: chargerID, orderNo: orderNo, action: action, done: make(chan struct{})}
+		record = &commandRecord{commandID: commandID, chargerID: chargerID, orderNo: orderNo, action: action, traceID: traceID, done: make(chan struct{})}
 		g.commands[commandID] = record
 	}
 	record.status = status
@@ -312,6 +380,11 @@ func (g *mockGateway) simulate(ctx context.Context, commandID, chargerID, orderN
 	g.logger.Info("device command handled",
 		"command_id", commandID, "charger_id", chargerID,
 		"action", action, "status", status, "trace_id", traceID)
+
+	// The device did the work, so the platform is told what it did before the dispatcher is answered:
+	// a caller that has been told the device completed the command can then observe the order the
+	// fact produced, instead of racing the report it triggered.
+	g.reportReceipt(record)
 	return status, detail, true
 }
 
@@ -339,7 +412,7 @@ type commandClaim struct {
 //
 // The placeholder is created here, before the device delay, so a duplicate arriving during that
 // delay can only wait or conflict - it can never execute the same command again.
-func (g *mockGateway) claim(commandID, chargerID, orderNo, action string) (commandClaim, bool) {
+func (g *mockGateway) claim(commandID, chargerID, orderNo, action, traceID string) (commandClaim, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -350,6 +423,7 @@ func (g *mockGateway) claim(commandID, chargerID, orderNo, action string) (comma
 			chargerID:   chargerID,
 			orderNo:     orderNo,
 			action:      action,
+			traceID:     traceID,
 			done:        make(chan struct{}),
 			inProgress:  true,
 			attempts:    0,
@@ -428,6 +502,29 @@ func envOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// boolOr reads a boolean environment switch. Only the values strconv.ParseBool accepts turn a
+// switch on: a typo must not silently enable device reporting, so anything else keeps the default.
+func boolOr(name string, fallback bool) bool {
+	value, err := strconv.ParseBool(strings.TrimSpace(os.Getenv(name)))
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+// int64Or reads an integer environment setting, rejecting a negative or unparsable one rather than
+// reporting energy the platform would refuse.
+func int64Or(name string, fallback int64) int64 {
+	value, err := strconv.ParseInt(strings.TrimSpace(os.Getenv(name)), 10, 64)
+	if err != nil || value < 0 {
+		if raw := strings.TrimSpace(os.Getenv(name)); raw != "" {
+			fmt.Fprintf(os.Stderr, "invalid %s %q, using %d\n", name, raw, fallback)
+		}
+		return fallback
+	}
+	return value
 }
 
 func durationOr(raw string, fallback time.Duration) time.Duration {

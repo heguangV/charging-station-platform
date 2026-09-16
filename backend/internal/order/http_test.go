@@ -29,6 +29,8 @@ type fakeStore struct {
 	getErr         error
 	listResult     OrderPage
 	listErr        error
+	listFilter     ListFilter
+	listFilterSet  bool
 	createCommands []CreateOrderCommand
 	startCommands  []TransitionCommand
 	stopCommands   []TransitionCommand
@@ -90,7 +92,9 @@ func (f *fakeStore) GetOrderByNo(context.Context, int64, string) (Order, error) 
 	return f.getResult, f.getErr
 }
 
-func (f *fakeStore) ListOrdersByUser(context.Context, ListFilter) (OrderPage, error) {
+func (f *fakeStore) ListOrdersByUser(_ context.Context, filter ListFilter) (OrderPage, error) {
+	f.listFilter = filter
+	f.listFilterSet = true
 	return f.listResult, f.listErr
 }
 
@@ -377,5 +381,50 @@ func TestConfirmStopValidatesMeterReadings(t *testing.T) {
 		EnergyWh: 100, MeterStartWh: &start, MeterEndWh: &end,
 	}); err != nil {
 		t.Fatalf("consistent readings rejected: %v", err)
+	}
+}
+
+// TestListAcceptsTheRegisteredQuerySurface covers the three query parameters the
+// contract registers for the order list and the front end sends: createdFrom,
+// createdTo and sort. The point of the test is that they reach the service (a
+// silently ignored filter looks identical to a working one from the outside) and
+// that the two ways of asking for nothing - an unparseable date and a window
+// whose end is before its start - are rejected instead of answered with the full
+// list.
+func TestListAcceptsTheRegisteredQuerySurface(t *testing.T) {
+	f := newFixture(t, auth.Identity{ID: 7, Role: auth.RoleUser, Status: auth.StatusActive}, true)
+	f.store.listResult = OrderPage{Items: []Order{}, Meta: PageMeta{Page: 1, PageSize: 20}}
+
+	recorder, _ := do(t, f.server.Handler(), http.MethodGet,
+		"/api/v1/orders?createdFrom=2026-01-01T00:00:00Z&createdTo=2026-02-01T00:00:00Z&sort=createdAt", "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("registered filter status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !f.store.listFilterSet {
+		t.Fatal("the filter never reached the service")
+	}
+	if f.store.listFilter.Sort != SortCreatedAtAsc {
+		t.Fatalf("sort = %q, want %q", f.store.listFilter.Sort, SortCreatedAtAsc)
+	}
+	wantFrom := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if f.store.listFilter.CreatedFrom == nil || !f.store.listFilter.CreatedFrom.Equal(wantFrom) {
+		t.Fatalf("createdFrom = %v, want %v", f.store.listFilter.CreatedFrom, wantFrom)
+	}
+	if f.store.listFilter.CreatedTo == nil || !f.store.listFilter.CreatedTo.Equal(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("createdTo = %v", f.store.listFilter.CreatedTo)
+	}
+
+	for _, tc := range []struct{ name, query string }{
+		{"unparseable createdFrom", "createdFrom=2026-01-01"},
+		{"window end before start", "createdFrom=2026-02-01T00:00:00Z&createdTo=2026-01-01T00:00:00Z"},
+		{"unregistered sort", "sort=created_at"},
+	} {
+		recorder, payload := do(t, f.server.Handler(), http.MethodGet, "/api/v1/orders?"+tc.query, "", nil)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("%s status = %d body = %s", tc.name, recorder.Code, recorder.Body.String())
+		}
+		if payload["code"].(float64) != httpapi.CodeInvalidArgument {
+			t.Fatalf("%s code = %v", tc.name, payload["code"])
+		}
 	}
 }

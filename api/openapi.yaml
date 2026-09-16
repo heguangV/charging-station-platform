@@ -23,6 +23,12 @@ paths:
     get:
       tags: [system]
       operationId: healthz
+      # The probes are served at the root, NOT under the /api/v1 server prefix below:
+      # internal/httpapi/server.go registers "/healthz" and "/readyz" on the bare mux, and the
+      # deployment's nginx/systemd checks call them there. Without this override a generated client
+      # would ask for /api/v1/healthz and get 404.
+      servers:
+        - url: /
       security: []
       responses:
         '200':
@@ -41,6 +47,10 @@ paths:
     get:
       tags: [system]
       operationId: readyz
+      # Root-level like /healthz, and for the same reason; /metrics is deliberately not registered
+      # here (ops endpoint, never exposed to the front end).
+      servers:
+        - url: /
       security: []
       responses:
         '200':
@@ -56,6 +66,15 @@ paths:
     post:
       tags: [auth]
       operationId: requestUserSmsCode
+      description: |-
+        Issues a code for one phone.
+
+        Codes are stored per phone and are not isolated by `purpose`: the request
+        accepts LOGIN / REGISTER / RESET_PASSWORD and returns success, but the
+        code it issues can be used for any of them. The parameter is kept in the
+        contract so clients can send it today; purpose isolation is a separate
+        behaviour change that has not been implemented, and no client should rely
+        on a code being refused outside the purpose it was requested for.
       security: []
       requestBody:
         required: true
@@ -105,6 +124,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /auth/user/register:
+    post:
+      tags: [auth]
+      operationId: userRegister
+      summary: Register a user with a phone, a password and an SMS code
+      description: |-
+        The account is created only after the SMS code proves the caller owns the
+        phone, and the response carries a session so the caller is logged in
+        without a second round trip. A phone that already has an account is 409
+        ALREADY_EXISTS - registration never takes an existing account over - and
+        that check happens after the code check, so a caller cannot use this
+        endpoint to find out which phones are registered without a code for them.
+
+        The code itself is the phone's code, not a registration-specific one: see
+        /auth/user/sms/code for what `purpose` does and does not do today.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RegisterRequest'}
+      responses:
+        '201':
+          description: Account created and session issued
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LoginResponseEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422':
+          description: |-
+            The SMS code is wrong, expired, or has exceeded its failure budget
+            (code 20 CODE_INVALID).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+
   /auth/user/login/sms:
     post:
       tags: [auth]
@@ -444,6 +502,15 @@ paths:
           schema:
             type: string
             format: date-time
+        - name: sort
+          in: query
+          description: |-
+            Order of the returned page. The default (-createdAt) is newest first;
+            createdAt returns the oldest first.
+          schema:
+            type: string
+            enum: [createdAt, -createdAt]
+            default: -createdAt
       responses:
         '200':
           description: Order page
@@ -753,7 +820,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StationResponseEnvelope'
+                $ref: '#/components/schemas/StationCreateResponseEnvelope'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1005,6 +1072,100 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+  /admin/device-commands/{commandId}:
+    get:
+      tags: [admin]
+      operationId: adminGetDeviceCommand
+      summary: Read one device command and its recorded outcome
+      description: |-
+        Administrators follow a command from submission to the receipt that
+        applied it. A command the platform has no record of is 404: the gateway
+        either never answered or the identifier is wrong, and neither improves
+        by retrying.
+      parameters:
+        - name: commandId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Device command and its outcome
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceCommandResponseEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/stations/{stationId}/status:
+    put:
+      tags: [admin]
+      operationId: adminChangeStationStatus
+      summary: Take a station out of service or bring it back
+      description: |-
+        The transition is checked against the current status inside the same
+        transaction that reads it, and the change is written to the audit trail.
+        A transition the lifecycle does not allow is 409 and leaves the row
+        unchanged.
+      parameters:
+        - name: stationId
+          in: path
+          required: true
+          schema: {type: integer, format: int64, minimum: 1}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/StationStatusUpdate'}
+      responses:
+        '200':
+          description: Station status changed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StationStatusResponseEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /admin/chargers/{chargerId}/status:
+    put:
+      tags: [admin]
+      operationId: adminChangeChargerStatus
+      summary: Take a charger out of service or put it back in the pool
+      description: |-
+        IDLE<->DISABLED and FAULT->IDLE/DISABLED are accepted. A charger that is
+        OCCUPIED or RESTARTING is refused with 409: an order still holds it, or a
+        restart command is in flight. The change is audited and bumps the
+        charger's version.
+      parameters:
+        - name: chargerId
+          in: path
+          required: true
+          schema: {type: integer, format: int64, minimum: 1}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChargerStatusUpdate'}
+      responses:
+        '200':
+          description: Charger status changed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChargerStatusResponseEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
   /admin/audit:
     get:
       tags: [admin]
@@ -1084,6 +1245,16 @@ paths:
           in: query
           schema:
             $ref: '#/components/schemas/OrderStatus'
+        - name: userId
+          in: query
+          description: |-
+            Only orders belonging to this user. Omit it to list every user's
+            orders; the management UI opens a user's detail page and asks for
+            that user's orders.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
       responses:
         '200':
           description: Admin order page
@@ -1434,6 +1605,31 @@ components:
           format: password
           minLength: 8
           maxLength: 128
+    RegisterRequest:
+      type: object
+      required: [phone, password, smsCode]
+      properties:
+        username:
+          type: string
+          maxLength: 64
+          description: |-
+            Optional display name. When it is absent the account is named from
+            its phone, the same way the SMS login path names a new account.
+        phone:
+          type: string
+          pattern: '^1[0-9]{10}$'
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+        smsCode:
+          type: string
+          description: |-
+            The code issued for this phone. It is single use: registering
+            consumes it, and a second registration needs a fresh code.
+        deviceId:
+          type: string
+
     LoginResponseEnvelope:
       type: object
       required: [success, code, message, data]
@@ -1777,13 +1973,44 @@ components:
           maxLength: 200
     Command:
       type: object
-      required: [commandNo, status]
+      required: [commandId, status]
       properties:
-        commandNo:
+        commandId:
           type: string
+          description: |-
+            Identifier of the device command. This is the same value stored in
+            charger_command_outcomes.command_id; it is not an order number.
         status:
           type: string
           enum: [PENDING, RUNNING, SUCCEEDED, FAILED]
+    DeviceCommand:
+      type: object
+      description: |-
+        What the platform recorded for one device command: the outcome the
+        charger gateway reported and whether it has been applied to the order.
+      required: [commandId, chargerId, action, result, applied, recordedAt]
+      properties:
+        commandId:
+          type: string
+        chargerId:
+          type: integer
+          format: int64
+        orderNo:
+          type: string
+          description: Present for charge commands that belong to an order.
+        action:
+          type: string
+          enum: [START, STOP, RESTART]
+        result:
+          type: string
+          enum: [COMPLETED, FAILED]
+        applied:
+          type: boolean
+          description: |-
+            Whether the stored outcome has already been applied to the order.
+        recordedAt:
+          type: string
+          format: date-time
     PageMeta:
       type: object
       required: [page, pageSize, total]
@@ -1810,6 +2037,47 @@ components:
               type: array
               items: {$ref: '#/components/schemas/Station'}
             meta: {$ref: '#/components/schemas/PageMeta'}
+    StationCreateResponse:
+      type: object
+      description: |-
+        The station a write returns (create, or a status change). The seven
+        required properties are what the write itself produces. The aggregates the
+        Station read schema also carries are declared here as optional: a create
+        answers with zeros for them, which is true for a station that has no
+        chargers yet, but a write is not required to compute numbers it cannot
+        change - the read endpoints are where they are computed.
+      required: [id, code, name, address, status, latitudeE6, longitudeE6]
+      properties:
+        id: {type: integer, format: int64}
+        code: {type: string}
+        name: {type: string}
+        address: {type: string}
+        status:
+          type: string
+          enum: [OPEN, CLOSED, DISABLED]
+        latitudeE6: {type: integer, format: int64}
+        longitudeE6: {type: integer, format: int64}
+        chargerCount:
+          type: integer
+          format: int64
+          description: Optional on a write; computed by the station read endpoints.
+        idleChargerCount:
+          type: integer
+          format: int64
+          description: Optional on a write; computed by the station read endpoints.
+        minPriceCentPerKwh:
+          type: integer
+          format: int64
+          description: Optional on a write; computed by the station read endpoints.
+    StationCreateResponseEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/StationCreateResponse'}
+
     StationResponseEnvelope:
       type: object
       required: [success, code, message, data]
@@ -1879,6 +2147,64 @@ components:
         code: {type: integer, enum: [0]}
         message: {type: string}
         data: {$ref: '#/components/schemas/Command'}
+    StationStatusUpdate:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [OPEN, CLOSED, DISABLED]
+          description: |-
+            Target status. Only these transitions are accepted: OPEN<->CLOSED,
+            OPEN->DISABLED, CLOSED->DISABLED, DISABLED->OPEN. A change to the
+            status the station already has, and DISABLED->CLOSED, are refused
+            with 409.
+    ChargerStatusUpdate:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [IDLE, DISABLED]
+          description: |-
+            Target status an administrator may set. IDLE<->DISABLED and
+            FAULT->IDLE/DISABLED are accepted; OCCUPIED and RESTARTING are
+            refused with 409 because a charger in use must be force-released
+            first and a restart in flight is decided by its receipt.
+    ChargerStatusRecord:
+      type: object
+      required: [chargerId, chargerCode, status]
+      properties:
+        chargerId: {type: integer, format: int64}
+        chargerCode: {type: string}
+        status:
+          type: string
+          enum: [IDLE, OCCUPIED, FAULT, RESTARTING, DISABLED]
+    StationStatusResponseEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/StationCreateResponse'}
+    ChargerStatusResponseEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/ChargerStatusRecord'}
+
+    DeviceCommandResponseEnvelope:
+      type: object
+      required: [success, code, message, data]
+      properties:
+        success: {type: boolean, enum: [true]}
+        code: {type: integer, enum: [0]}
+        message: {type: string}
+        data: {$ref: '#/components/schemas/DeviceCommand'}
 
     Review:
       type: object

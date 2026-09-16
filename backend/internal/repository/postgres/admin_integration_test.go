@@ -3,12 +3,14 @@ package postgres
 import (
 	"database/sql"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/heguangV/charging-station-platform/backend/internal/admin"
 	"github.com/heguangV/charging-station-platform/backend/internal/order"
+	"github.com/heguangV/charging-station-platform/backend/internal/station"
 )
 
 func TestAdminCreateStationAuditAndIdempotency(t *testing.T) {
@@ -74,7 +76,7 @@ func TestAdminRestartChargerLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestartCharger() error = %v", err)
 	}
-	if result.Status != admin.CommandPending || result.CommandNo == "" {
+	if result.Status != admin.CommandPending || result.CommandID == "" {
 		t.Fatalf("command = %#v", result)
 	}
 
@@ -92,11 +94,11 @@ func TestAdminRestartChargerLifecycle(t *testing.T) {
 	var action, commandID string
 	if err := db.QueryRowContext(ctx,
 		`SELECT payload->>'action', payload->>'command_id' FROM outbox_events WHERE event_type = 'CHARGER_COMMAND_REQUESTED' AND aggregate_id = $1 AND payload->>'command_id' = $2`,
-		strconvFormatInt64(chargerA), result.CommandNo).Scan(&action, &commandID); err != nil {
+		strconvFormatInt64(chargerA), result.CommandID).Scan(&action, &commandID); err != nil {
 		t.Fatalf("outbox: %v", err)
 	}
-	if action != "RESTART" || commandID != result.CommandNo {
-		t.Fatalf("command payload action=%q command_id=%q, want RESTART/%s", action, commandID, result.CommandNo)
+	if action != "RESTART" || commandID != result.CommandID {
+		t.Fatalf("command payload action=%q command_id=%q, want RESTART/%s", action, commandID, result.CommandID)
 	}
 	if err := db.QueryRowContext(ctx,
 		`SELECT count(*) FROM outbox_events WHERE event_type = 'CHARGER_COMMAND_REQUESTED' AND aggregate_id = $1 AND payload->>'charger_id' = $2`,
@@ -110,8 +112,8 @@ func TestAdminRestartChargerLifecycle(t *testing.T) {
 	// Audit trail.
 	var audits int64
 	if err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM operation_logs WHERE action = 'charger.restart' AND payload->>'commandNo' = $1`,
-		result.CommandNo).Scan(&audits); err != nil {
+		`SELECT count(*) FROM operation_logs WHERE action = 'charger.restart' AND payload->>'commandId' = $1`,
+		result.CommandID).Scan(&audits); err != nil {
 		t.Fatalf("audit: %v", err)
 	}
 	if audits != 1 {
@@ -181,6 +183,41 @@ func TestAdminUserAndOrderLists(t *testing.T) {
 	}
 	if orders.Items[0].PaymentStatus != "PENDING" {
 		t.Fatalf("payment status = %q", orders.Items[0].PaymentStatus)
+	}
+
+	// The management UI opens a user's detail page and asks for that user's
+	// orders, so the list must be filterable by user. Two users with one order
+	// each is the smallest state that can tell the filter apart from "everything".
+	_, userB, _, _, chargerB := orderFlowFixture(t, db, ctx, uniqueSuffix(t))
+	orderStore, err := NewOrderStore(db)
+	if err != nil {
+		t.Fatalf("NewOrderStore() error = %v", err)
+	}
+	otherOrder, err := orderStore.CreateOrder(ctx, order.CreateOrderCommand{
+		UserID: userB, ChargerID: chargerB, IdempotencyKey: "adm-other-" + suffix, RequestHash: "h", TraceID: "t",
+	})
+	if err != nil {
+		t.Fatalf("second user's order: %v", err)
+	}
+	filtered, err := store.ListOrders(ctx, admin.AdminOrderFilter{Page: 1, PageSize: 100, UserID: userB})
+	if err != nil {
+		t.Fatalf("ListOrders(userId=%d) error = %v", userB, err)
+	}
+	if len(filtered.Items) != 1 || filtered.Items[0].OrderNo != otherOrder.OrderNo || filtered.Items[0].UserID != userB {
+		t.Fatalf("filtered orders = %#v, want exactly %s for user %d", filtered.Items, otherOrder.OrderNo, userB)
+	}
+	if filtered.Meta.Total != 1 {
+		t.Fatalf("filtered total = %d, want 1", filtered.Meta.Total)
+	}
+	// The first user's order must not appear in the second user's page.
+	own, err := store.ListOrders(ctx, admin.AdminOrderFilter{Page: 1, PageSize: 100, UserID: userA})
+	if err != nil {
+		t.Fatalf("ListOrders(userId=%d) error = %v", userA, err)
+	}
+	for _, item := range own.Items {
+		if item.UserID != userA {
+			t.Fatalf("user %d's page contains an order of user %d", userA, item.UserID)
+		}
 	}
 }
 
@@ -313,4 +350,169 @@ func TestAdminTariffUpdateAuditContainsOffPeak(t *testing.T) {
 			t.Fatalf("audit payload missing %s: %s", field, payload)
 		}
 	}
+}
+
+// TestAdminDeviceCommandLookupOnRealDatabase reads back a command outcome that
+// the receipt path wrote. The admin endpoint must show the durable fact - what
+// the device answered and whether it has been applied - and must report an
+// unknown identifier as not found instead of an empty record.
+func TestAdminDeviceCommandLookupOnRealDatabase(t *testing.T) {
+	db, ctx := integrationDB(t)
+	adminStore, err := NewAdminStore(db)
+	if err != nil {
+		t.Fatalf("NewAdminStore() error = %v", err)
+	}
+	orderStore, err := NewOrderStore(db)
+	if err != nil {
+		t.Fatalf("NewOrderStore() error = %v", err)
+	}
+	suffix := uniqueSuffix(t)
+	_, _, stationA, _, _ := orderFlowFixture(t, db, ctx, suffix)
+	chargerID := seedRestartingCharger(t, db, ctx, stationA, "CMD-STATUS-"+suffix)
+
+	commandID := "CMD-STATUS-" + suffix
+	applied, err := orderStore.RecordChargerCommandResult(ctx, commandID, "", chargerID, order.CommandRestart, order.CommandResultCompleted, "trace-status")
+	if err != nil {
+		t.Fatalf("RecordChargerCommandResult() error = %v", err)
+	}
+	if !applied {
+		t.Fatal("the receipt was recorded as a replay")
+	}
+
+	command, err := adminStore.FindDeviceCommand(ctx, commandID)
+	if err != nil {
+		t.Fatalf("FindDeviceCommand() error = %v", err)
+	}
+	if command.CommandID != commandID || command.ChargerID != chargerID {
+		t.Fatalf("command = %#v, want commandId %s on charger %d", command, commandID, chargerID)
+	}
+	if command.Action != order.CommandRestart || command.Result != order.CommandResultCompleted {
+		t.Fatalf("action/result = %s/%s", command.Action, command.Result)
+	}
+	if !command.Applied {
+		t.Fatal("applied = false after a successful restart receipt")
+	}
+	if _, err := time.Parse(time.RFC3339, command.RecordedAt); err != nil {
+		t.Fatalf("recordedAt = %q, want an RFC3339 timestamp: %v", command.RecordedAt, err)
+	}
+
+	if _, err := adminStore.FindDeviceCommand(ctx, "CMD-STATUS-missing-"+suffix); !errors.Is(err, admin.ErrDeviceCommandNotFound) {
+		t.Fatalf("unknown command error = %v, want ErrDeviceCommandNotFound", err)
+	}
+}
+
+// TestAdminStatusChangesOnRealDatabase pins the station and charger lifecycle:
+// the legal moves happen and are audited, the illegal ones are refused with the
+// row unchanged, and a charger that is in use stays out of reach.
+func TestAdminStatusChangesOnRealDatabase(t *testing.T) {
+	db, ctx := integrationDB(t)
+	store, err := NewAdminStore(db)
+	if err != nil {
+		t.Fatalf("NewAdminStore() error = %v", err)
+	}
+	suffix := uniqueSuffix(t)
+	userA, _, stationA, _, chargerA := orderFlowFixture(t, db, ctx, suffix)
+	const adminID = 9
+
+	readStation := func() string {
+		var status string
+		if err := db.QueryRowContext(ctx, `SELECT status FROM stations WHERE id = $1`, stationA).Scan(&status); err != nil {
+			t.Fatalf("read station status: %v", err)
+		}
+		return status
+	}
+	auditCount := func(action, resourceID string) int64 {
+		var count int64
+		if err := db.QueryRowContext(ctx,
+			`SELECT count(*) FROM operation_logs WHERE action = $1 AND resource_id = $2`, action, resourceID).Scan(&count); err != nil {
+			t.Fatalf("audit count: %v", err)
+		}
+		return count
+	}
+
+	// OPEN -> CLOSED: allowed, audited, and the response reports the new status.
+	closed, err := store.ChangeStationStatus(ctx, admin.ChangeStationStatusCommand{
+		AdminID: adminID, StationID: stationA, Status: station.StatusClosed, TraceID: "trace-station-closed"})
+	if err != nil {
+		t.Fatalf("OPEN -> CLOSED error = %v", err)
+	}
+	if closed.Status != station.StatusClosed || readStation() != station.StatusClosed {
+		t.Fatalf("station status = %s / %s, want CLOSED", closed.Status, readStation())
+	}
+	if audits := auditCount("station.status", strconv.FormatInt(stationA, 10)); audits != 1 {
+		t.Fatalf("station audit rows = %d, want 1", audits)
+	}
+
+	// CLOSED -> DISABLED is allowed; DISABLED -> CLOSED is not.
+	if _, err := store.ChangeStationStatus(ctx, admin.ChangeStationStatusCommand{
+		AdminID: adminID, StationID: stationA, Status: station.StatusDisabled, TraceID: "t"}); err != nil {
+		t.Fatalf("CLOSED -> DISABLED error = %v", err)
+	}
+	if _, err := store.ChangeStationStatus(ctx, admin.ChangeStationStatusCommand{
+		AdminID: adminID, StationID: stationA, Status: station.StatusClosed, TraceID: "t"}); !errors.Is(err, admin.ErrInvalidStateTransition) {
+		t.Fatalf("DISABLED -> CLOSED error = %v, want ErrInvalidStateTransition", err)
+	}
+	if readStation() != station.StatusDisabled {
+		t.Fatalf("station status = %s after a refused transition", readStation())
+	}
+	// Same status is a conflict, not a silent success.
+	if _, err := store.ChangeStationStatus(ctx, admin.ChangeStationStatusCommand{
+		AdminID: adminID, StationID: stationA, Status: station.StatusDisabled, TraceID: "t"}); !errors.Is(err, admin.ErrInvalidStateTransition) {
+		t.Fatalf("DISABLED -> DISABLED error = %v, want ErrInvalidStateTransition", err)
+	}
+	if _, err := store.ChangeStationStatus(ctx, admin.ChangeStationStatusCommand{
+		AdminID: adminID, StationID: stationA + 999999, Status: station.StatusOpen, TraceID: "t"}); !errors.Is(err, admin.ErrStationNotFound) {
+		t.Fatalf("unknown station error = %v, want ErrStationNotFound", err)
+	}
+	// No refused change may leave an audit row behind.
+	if audits := auditCount("station.status", strconv.FormatInt(stationA, 10)); audits != 2 {
+		t.Fatalf("station audit rows = %d, want 2 (only the two applied changes)", audits)
+	}
+
+	// Charger: IDLE -> DISABLED -> IDLE, with the version moving each time.
+	readCharger := func() (string, int64) {
+		var status string
+		var version int64
+		if err := db.QueryRowContext(ctx, `SELECT status, version FROM chargers WHERE id = $1`, chargerA).Scan(&status, &version); err != nil {
+			t.Fatalf("read charger: %v", err)
+		}
+		return status, version
+	}
+	_, versionBefore := readCharger()
+	disabled, err := store.ChangeChargerStatus(ctx, admin.ChangeChargerStatusCommand{
+		AdminID: adminID, ChargerID: chargerA, Status: station.ChargerStatusDisabled, TraceID: "trace-charger"})
+	if err != nil {
+		t.Fatalf("IDLE -> DISABLED error = %v", err)
+	}
+	if disabled.Status != station.ChargerStatusDisabled || disabled.ChargerCode == "" {
+		t.Fatalf("charger record = %#v", disabled)
+	}
+	if status, versionAfter := readCharger(); status != station.ChargerStatusDisabled || versionAfter != versionBefore+1 {
+		t.Fatalf("charger = %s/%d, want DISABLED with version %d", status, versionAfter, versionBefore+1)
+	}
+	if _, err := store.ChangeChargerStatus(ctx, admin.ChangeChargerStatusCommand{
+		AdminID: adminID, ChargerID: chargerA, Status: station.ChargerStatusIdle, TraceID: "t"}); err != nil {
+		t.Fatalf("DISABLED -> IDLE error = %v", err)
+	}
+	if audits := auditCount("charger.status", strconv.FormatInt(chargerA, 10)); audits != 2 {
+		t.Fatalf("charger audit rows = %d, want 2", audits)
+	}
+
+	// A charger held by a live order cannot be taken out of service by hand: the
+	// active order would keep a charger that is no longer available.
+	if _, err := db.ExecContext(ctx, `UPDATE chargers SET status = 'OCCUPIED' WHERE id = $1`, chargerA); err != nil {
+		t.Fatalf("occupy charger: %v", err)
+	}
+	if _, err := store.ChangeChargerStatus(ctx, admin.ChangeChargerStatusCommand{
+		AdminID: adminID, ChargerID: chargerA, Status: station.ChargerStatusDisabled, TraceID: "t"}); !errors.Is(err, admin.ErrInvalidStateTransition) {
+		t.Fatalf("OCCUPIED -> DISABLED error = %v, want ErrInvalidStateTransition", err)
+	}
+	if status, _ := readCharger(); status != "OCCUPIED" {
+		t.Fatalf("charger status = %s after a refused transition", status)
+	}
+	if _, err := store.ChangeChargerStatus(ctx, admin.ChangeChargerStatusCommand{
+		AdminID: adminID, ChargerID: chargerA + 999999, Status: station.ChargerStatusIdle, TraceID: "t"}); !errors.Is(err, admin.ErrChargerNotFound) {
+		t.Fatalf("unknown charger error = %v, want ErrChargerNotFound", err)
+	}
+	_ = userA
 }

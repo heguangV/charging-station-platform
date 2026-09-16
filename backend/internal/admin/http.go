@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/heguangV/charging-station-platform/backend/internal/auth"
 	"github.com/heguangV/charging-station-platform/backend/internal/httpapi"
@@ -53,6 +54,13 @@ func (h *Handlers) Register(server interface {
 	server.Register("/api/v1/admin/stations", h.auth.RequireRole(auth.RoleAdmin, h.stations))
 	server.Register("/api/v1/admin/chargers", h.auth.RequireRole(auth.RoleAdmin, h.listChargers))
 	server.Register("/api/v1/admin/chargers/{chargerId}/restart", h.auth.RequireAdminWrite(h.restartCharger))
+	// Reading a command's outcome is a read: any administrator role, including
+	// AUDITOR, may look it up; starting the command is the write.
+	server.Register("/api/v1/admin/device-commands/{commandId}", h.auth.RequireRole(auth.RoleAdmin, h.getDeviceCommand))
+	// Status changes are writes: RequireAdminWrite keeps the read-only AUDITOR
+	// role (and any non-admin) out, which answers with 403.
+	server.Register("/api/v1/admin/stations/{stationId}/status", h.auth.RequireAdminWrite(h.changeStationStatus))
+	server.Register("/api/v1/admin/chargers/{chargerId}/status", h.auth.RequireAdminWrite(h.changeChargerStatus))
 	server.Register("/api/v1/admin/users", h.auth.RequireRole(auth.RoleAdmin, h.listUsers))
 	server.Register("/api/v1/admin/orders", h.auth.RequireRole(auth.RoleAdmin, h.listOrders))
 	server.Register("/api/v1/admin/users/{userId}", h.auth.RequireRole(auth.RoleAdmin, h.userDetail))
@@ -478,12 +486,148 @@ func (h *Handlers) listOrders(w http.ResponseWriter, r *http.Request) {
 		writeInvalidQuery(w, r)
 		return
 	}
+	if raw := strings.TrimSpace(query.Get("userId")); raw != "" {
+		userID, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || userID < 1 {
+			writeInvalidQuery(w, r)
+			return
+		}
+		filter.UserID = userID
+	}
 	result, err := h.service.store.ListOrders(r.Context(), filter)
 	if err != nil {
 		writeAdminError(w, r, err)
 		return
 	}
 	writePage(w, r, http.StatusOK, result)
+}
+
+func (h *Handlers) getDeviceCommand(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	commandID := strings.TrimSpace(r.PathValue("commandId"))
+	result, err := h.service.DeviceCommand(r.Context(), commandID)
+	if err != nil {
+		writeAdminError(w, r, err)
+		return
+	}
+	httpapi.WriteJSON(w, http.StatusOK, httpapi.Response{
+		Success: true,
+		Code:    httpapi.CodeOK,
+		Message: "ok",
+		Data:    result,
+	})
+}
+
+// statusRequest is the body of both status endpoints.
+type statusRequest struct {
+	Status string `json:"status"`
+}
+
+// changeStationStatus takes a station out of service or brings it back. The
+// transition table lives in the station domain, and an illegal transition is a
+// 409 rather than a silent write.
+func (h *Handlers) changeStationStatus(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPut) {
+		return
+	}
+	identity, ok := identityFrom(w, r)
+	if !ok {
+		return
+	}
+	stationID, ok := pathID(w, r, "stationId", "station id")
+	if !ok {
+		return
+	}
+	status, ok := readStatusBody(w, r)
+	if !ok {
+		return
+	}
+
+	result, err := h.service.ChangeStationStatus(r.Context(), ChangeStationStatusCommand{
+		AdminID:   identity.ID,
+		StationID: stationID,
+		Status:    status,
+		TraceID:   httpapi.RequestID(r.Context()),
+	})
+	if err != nil {
+		writeAdminError(w, r, err)
+		return
+	}
+	httpapi.WriteJSON(w, http.StatusOK, httpapi.Response{
+		Success: true,
+		Code:    httpapi.CodeOK,
+		Message: "ok",
+		Data:    result,
+	})
+}
+
+// changeChargerStatus is the same operation for one charger.
+func (h *Handlers) changeChargerStatus(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPut) {
+		return
+	}
+	identity, ok := identityFrom(w, r)
+	if !ok {
+		return
+	}
+	chargerID, ok := pathID(w, r, "chargerId", "charger id")
+	if !ok {
+		return
+	}
+	status, ok := readStatusBody(w, r)
+	if !ok {
+		return
+	}
+
+	result, err := h.service.ChangeChargerStatus(r.Context(), ChangeChargerStatusCommand{
+		AdminID:   identity.ID,
+		ChargerID: chargerID,
+		Status:    status,
+		TraceID:   httpapi.RequestID(r.Context()),
+	})
+	if err != nil {
+		writeAdminError(w, r, err)
+		return
+	}
+	httpapi.WriteJSON(w, http.StatusOK, httpapi.Response{
+		Success: true,
+		Code:    httpapi.CodeOK,
+		Message: "ok",
+		Data:    result,
+	})
+}
+
+// pathID reads a positive integer path parameter, answering 400 itself when the
+// value is missing or unusable.
+func pathID(w http.ResponseWriter, r *http.Request, name, label string) (int64, bool) {
+	value, err := strconv.ParseInt(r.PathValue(name), 10, 64)
+	if err != nil || value < 1 {
+		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid "+label, nil)
+		return 0, false
+	}
+	return value, true
+}
+
+// readStatusBody reads {"status": "..."} from the request body. An empty status
+// is rejected here so the domain never has to guess what "" meant.
+func readStatusBody(w http.ResponseWriter, r *http.Request) (string, bool) {
+	body, ok := readBody(w, r)
+	if !ok {
+		return "", false
+	}
+	var request statusRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid request body", nil)
+		return "", false
+	}
+	status := strings.TrimSpace(request.Status)
+	if status == "" {
+		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "status is required", nil)
+		return "", false
+	}
+	return status, true
 }
 
 func (h *Handlers) restartCharger(w http.ResponseWriter, r *http.Request) {
@@ -565,6 +709,8 @@ func writeAdminError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, ErrUserNotFound):
 		httpapi.WriteError(w, r, http.StatusNotFound, httpapi.CodeResourceNotFound, "user not found", nil)
+	case errors.Is(err, ErrDeviceCommandNotFound):
+		httpapi.WriteError(w, r, http.StatusNotFound, httpapi.CodeResourceNotFound, "device command not found", nil)
 	case errors.Is(err, order.ErrIdempotencyConflict), errors.Is(err, order.ErrIdempotencyInProgress):
 		// The contract requires 409 for a reused idempotency key.
 		httpapi.WriteError(w, r, http.StatusConflict, codeIdempotencyConflict, "idempotency key conflict", nil)
@@ -572,8 +718,13 @@ func writeAdminError(w http.ResponseWriter, r *http.Request, err error) {
 		httpapi.WriteError(w, r, http.StatusConflict, codeChargerUnavailable, "charger is unavailable", nil)
 	case errors.Is(err, ErrInvalidStateTransition):
 		httpapi.WriteError(w, r, http.StatusConflict, codeInvalidStateTransition, "invalid state transition", nil)
+	case errors.Is(err, ErrStationNotFound):
+		httpapi.WriteError(w, r, http.StatusNotFound, httpapi.CodeResourceNotFound, "station not found", nil)
+	case errors.Is(err, ErrChargerNotFound):
+		httpapi.WriteError(w, r, http.StatusNotFound, httpapi.CodeResourceNotFound, "charger not found", nil)
 	case errors.Is(err, ErrInvalidStationFilter), errors.Is(err, ErrInvalidUserStatus), errors.Is(err, ErrInvalidReason),
-		errors.Is(err, ErrInvalidTariff), errors.Is(err, ErrInvalidLedgerFilter):
+		errors.Is(err, ErrInvalidTariff), errors.Is(err, ErrInvalidLedgerFilter),
+		errors.Is(err, ErrInvalidStatusValue):
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid request parameter", nil)
 	default:
 		httpapi.WriteError(w, r, http.StatusServiceUnavailable, httpapi.CodeDatabaseError, "administration is temporarily unavailable", nil)

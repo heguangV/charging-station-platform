@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/heguangV/charging-station-platform/backend/internal/order"
@@ -108,12 +109,34 @@ type AdminOrderFilter struct {
 	PageSize int64
 	OrderNo  string
 	Status   string
+	// UserID narrows the list to one user's orders (the management UI opens a
+	// user's detail page and asks for that user's orders). Zero means "no user
+	// filter": user ids start at 1, the same convention OrderNo uses for "".
+	UserID int64
 }
 
-// Command is the contract Command payload for a device command.
+// Command is the contract Command payload returned when a device command is
+// accepted (202).
+//
+// The identifier is commandId, the same name the query endpoint uses and the
+// same value that lives in charger_command_outcomes.command_id. It used to be
+// called commandNo here while the column and every other layer said command_id;
+// two names for one identifier is how a "no such command" bug hides.
 type Command struct {
-	CommandNo string `json:"commandNo"`
+	CommandID string `json:"commandId"`
 	Status    string `json:"status"`
+}
+
+// DeviceCommand is what the platform recorded about one device command: the
+// outcome the gateway reported and whether it has been applied to the order.
+type DeviceCommand struct {
+	CommandID  string `json:"commandId"`
+	ChargerID  int64  `json:"chargerId"`
+	OrderNo    string `json:"orderNo,omitempty"`
+	Action     string `json:"action"`
+	Result     string `json:"result"`
+	Applied    bool   `json:"applied"`
+	RecordedAt string `json:"recordedAt"`
 }
 
 // CreateStationCommand carries a validated station creation request.
@@ -140,14 +163,23 @@ type RestartCommand struct {
 }
 
 // StationRecord is the created station as stored.
+// StationRecord is the station an admin write returns. The JSON names are the
+// contract's (the Station schema uses camelCase); without tags Go would emit
+// ID/Code/Status and the create-station response would not match the schema it
+// is registered under - which is what it did until a status-change test compared
+// the response against the contract.
+//
+// The aggregate fields the Station schema also carries (chargerCount,
+// idleChargerCount, minPriceCentPerKwh) are read paths, not something a create
+// or a status change computes; they are deliberately absent here.
 type StationRecord struct {
-	ID          int64
-	Code        string
-	Name        string
-	Address     string
-	LatitudeE6  int64
-	LongitudeE6 int64
-	Status      string
+	ID          int64  `json:"id"`
+	Code        string `json:"code"`
+	Name        string `json:"name"`
+	Address     string `json:"address"`
+	LatitudeE6  int64  `json:"latitudeE6"`
+	LongitudeE6 int64  `json:"longitudeE6"`
+	Status      string `json:"status"`
 }
 
 // TariffView is the charger tariff snapshot the admin API exposes.
@@ -237,6 +269,43 @@ type UserLedgerFilter struct {
 	Type     string
 }
 
+// ChangeStationStatusCommand carries a validated station status change.
+type ChangeStationStatusCommand struct {
+	AdminID   int64
+	StationID int64
+	Status    string
+	TraceID   string
+}
+
+// ChangeChargerStatusCommand carries a validated charger status change.
+type ChangeChargerStatusCommand struct {
+	AdminID   int64
+	ChargerID int64
+	Status    string
+	TraceID   string
+}
+
+// ChargerStatusRecord is the charger a status change returned.
+type ChargerStatusRecord struct {
+	ChargerID   int64  `json:"chargerId"`
+	ChargerCode string `json:"chargerCode"`
+	Status      string `json:"status"`
+}
+
+// ErrDeviceCommandNotFound reports a device command the platform has no record
+// of. It maps to 404: the identifier is either wrong or the gateway never
+// answered, and neither is something the caller can fix by retrying.
+var ErrDeviceCommandNotFound = errors.New("admin: device command not found")
+
+// ErrInvalidStatusValue reports a status outside the contract enum.
+var ErrInvalidStatusValue = errors.New("admin: invalid status value")
+
+// ErrStationNotFound reports a station id the platform does not have.
+var ErrStationNotFound = errors.New("admin: station not found")
+
+// ErrChargerNotFound reports a charger id the platform does not have.
+var ErrChargerNotFound = errors.New("admin: charger not found")
+
 // Store persists admin operations. Mutating methods own their transactions
 // so business rows, the audit trail and idempotency records commit together.
 type Store interface {
@@ -248,6 +317,9 @@ type Store interface {
 	ListUserLedger(ctx context.Context, filter UserLedgerFilter) (LedgerPage, error)
 	ListOrders(ctx context.Context, filter AdminOrderFilter) (OrderPage, error)
 	RestartCharger(ctx context.Context, command RestartCommand) (Command, error)
+	FindDeviceCommand(ctx context.Context, commandID string) (DeviceCommand, error)
+	ChangeStationStatus(ctx context.Context, command ChangeStationStatusCommand) (StationRecord, error)
+	ChangeChargerStatus(ctx context.Context, command ChangeChargerStatusCommand) (ChargerStatusRecord, error)
 	GetTariff(ctx context.Context, chargerID int64) (TariffView, error)
 	UpdateTariff(ctx context.Context, update TariffUpdate) (TariffView, error)
 	ForceRelease(ctx context.Context, command ForceReleaseCommand) (StationRecordCharger, error)
@@ -411,10 +483,47 @@ func (s *Service) Restart(ctx context.Context, command RestartCommand) (Command,
 	return s.store.RestartCharger(ctx, command)
 }
 
-// NewCommandNo mints a device command business number: CMD + UTC timestamp
+// NewCommandID mints a device command business number: CMD + UTC timestamp
 // + 8 random hex chars. The audit trail and the outbox event carry it so
 // the command can be traced end to end.
-func NewCommandNo(now time.Time) (string, error) {
+// ChangeStationStatus validates the target status and delegates the transition
+// check to the store, which reads the current status under a row lock: whether a
+// transition is legal depends on the state the row is in right now, not on the
+// state a caller read a moment ago.
+func (s *Service) ChangeStationStatus(ctx context.Context, command ChangeStationStatusCommand) (StationRecord, error) {
+	if command.AdminID < 1 || command.StationID < 1 {
+		return StationRecord{}, ErrStationNotFound
+	}
+	if !station.IsStationStatus(command.Status) {
+		return StationRecord{}, ErrInvalidStatusValue
+	}
+	return s.store.ChangeStationStatus(ctx, command)
+}
+
+// ChangeChargerStatus validates the target status and delegates the transition
+// check to the store for the same reason.
+func (s *Service) ChangeChargerStatus(ctx context.Context, command ChangeChargerStatusCommand) (ChargerStatusRecord, error) {
+	if command.AdminID < 1 || command.ChargerID < 1 {
+		return ChargerStatusRecord{}, ErrChargerNotFound
+	}
+	if !station.IsChargerStatus(command.Status) {
+		return ChargerStatusRecord{}, ErrInvalidStatusValue
+	}
+	return s.store.ChangeChargerStatus(ctx, command)
+}
+
+// DeviceCommand returns what the platform recorded for one device command. The
+// identifier is the commandId the restart endpoint returned, so an operator can
+// follow a restart from submission to the receipt that applied it.
+func (s *Service) DeviceCommand(ctx context.Context, commandID string) (DeviceCommand, error) {
+	commandID = strings.TrimSpace(commandID)
+	if commandID == "" {
+		return DeviceCommand{}, ErrDeviceCommandNotFound
+	}
+	return s.store.FindDeviceCommand(ctx, commandID)
+}
+
+func NewCommandID(now time.Time) (string, error) {
 	buffer := make([]byte, 4)
 	if _, err := rand.Read(buffer); err != nil {
 		return "", fmt.Errorf("admin: generate command number: %w", err)

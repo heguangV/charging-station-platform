@@ -63,6 +63,35 @@ go run ./cmd/api
 - 会话保存在 Redis（`ncs:session:{id}`），多实例部署共享；任一实例签发的
   token 在全部实例有效，进程重启不清空会话。
 
+## 模拟设备网关
+
+`cmd/mock-gateway` 是开发用的设备替身：Worker 把充电命令发给它，它按冻结契约应答。
+应答命令只覆盖闭环的一半——平台只在收到设备回执后才把订单从 `STARTING` 推进到
+`CHARGING`、从 `STOPPING` 推进到 `COMPLETED`，所以只应答命令的网关会让订单永远停在
+`STARTING`。
+
+打开 `-receipts` 后，网关在充电命令完成后补上设备的另一半：向
+`POST /api/v1/internal/charger-events` 上报 `CHARGE_STARTED` 或 `CHARGE_STOPPED`。
+
+```bash
+NCS_CHARGER_GATEWAY_TOKEN="dev-gateway-token" \
+NCS_MOCK_GATEWAY_RECEIPTS=true \
+go run ./cmd/mock-gateway
+```
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `NCS_MOCK_GATEWAY_RECEIPTS` | false | 是否上报设备回执；默认关闭，见下方说明 |
+| `NCS_MOCK_GATEWAY_API_URL` | http://127.0.0.1:8080 | 回执上报目标 API 基址 |
+| `NCS_CHARGER_GATEWAY_TOKEN` | 必填（开启回执时） | 回执端点的服务令牌，必须与 API 侧一致；缺失时进程拒绝启动 |
+| `NCS_MOCK_GATEWAY_ENERGY_WH` | 1000 | 模拟停止时上报的计费电量（瓦时）；同时作为始末表底，保证三者自洽 |
+
+回执默认关闭：`backend/scripts/verify-closed-loop.sh` 断言“设备接受命令本身不改变订单状态”，
+并自行上报回执以便把设备事实时间放进指定费率时段。网关自动上报会悄悄改变该门禁证明的内容。
+
+设备回执以命令号为幂等键：同一命令重复投递只上报一次，平台拒绝的上报会在该命令下一次
+投递时以**完全相同的报文**重试（回执 id 与事实时间首次决定后不再变化，否则重试会变成冲突）。
+
 ## 集成测试
 
 需要真实 PostgreSQL 的测试通过 `NCS_TEST_PG_DSN` 守卫，未设置时自动跳过。

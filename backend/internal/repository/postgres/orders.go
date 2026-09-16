@@ -902,7 +902,7 @@ func (s *OrderStore) ReissueStopCommands(ctx context.Context, policy order.StopR
 			continue
 		}
 
-		commandNo, err := admin.NewCommandNo(now)
+		commandNo, err := admin.NewCommandID(now)
 		if err != nil {
 			return result, err
 		}
@@ -992,7 +992,7 @@ func chargerCommandStatus(result string) string {
 // order_no is what lets the gateway - and the receipt it sends back - name the order a command
 // belongs to; the station-level RESTART compensation below carries none.
 func (s *OrderStore) appendOrderChargerCommand(tx *sql.Tx, ctx context.Context, o order.Order, action, traceID string) error {
-	commandNo, err := admin.NewCommandNo(s.clock())
+	commandNo, err := admin.NewCommandID(s.clock())
 	if err != nil {
 		return err
 	}
@@ -1536,6 +1536,18 @@ func (s *OrderStore) GetOrderByNo(ctx context.Context, userID int64, orderNo str
 	return row.Order, nil
 }
 
+// orderByClause turns the contract's sort value into SQL. The value is checked
+// against a fixed set here as well, so this function can never interpolate
+// caller text into the statement even if a future caller forgets to validate.
+func orderByClause(sort string) string {
+	switch sort {
+	case order.SortCreatedAtAsc:
+		return "created_at ASC, id ASC"
+	default:
+		return "created_at DESC, id DESC"
+	}
+}
+
 func (s *OrderStore) ListOrdersByUser(ctx context.Context, filter order.ListFilter) (order.OrderPage, error) {
 	// Page rows and the total are separate queries sharing the filter, so
 	// pages beyond the last row still report the real total. Filters cover
@@ -1564,7 +1576,7 @@ func (s *OrderStore) ListOrdersByUser(ctx context.Context, filter order.ListFilt
 	rows, err := s.db.QueryContext(ctx, `SELECT id, order_no, user_id, station_id, charger_id, status, amount_cents, paid_cents, payment_status, energy_wh, created_at, updated_at
 FROM charging_orders
 WHERE `+filterSQL+`
-ORDER BY created_at DESC
+ORDER BY `+orderByClause(filter.Sort)+`
 LIMIT $7 OFFSET $8`, append(args, filter.PageSize, (filter.Page-1)*filter.PageSize)...)
 	if err != nil {
 		return order.OrderPage{}, err

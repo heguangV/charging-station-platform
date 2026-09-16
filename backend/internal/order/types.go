@@ -36,6 +36,10 @@ var (
 	ErrInvalidStatusFilter = errors.New("order: invalid status filter")
 	// ErrInvalidPaymentStatus reports a payment state outside the enum.
 	ErrInvalidPaymentStatus = errors.New("order: invalid payment status")
+	// ErrInvalidSort reports a sort value outside {createdAt, -createdAt}.
+	ErrInvalidSort = errors.New("order: invalid sort value")
+	// ErrInvalidTimeWindow reports fromAt >= toAt, a window that can never match.
+	ErrInvalidTimeWindow = errors.New("order: invalid creation-time window")
 	// ErrInvalidChargerID reports a chargerId below 1 in the request body.
 	ErrInvalidChargerID = errors.New("order: invalid charger id")
 	// ErrUserFrozen maps to 403 USER_FROZEN: the account was disabled after
@@ -198,7 +202,18 @@ type ListFilter struct {
 	PaymentStatus string
 	CreatedFrom   *time.Time
 	CreatedTo     *time.Time
+	// Sort is the order of the result page. The contract allows "createdAt" and
+	// "-createdAt" (newest first, the default); anything else is rejected
+	// rather than silently ignored, so a typo cannot look like a valid query.
+	Sort string
 }
+
+// SortCreatedAtAsc and SortCreatedAtDesc are the two sort values the contract
+// registers for the order list.
+const (
+	SortCreatedAtAsc  = "createdAt"
+	SortCreatedAtDesc = "-createdAt"
+)
 
 // SettleCommand carries a validated confirmation request (UC-U-09).
 type SettleCommand struct {
@@ -461,6 +476,18 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (OrderPage, error
 	}
 	if filter.PaymentStatus != "" && filter.PaymentStatus != "PENDING" && filter.PaymentStatus != "PAID" && filter.PaymentStatus != "PARTIAL_PAID" {
 		return OrderPage{}, ErrInvalidPaymentStatus
+	}
+	// The creation-time window and the sort value are part of the registered
+	// contract for this endpoint (the front end sends fromAt/toAt/sort), so they
+	// are validated here as well as parsed at the HTTP edge: a service called
+	// directly must not accept a window that can never match or an unknown sort.
+	if filter.CreatedFrom != nil && filter.CreatedTo != nil && !filter.CreatedFrom.Before(*filter.CreatedTo) {
+		return OrderPage{}, ErrInvalidTimeWindow
+	}
+	switch filter.Sort {
+	case "", SortCreatedAtAsc, SortCreatedAtDesc:
+	default:
+		return OrderPage{}, ErrInvalidSort
 	}
 
 	result, err := s.store.ListOrdersByUser(ctx, filter)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/heguangV/charging-station-platform/backend/internal/auth"
 )
@@ -216,6 +217,55 @@ var _ auth.AccountMutation = (*AccountMutationAdapter)(nil)
 // response timing. Display name defaults to 用户 + the last four phone
 // digits, balance starts at zero, and no password is set until the user
 // creates one.
+// RegisterUser creates a user with a password and its wallet in one
+// transaction. The unique index on phone is the authority: a duplicate comes back
+// as ErrAccountExists rather than as a driver error, and the transaction rolls
+// back so a failed registration leaves neither a user nor a wallet behind.
+// isUniqueViolation reports whether an error is a unique-index conflict
+// (SQLSTATE 23505). For registration that means the phone already has an
+// account, which is a business answer (409) rather than an internal error.
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	var state interface{ SQLState() string }
+	if errors.As(err, &state) {
+		return state.SQLState() == "23505"
+	}
+	return strings.Contains(err.Error(), "23505")
+}
+
+func (s *AccountStore) RegisterUser(ctx context.Context, phone, displayName, passwordHash string) (auth.UserAccount, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return auth.UserAccount{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var user auth.UserAccount
+	var email sql.NullString
+	err = tx.QueryRowContext(ctx, `INSERT INTO user_accounts (phone, display_name, password_hash, status)
+VALUES ($1, $2, $3, 'ACTIVE')
+RETURNING id, phone, email, display_name, password_hash, status`,
+		phone, displayName, passwordHash).
+		Scan(&user.ID, &user.Phone, &email, &user.DisplayName, &user.PasswordHash, &user.Status)
+	if isUniqueViolation(err) {
+		return auth.UserAccount{}, auth.ErrAccountExists
+	}
+	if err != nil {
+		return auth.UserAccount{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO wallet_accounts (user_id, balance_cents)
+VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING`, user.ID); err != nil {
+		return auth.UserAccount{}, err
+	}
+	user.Email = email.String
+	if err := tx.Commit(); err != nil {
+		return auth.UserAccount{}, err
+	}
+	return user, nil
+}
+
 func (s *AccountStore) EnsureUserWithWallet(ctx context.Context, phone string) (auth.UserAccount, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

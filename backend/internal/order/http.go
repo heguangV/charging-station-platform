@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/heguangV/charging-station-platform/backend/internal/auth"
 	"github.com/heguangV/charging-station-platform/backend/internal/httpapi"
@@ -126,12 +128,23 @@ func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid query parameter", nil)
 		return
 	}
+	createdFrom, ok := parseTimeQuery(w, r, "createdFrom")
+	if !ok {
+		return
+	}
+	createdTo, ok := parseTimeQuery(w, r, "createdTo")
+	if !ok {
+		return
+	}
 
 	result, err := h.service.List(r.Context(), ListFilter{
-		UserID:   identity.ID,
-		Page:     page,
-		PageSize: pageSize,
-		Status:   r.URL.Query().Get("status"),
+		UserID:      identity.ID,
+		Page:        page,
+		PageSize:    pageSize,
+		Status:      r.URL.Query().Get("status"),
+		CreatedFrom: createdFrom,
+		CreatedTo:   createdTo,
+		Sort:        r.URL.Query().Get("sort"),
 	})
 	if err != nil {
 		writeOrderError(w, r, err)
@@ -280,6 +293,26 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 }
 
 // writeOrderError maps domain errors to the shared error-code registry.
+// parseTimeQuery reads an RFC3339 timestamp query parameter. Empty means "no
+// bound". The registered parameter names for this endpoint are createdFrom and
+// createdTo, so a value that does not parse is a 400 rather than a silently
+// ignored filter - a user who typed a date and got the unfiltered list would
+// have no way to notice.
+func parseTimeQuery(w http.ResponseWriter, r *http.Request, name string) (*time.Time, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return nil, true
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument,
+			name+" must be an RFC3339 timestamp", nil)
+		return nil, false
+	}
+	utc := parsed.UTC()
+	return &utc, true
+}
+
 func writeOrderError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, ErrOrderNotFound):
@@ -287,7 +320,8 @@ func writeOrderError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrInvalidOrderNo), errors.Is(err, ErrInvalidPagination),
 		errors.Is(err, ErrInvalidStatusFilter), errors.Is(err, ErrInvalidChargerID),
 		errors.Is(err, ErrInvalidPaymentStatus), errors.Is(err, ErrInvalidFactTime),
-		errors.Is(err, ErrInvalidReceiptID):
+		errors.Is(err, ErrInvalidReceiptID), errors.Is(err, ErrInvalidSort),
+		errors.Is(err, ErrInvalidTimeWindow):
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid request parameter", nil)
 	case errors.Is(err, ErrUserFrozen):
 		httpapi.WriteError(w, r, http.StatusForbidden, httpapi.CodeUserFrozen, "account is disabled", nil)

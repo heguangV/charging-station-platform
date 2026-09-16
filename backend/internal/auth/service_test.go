@@ -10,9 +10,18 @@ import (
 // fakeAccountReader serves canned accounts for service tests. It matches on
 // the account identifier exactly like the real store would, and doubles as
 // the account writer for SMS auto-registration.
+// registerCall records one RegisterUser invocation.
+type registerCall struct {
+	phone        string
+	displayName  string
+	passwordHash string
+}
+
 type fakeAccountReader struct {
-	user  *UserAccount
-	admin *AdminAccount
+	registerCalls []registerCall
+	registerErr   error
+	user          *UserAccount
+	admin         *AdminAccount
 }
 
 func (f *fakeAccountReader) FindUserByAccount(_ context.Context, account string) (*UserAccount, error) {
@@ -45,6 +54,21 @@ func (failingAccountReader) FindUserByAccount(context.Context, string) (*UserAcc
 
 func (failingAccountReader) FindAdminByUsername(context.Context, string) (*AdminAccount, error) {
 	return nil, errors.New("database down")
+}
+
+// RegisterUser records what a registration asked for and reports the configured
+// conflict, so the service's ordering (validate, verify the code, then create)
+// can be asserted without a database.
+func (f *fakeAccountReader) RegisterUser(_ context.Context, phone, displayName, passwordHash string) (UserAccount, error) {
+	f.registerCalls = append(f.registerCalls, registerCall{phone: phone, displayName: displayName, passwordHash: passwordHash})
+	if f.registerErr != nil {
+		return UserAccount{}, f.registerErr
+	}
+	return UserAccount{ID: 123, Phone: phone, DisplayName: displayName, PasswordHash: passwordHash, Status: StatusActive}, nil
+}
+
+func (failingAccountReader) RegisterUser(context.Context, string, string, string) (UserAccount, error) {
+	return UserAccount{}, errors.New("writer is down")
 }
 
 func (failingAccountReader) EnsureUserWithWallet(context.Context, string) (UserAccount, error) {

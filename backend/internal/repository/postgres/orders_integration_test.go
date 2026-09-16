@@ -975,3 +975,67 @@ func TestSTARTINGCancelKeepsChargerUntilRevocationConfirmed(t *testing.T) {
 		t.Fatalf("duplicate completion = %v, %v; want no-op", released, err)
 	}
 }
+
+// TestOrderListSortAndWindowOnRealDatabase covers the two query features the
+// front end's order list needs and that the contract registers: the creation-time
+// window (createdFrom/createdTo) and the page order (sort). Both are asserted
+// against real rows, because a filter that is accepted but not applied is
+// indistinguishable from a working one at the HTTP edge.
+func TestOrderListSortAndWindowOnRealDatabase(t *testing.T) {
+	db, ctx := integrationDB(t)
+	store, err := NewOrderStore(db)
+	if err != nil {
+		t.Fatalf("NewOrderStore() error = %v", err)
+	}
+	suffix := uniqueSuffix(t)
+	userA, _, _, _, chargerA := orderFlowFixture(t, db, ctx, suffix)
+
+	// The first order is settled (a user may only have one active flow), which
+	// also gives the second order a different amount and a later created_at.
+	olderNo := b07SettledOrder(t, db, ctx, store, userA, chargerA, suffix)
+	newer, err := store.CreateOrder(ctx, order.CreateOrderCommand{
+		UserID: userA, ChargerID: chargerA, IdempotencyKey: "b07-list-sort-" + suffix, RequestHash: "h", TraceID: "t",
+	})
+	if err != nil {
+		t.Fatalf("second CreateOrder() error = %v", err)
+	}
+
+	descending, err := store.ListOrdersByUser(ctx, order.ListFilter{UserID: userA, Page: 1, PageSize: 100})
+	if err != nil || len(descending.Items) != 2 {
+		t.Fatalf("default order = %d items, %v; want 2 (newest first)", len(descending.Items), err)
+	}
+	if descending.Items[0].OrderNo != newer.OrderNo {
+		t.Fatalf("default order first item = %s, want the newest %s", descending.Items[0].OrderNo, newer.OrderNo)
+	}
+
+	ascending, err := store.ListOrdersByUser(ctx, order.ListFilter{UserID: userA, Page: 1, PageSize: 100, Sort: order.SortCreatedAtAsc})
+	if err != nil || len(ascending.Items) != 2 {
+		t.Fatalf("ascending order = %d items, %v; want 2", len(ascending.Items), err)
+	}
+	if ascending.Items[0].OrderNo != olderNo {
+		t.Fatalf("ascending first item = %s, want the oldest %s", ascending.Items[0].OrderNo, olderNo)
+	}
+	if !ascending.Items[0].CreatedAt.Before(ascending.Items[1].CreatedAt) {
+		t.Fatalf("ascending created_at = %s then %s", ascending.Items[0].CreatedAt, ascending.Items[1].CreatedAt)
+	}
+
+	// A window that starts in the future and one that ends in the past both match
+	// nothing; a window that starts an hour ago matches both rows.
+	future := time.Now().UTC().Add(time.Hour)
+	if page, err := store.ListOrdersByUser(ctx, order.ListFilter{UserID: userA, Page: 1, PageSize: 100, CreatedFrom: &future}); err != nil {
+		t.Fatalf("future window error = %v", err)
+	} else if len(page.Items) != 0 || page.Meta.Total != 0 {
+		t.Fatalf("future window items/total = %d/%d, want 0/0", len(page.Items), page.Meta.Total)
+	}
+	past := time.Now().UTC().Add(-time.Hour)
+	if page, err := store.ListOrdersByUser(ctx, order.ListFilter{UserID: userA, Page: 1, PageSize: 100, CreatedTo: &past}); err != nil {
+		t.Fatalf("past window error = %v", err)
+	} else if len(page.Items) != 0 || page.Meta.Total != 0 {
+		t.Fatalf("past window items/total = %d/%d, want 0/0", len(page.Items), page.Meta.Total)
+	}
+	if page, err := store.ListOrdersByUser(ctx, order.ListFilter{UserID: userA, Page: 1, PageSize: 100, CreatedFrom: &past}); err != nil {
+		t.Fatalf("recent window error = %v", err)
+	} else if len(page.Items) != 2 || page.Meta.Total != 2 {
+		t.Fatalf("recent window items/total = %d/%d, want 2/2", len(page.Items), page.Meta.Total)
+	}
+}
