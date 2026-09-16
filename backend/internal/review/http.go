@@ -1,7 +1,6 @@
 package review
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -47,9 +46,9 @@ func NewHandlers(service *Service, auth identityProvider, admin adminGuard) (*Ha
 func (h *Handlers) Register(server interface {
 	Register(pattern string, handler http.HandlerFunc)
 }) {
-	server.Register("/api/v1/orders/{orderNo}/review", h.auth.RequireIdentity(h.reviewRoutes))
-	server.Register("/api/v1/stations/{stationId}/reviews", h.auth.RequireIdentity(h.wall))
-	server.Register("/api/v1/orders/{orderNo}/appeal", h.auth.RequireIdentity(h.appealRoutes))
+	server.Register("/api/v1/orders/{orderNo}/review", h.auth.RequireRole(auth.RoleUser, h.reviewRoutes))
+	server.Register("/api/v1/stations/{stationId}/reviews", h.auth.RequireRole(auth.RoleUser, h.wall))
+	server.Register("/api/v1/orders/{orderNo}/appeal", h.auth.RequireRole(auth.RoleUser, h.appealRoutes))
 	server.Register("/api/v1/admin/appeals", h.auth.RequireRole(auth.RoleAdmin, h.adminListAppeals))
 	server.Register("/api/v1/admin/appeals/{appealId}/approve", h.admin.RequireAdminWrite(h.adminApprove))
 	server.Register("/api/v1/admin/appeals/{appealId}/reject", h.admin.RequireAdminWrite(h.adminReject))
@@ -323,8 +322,7 @@ func requireMethodReview(w http.ResponseWriter, r *http.Request, method string) 
 }
 
 func decodeJSONReview(w http.ResponseWriter, r *http.Request, target any) error {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
-	if err := decoder.Decode(target); err != nil {
+	if err := httpapi.DecodeJSONStrict(http.MaxBytesReader(w, r.Body, 16<<10), target); err != nil {
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid request body", nil)
 		return err
 	}

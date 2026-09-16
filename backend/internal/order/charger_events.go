@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -154,7 +153,7 @@ func (h *ChargerEventHandlers) chargerEvents(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var request chargerEventRequest
-	if err := json.Unmarshal(body, &request); err != nil {
+	if err := httpapi.DecodeJSONBytesStrict(body, &request); err != nil {
 		h.refuse(w, r, "invalid request body", nil)
 		return
 	}

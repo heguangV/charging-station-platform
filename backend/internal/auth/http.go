@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"math"
 	"net/http"
@@ -12,8 +11,6 @@ import (
 
 	"github.com/heguangV/charging-station-platform/backend/internal/httpapi"
 )
-
-const bearerPrefix = "Bearer "
 
 // Registry codes for SMS verification outcomes (docs/database-api.md §1.10).
 const (
@@ -95,7 +92,7 @@ func (h *Handlers) Register(server interface {
 	server.Register("/api/v1/auth/admin/login", h.AdminLogin)
 	server.Register("/api/v1/auth/logout", h.Logout)
 	server.Register("/api/v1/me", h.RequireIdentity(h.meRoutes))
-	server.Register("/api/v1/me/profile", h.RequireIdentity(h.Profile))
+	server.Register("/api/v1/me/profile", h.RequireRole(RoleUser, h.Profile))
 	server.Register("/api/v1/admin/users/{userId}/freeze", h.RequireAdminWrite(h.freezeUser))
 	server.Register("/api/v1/admin/users/{userId}/unfreeze", h.RequireAdminWrite(h.unfreezeUser))
 }
@@ -270,13 +267,28 @@ func (h *Handlers) meRoutes(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		h.Me(w, r)
 	case http.MethodPut:
+		if !requireContextRole(w, r, RoleUser) {
+			return
+		}
 		h.updateProfile(w, r)
 	case http.MethodDelete:
+		if !requireContextRole(w, r, RoleUser) {
+			return
+		}
 		h.deleteAccount(w, r)
 	default:
 		w.Header().Set("Allow", "GET, PUT, DELETE")
 		httpapi.WriteError(w, r, http.StatusMethodNotAllowed, httpapi.CodeMethodNotAllowed, "method not allowed", nil)
 	}
+}
+
+func requireContextRole(w http.ResponseWriter, r *http.Request, role string) bool {
+	identity, ok := IdentityFromContext(r.Context())
+	if !ok || !Authorize(identity, role) {
+		httpapi.WriteError(w, r, http.StatusForbidden, httpapi.CodeForbidden, "insufficient permission", nil)
+		return false
+	}
+	return true
 }
 
 // Profile returns the user-center profile view (UC-U-05) on GET
@@ -359,7 +371,7 @@ func (h *Handlers) deleteAccount(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), bearerPrefix))
+	token, _ := parseBearerToken(r.Header.Get("Authorization"))
 	existed, err := h.service.DeleteAccount(r.Context(), identity.ID, token)
 	if err != nil {
 		writeProfileError(w, r, err)
@@ -392,19 +404,14 @@ func (h *Handlers) setFrozen(w http.ResponseWriter, r *http.Request, frozen bool
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid user id", nil)
 		return
 	}
-	if userID == identity.ID && frozen {
-		// An administrator must not freeze their own account (SRS: OWNER
-		// 不得停用自己的账号; the same self-protection applies here).
-		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "administrators cannot freeze their own account", nil)
-		return
+	var operationErr error
+	if frozen {
+		operationErr = h.service.FreezeUser(r.Context(), identity.ID, userID)
+	} else {
+		operationErr = h.service.UnfreezeUser(r.Context(), identity.ID, userID)
 	}
-
-	if err := h.service.FreezeUser(r.Context(), identity.ID, userID); err != nil && frozen {
-		writeProfileError(w, r, err)
-		return
-	}
-	if err := h.service.UnfreezeUser(r.Context(), identity.ID, userID); err != nil && !frozen {
-		writeProfileError(w, r, err)
+	if operationErr != nil {
+		writeProfileError(w, r, operationErr)
 		return
 	}
 	httpapi.WriteJSON(w, http.StatusOK, httpapi.Response{
@@ -493,8 +500,12 @@ func (h *Handlers) requireIdentity(w http.ResponseWriter, r *http.Request) (Iden
 
 	identity, err := h.service.Identify(r.Context(), token)
 	if err != nil {
-		if errors.Is(err, ErrUnauthorized) {
+		switch {
+		case errors.Is(err, ErrUnauthorized):
 			httpapi.WriteError(w, r, http.StatusUnauthorized, httpapi.CodeUnauthorized, "session is missing or expired", nil)
+			return Identity{}, false
+		case errors.Is(err, ErrUserFrozen):
+			httpapi.WriteError(w, r, http.StatusForbidden, httpapi.CodeUserFrozen, "account is disabled", nil)
 			return Identity{}, false
 		}
 		httpapi.WriteError(w, r, http.StatusServiceUnavailable, httpapi.CodeDatabaseError, "session check failed", nil)
@@ -504,17 +515,20 @@ func (h *Handlers) requireIdentity(w http.ResponseWriter, r *http.Request) (Iden
 }
 
 func bearerToken(w http.ResponseWriter, r *http.Request) (string, bool) {
-	header := r.Header.Get("Authorization")
-	if !strings.HasPrefix(header, bearerPrefix) {
-		httpapi.WriteError(w, r, http.StatusUnauthorized, httpapi.CodeUnauthorized, "bearer token is required", nil)
-		return "", false
-	}
-	token := strings.TrimSpace(strings.TrimPrefix(header, bearerPrefix))
-	if token == "" {
+	token, ok := parseBearerToken(r.Header.Get("Authorization"))
+	if !ok {
 		httpapi.WriteError(w, r, http.StatusUnauthorized, httpapi.CodeUnauthorized, "bearer token is required", nil)
 		return "", false
 	}
 	return token, true
+}
+
+func parseBearerToken(header string) (string, bool) {
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+		return "", false
+	}
+	return parts[1], true
 }
 
 func writeAuthError(w http.ResponseWriter, r *http.Request, err error) {
@@ -600,8 +614,7 @@ const maxJSONBodyBytes = 64 << 10
 // already written and ok is false.
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, target any) (any, bool) {
 	reader := http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
-	decoder := json.NewDecoder(reader)
-	if err := decoder.Decode(target); err != nil {
+	if err := httpapi.DecodeJSONStrict(reader, target); err != nil {
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid request body", nil)
 		return nil, false
 	}

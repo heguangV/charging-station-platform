@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -174,6 +175,10 @@ func Load() (Config, error) {
 	if llmTimeoutMS < 1 {
 		return Config{}, fmt.Errorf("invalid %s=%d: must be at least 1", envLLMTimeoutMS, llmTimeoutMS)
 	}
+	mapBaseURL := strings.TrimSpace(os.Getenv(envMapBaseURL))
+	if err := validateCredentialedEndpoint(envMapBaseURL, mapBaseURL); err != nil {
+		return Config{}, err
+	}
 	if stopRecoveryAttempts < 1 {
 		return Config{}, fmt.Errorf("invalid %s=%d: must be at least 1", envStopRecoveryAttempts, stopRecoveryAttempts)
 	}
@@ -229,7 +234,7 @@ func Load() (Config, error) {
 		StopRecoveryBackoff:  stopRecoveryBackoff,
 		Assistant: AssistantConfig{
 			MapServerKey: strings.TrimSpace(os.Getenv(envMapServerKey)),
-			MapBaseURL:   strings.TrimSpace(os.Getenv(envMapBaseURL)),
+			MapBaseURL:   mapBaseURL,
 			LLMProvider:  strings.TrimSpace(os.Getenv(envLLMProvider)),
 			LLMModel:     strings.TrimSpace(os.Getenv(envLLMModel)),
 			LLMBaseURL:   strings.TrimSpace(os.Getenv(envLLMBaseURL)),
@@ -237,6 +242,35 @@ func Load() (Config, error) {
 			LLMTimeout:   time.Duration(llmTimeoutMS) * time.Millisecond,
 		},
 	}, nil
+}
+
+// validateCredentialedEndpoint applies the same rule to a provider endpoint that
+// carries a credential as the model client applies to AI_BASE_URL: https
+// anywhere, plain http only on loopback. The map Server Key travels in the
+// query string of every call, so any other plain-http host would put a
+// spendable key on the wire in clear text. An empty value keeps the default.
+func validateCredentialedEndpoint(name, value string) error {
+	if value == "" {
+		return nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("invalid %s=%q: %w", name, value, err)
+	}
+	switch parsed.Scheme {
+	case "https":
+	case "http":
+		host := strings.ToLower(parsed.Hostname())
+		if host != "127.0.0.1" && host != "::1" && host != "localhost" {
+			return fmt.Errorf("invalid %s=%q: a plain HTTP endpoint is only accepted on loopback because the credential would travel in clear text", name, value)
+		}
+	default:
+		return fmt.Errorf("invalid %s=%q: the endpoint must be http or https", name, value)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("invalid %s=%q: the endpoint must include a host", name, value)
+	}
+	return nil
 }
 
 // smsMockFromEnv defaults simulated SMS to the development environment; an

@@ -284,7 +284,7 @@ func do(t *testing.T, handler http.Handler, method, path, body string, headers m
 	return recorder, payload
 }
 
-const idemKey = "admin-idem-key-000001"
+const idemKey = "123e4567-e89b-12d3-a456-426614174003"
 
 func adminIdentity(role string) auth.Identity {
 	return auth.Identity{ID: 2, Role: auth.RoleAdmin, AdminRole: role, Status: auth.StatusActive}
@@ -318,13 +318,14 @@ func TestAdminCreateStationValidation(t *testing.T) {
 		`{"code":"ST-01","name":"","address":"a","latitudeE6":30000000,"longitudeE6":104000000}`,  // empty name
 		`{"code":"ST-01","name":"站","address":"a","latitudeE6":91000000,"longitudeE6":104000000}`, // latitude out of range
 		`{"code":"ST-01","name":"站","address":"a","latitudeE6":30000000,"longitudeE6":181000000}`, // longitude out of range
+		`{"code":"ST-01","name":"站","address":"a","latitudeE6":30000000,"longitudeE6":104000000,"enabled":true}`,
+		`{"code":"ST-01","name":"站","address":"a","latitudeE6":30000000,"longitudeE6":104000000} {}`,
 	}
 	for _, body := range bad {
 		recorder, payload := do(t, f.server.Handler(), http.MethodPost, "/api/v1/admin/stations", body, map[string]string{"Idempotency-Key": idemKey})
-		if recorder.Code != http.StatusBadRequest {
-			t.Errorf("body %s: status = %d, want 400", body, recorder.Code)
+		if recorder.Code != http.StatusBadRequest || payload["code"].(float64) != httpapi.CodeInvalidArgument {
+			t.Errorf("body %s: status = %d code = %v, want 400/%d", body, recorder.Code, payload["code"], httpapi.CodeInvalidArgument)
 		}
-		_ = payload
 	}
 
 	// Missing idempotency key

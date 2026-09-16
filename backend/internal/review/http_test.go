@@ -91,7 +91,14 @@ func (f fakeAuthProvider) RequireIdentity(next http.HandlerFunc) http.HandlerFun
 }
 
 func (f fakeAuthProvider) RequireRole(role string, next http.HandlerFunc) http.HandlerFunc {
-	return f.RequireIdentity(next)
+	return f.RequireIdentity(func(w http.ResponseWriter, r *http.Request) {
+		identity, _ := auth.IdentityFromContext(r.Context())
+		if !auth.Authorize(identity, role) {
+			httpapi.WriteError(w, r, http.StatusForbidden, httpapi.CodeForbidden, "insufficient permission", nil)
+			return
+		}
+		next(w, r)
+	})
 }
 
 func (f fakeAuthProvider) RequireAdminWrite(next http.HandlerFunc) http.HandlerFunc {
@@ -119,21 +126,57 @@ func TestReviewCreateValidation(t *testing.T) {
 	server := newFixture(t, auth.Identity{ID: 7, Role: auth.RoleUser, Status: auth.StatusActive}, true)
 
 	cases := []struct {
-		name string
-		body string
-		want int
+		name       string
+		body       string
+		wantStatus int
+		wantCode   int
 	}{
-		{"zero stars", `{"stars":0,"comment":"好"}`, http.StatusBadRequest},
-		{"six stars", `{"stars":6,"comment":"好"}`, http.StatusBadRequest},
-		{"empty comment", `{"stars":5,"comment":"  "}`, http.StatusBadRequest},
-		{"valid", `{"stars":5,"comment":"充电很快"}`, http.StatusCreated},
+		{"zero stars", `{"stars":0,"comment":"好"}`, http.StatusBadRequest, 2},
+		{"six stars", `{"stars":6,"comment":"好"}`, http.StatusBadRequest, 2},
+		{"empty comment", `{"stars":5,"comment":"  "}`, http.StatusBadRequest, 2},
+		{"NUL in comment", `{"stars":5,"comment":"好\u0000评"}`, http.StatusBadRequest, 2},
+		{"unknown field", `{"stars":5,"comment":"好","anonymous":true}`, http.StatusBadRequest, httpapi.CodeInvalidArgument},
+		{"second json value", `{"stars":5,"comment":"好"} {}`, http.StatusBadRequest, httpapi.CodeInvalidArgument},
+		{"valid", `{"stars":5,"comment":"充电很快"}`, http.StatusCreated, httpapi.CodeOK},
 	}
 	for _, testCase := range cases {
 		request := httptest.NewRequest(http.MethodPost, "/api/v1/orders/ORD20260915120000aaaa/review", strings.NewReader(testCase.body))
 		recorder := httptest.NewRecorder()
 		server.Handler().ServeHTTP(recorder, request)
-		if recorder.Code != testCase.want {
-			t.Errorf("%s: status = %d, want %d", testCase.name, recorder.Code, testCase.want)
+		var response httpapi.Response
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatalf("%s: decode response: %v", testCase.name, err)
+		}
+		if recorder.Code != testCase.wantStatus || response.Code != testCase.wantCode {
+			t.Errorf("%s: status/code = %d/%d, want %d/%d", testCase.name, recorder.Code, response.Code, testCase.wantStatus, testCase.wantCode)
+		}
+	}
+}
+
+func TestAppealCreateValidation(t *testing.T) {
+	server := newFixture(t, auth.Identity{ID: 7, Role: auth.RoleUser, Status: auth.StatusActive}, true)
+
+	cases := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantCode   int
+	}{
+		{"empty reason", `{"reason":"  "}`, http.StatusBadRequest, 2},
+		{"NUL in reason", `{"reason":"金额\u0000有误"}`, http.StatusBadRequest, 2},
+		{"unknown field", `{"reason":"金额有误","extra":true}`, http.StatusBadRequest, httpapi.CodeInvalidArgument},
+		{"valid", `{"reason":"金额有误"}`, http.StatusCreated, httpapi.CodeOK},
+	}
+	for _, testCase := range cases {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/orders/ORD20260915120000aaaa/appeal", strings.NewReader(testCase.body))
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		var response httpapi.Response
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatalf("%s: decode response: %v", testCase.name, err)
+		}
+		if recorder.Code != testCase.wantStatus || response.Code != testCase.wantCode {
+			t.Errorf("%s: status/code = %d/%d, want %d/%d", testCase.name, recorder.Code, response.Code, testCase.wantStatus, testCase.wantCode)
 		}
 	}
 }
@@ -151,6 +194,29 @@ func TestWallRequiresAuthAndValidStation(t *testing.T) {
 	authed.Handler().ServeHTTP(recorder2, httptest.NewRequest(http.MethodGet, "/api/v1/stations/notanumber/reviews", nil))
 	if recorder2.Code != http.StatusBadRequest {
 		t.Fatalf("bad station status = %d", recorder2.Code)
+	}
+}
+
+func TestUserReviewRoutesRejectAdminIdentity(t *testing.T) {
+	admin := newFixture(t, auth.Identity{
+		ID: 7, Role: auth.RoleAdmin, AdminRole: auth.AdminRoleOperator, Status: auth.StatusActive,
+	}, true)
+	cases := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPost, "/api/v1/orders/ORD20260915120000aaaa/review", `{"stars":5,"comment":"好"}`},
+		{http.MethodGet, "/api/v1/stations/1/reviews", ""},
+		{http.MethodPost, "/api/v1/orders/ORD20260915120000aaaa/appeal", `{"reason":"金额有误"}`},
+	}
+	for _, testCase := range cases {
+		request := httptest.NewRequest(testCase.method, testCase.path, strings.NewReader(testCase.body))
+		recorder := httptest.NewRecorder()
+		admin.Handler().ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusForbidden {
+			t.Errorf("%s %s status = %d, want 403", testCase.method, testCase.path, recorder.Code)
+		}
 	}
 }
 

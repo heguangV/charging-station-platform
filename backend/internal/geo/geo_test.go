@@ -1,9 +1,12 @@
 package geo
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -511,5 +514,42 @@ func TestProviderCallsCarryTheKeyOnlyToTheProvider(t *testing.T) {
 	// platform builds for the browser ever carries the key.
 	if strings.Contains(BrowserRouteURL(agent.Location{}, agent.Location{}, "站", agent.TravelDriving), "key") {
 		t.Fatal("the navigation link must never carry a credential")
+	}
+}
+
+func TestTransportFailuresNeverRevealTheServerKey(t *testing.T) {
+	// A closed loopback port makes http.Client fail before any byte is sent,
+	// and it reports that failure as a *url.Error carrying the full URL.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	address := listener.Addr().String()
+	_ = listener.Close()
+
+	const key = "secret-server-key-0123456789"
+	var logs bytes.Buffer
+	client := NewClient(ClientConfig{
+		ServerKey: key,
+		BaseURL:   "http://" + address,
+		Logger:    slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+
+	_, err = client.SearchPois(context.Background(), agent.PoiQuery{
+		Location: agent.Location{LatitudeE6: 39977680, LongitudeE6: 116316417},
+		Keyword:  "充电",
+		Limit:    1,
+	})
+	if !errors.Is(err, errProviderUnavailable) {
+		t.Fatalf("SearchPois() error = %v, want the provider-unavailable error", err)
+	}
+	if strings.Contains(err.Error(), key) {
+		t.Fatalf("the returned error carries the key: %v", err)
+	}
+	if strings.Contains(logs.String(), key) {
+		t.Fatalf("the log line carries the key: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "could not be reached") {
+		t.Fatalf("the failure was not logged: %s", logs.String())
 	}
 }

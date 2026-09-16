@@ -136,8 +136,12 @@ func TestAdminUserAndOrderLists(t *testing.T) {
 	suffix := uniqueSuffix(t)
 	userA, _, _, _, chargerA := orderFlowFixture(t, db, ctx, suffix)
 
-	users, err := store.ListUsers(ctx, admin.UserFilter{Page: 1, PageSize: 100, Keyword: suffix[:6]})
-	if err != nil || len(users.Items) < 2 || users.Meta.Total < 2 {
+	var phone string
+	if err := db.QueryRowContext(ctx, `SELECT phone FROM user_accounts WHERE id = $1`, userA).Scan(&phone); err != nil {
+		t.Fatal(err)
+	}
+	users, err := store.ListUsers(ctx, admin.UserFilter{Page: 1, PageSize: 100, Keyword: phone})
+	if err != nil || len(users.Items) != 1 || users.Meta.Total != 1 || users.Items[0].ID != userA {
 		t.Fatalf("users = %#v, %v", users, err)
 	}
 	for _, item := range users.Items {

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -45,7 +46,7 @@ func TestInMemoryStoreAbsoluteExpiry(t *testing.T) {
 	store := NewInMemorySessionStore(time.Minute, clock)
 	ctx := context.Background()
 
-	if err := store.Save(ctx, "token-1", Session{IdentityID: 1, ExpiresAt: now.Add(time.Hour)}); err != nil {
+	if err := store.Save(ctx, "token-1", Session{IdentityID: 1, Role: RoleUser, ExpiresAt: now.Add(time.Hour)}); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
@@ -63,7 +64,7 @@ func TestInMemoryStoreIdleExpiryAndTouch(t *testing.T) {
 	store := NewInMemorySessionStore(10*time.Minute, clock)
 	ctx := context.Background()
 
-	if err := store.Save(ctx, "token-1", Session{IdentityID: 1, ExpiresAt: now.Add(time.Hour)}); err != nil {
+	if err := store.Save(ctx, "token-1", Session{IdentityID: 1, Role: RoleUser, ExpiresAt: now.Add(time.Hour)}); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
@@ -83,6 +84,75 @@ func TestInMemoryStoreIdleExpiryAndTouch(t *testing.T) {
 	now = now.Add(11 * time.Minute)
 	if _, err := store.Load(ctx, "token-1"); err == nil {
 		t.Fatal("idle-expired session still loads")
+	}
+	if _, indexed := store.byUser[1]; indexed {
+		t.Fatal("idle-expired session remained in the user index")
+	}
+}
+
+func TestInMemoryStoreExpiresAtIdleBoundary(t *testing.T) {
+	now := time.Now()
+	clock := func() time.Time { return now }
+	store := NewInMemorySessionStore(10*time.Minute, clock)
+	ctx := context.Background()
+
+	if err := store.Save(ctx, "token-1", Session{IdentityID: 1, Role: RoleUser, ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	now = now.Add(10 * time.Minute)
+	if _, err := store.Load(ctx, "token-1"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("Load() at idle boundary error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestInMemoryStoreUserRevocationDoesNotRevokeAdminWithSameID(t *testing.T) {
+	store := NewInMemorySessionStore(time.Minute, nil)
+	ctx := context.Background()
+	expiresAt := time.Now().Add(time.Hour)
+
+	if err := store.Save(ctx, "user-token", Session{IdentityID: 7, Role: RoleUser, ExpiresAt: expiresAt}); err != nil {
+		t.Fatalf("Save(user) error = %v", err)
+	}
+	if err := store.Save(ctx, "admin-token", Session{IdentityID: 7, Role: RoleAdmin, ExpiresAt: expiresAt}); err != nil {
+		t.Fatalf("Save(admin) error = %v", err)
+	}
+	if err := store.RevokeAllForUser(ctx, 7); err != nil {
+		t.Fatalf("RevokeAllForUser() error = %v", err)
+	}
+	if _, err := store.Load(ctx, "user-token"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("Load(user) after revocation error = %v, want ErrSessionNotFound", err)
+	}
+	if _, err := store.Load(ctx, "admin-token"); err != nil {
+		t.Fatalf("Load(admin) after user revocation error = %v", err)
+	}
+}
+
+func TestInMemoryStoreOverwriteMovesUserIndex(t *testing.T) {
+	store := NewInMemorySessionStore(time.Minute, nil)
+	ctx := context.Background()
+	expiresAt := time.Now().Add(time.Hour)
+
+	if err := store.Save(ctx, "shared-token", Session{IdentityID: 1, Role: RoleUser, ExpiresAt: expiresAt}); err != nil {
+		t.Fatalf("Save(first identity) error = %v", err)
+	}
+	if err := store.Save(ctx, "shared-token", Session{IdentityID: 2, Role: RoleUser, ExpiresAt: expiresAt}); err != nil {
+		t.Fatalf("Save(second identity) error = %v", err)
+	}
+	if err := store.RevokeAllForUser(ctx, 1); err != nil {
+		t.Fatalf("RevokeAllForUser(first identity) error = %v", err)
+	}
+	loaded, err := store.Load(ctx, "shared-token")
+	if err != nil {
+		t.Fatalf("token was still indexed to the first identity: %v", err)
+	}
+	if loaded.IdentityID != 2 {
+		t.Fatalf("loaded identity = %d, want 2", loaded.IdentityID)
+	}
+	if err := store.RevokeAllForUser(ctx, 2); err != nil {
+		t.Fatalf("RevokeAllForUser(second identity) error = %v", err)
+	}
+	if _, err := store.Load(ctx, "shared-token"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("Load() after revoking second identity error = %v", err)
 	}
 }
 

@@ -445,7 +445,9 @@ func (s *Service) loginAdmin(ctx context.Context, username string) (*userOrAdmin
 	}, nil
 }
 
-// Identify resolves a bearer token to its identity or ErrUnauthorized.
+// Identify resolves a bearer token to its current identity. Account state is
+// read from PostgreSQL on every authenticated request so a failed Redis
+// revocation cannot leave a disabled, deleted or demoted account authorized.
 func (s *Service) Identify(ctx context.Context, token string) (Identity, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -459,7 +461,25 @@ func (s *Service) Identify(ctx context.Context, token string) (Identity, error) 
 		}
 		return Identity{}, fmt.Errorf("auth: load session: %w", err)
 	}
-	if session.Role == RoleAdmin {
+	switch session.Role {
+	case RoleUser:
+		// A frozen or deleted user must lose access even when the Redis
+		// revocation that normally accompanies the change did not happen.
+		profile, err := s.mutations.GetProfile(ctx, session.IdentityID)
+		if err != nil {
+			if errors.Is(err, ErrProfileNotFound) {
+				_ = s.sessions.Delete(ctx, token)
+				return Identity{}, ErrUnauthorized
+			}
+			return Identity{}, fmt.Errorf("auth: load account status: %w", err)
+		}
+		if profile.Status != StatusActive {
+			_ = s.sessions.Delete(ctx, token)
+			return Identity{}, ErrUserFrozen
+		}
+		session.DisplayName = profile.DisplayName
+		session.Status = profile.Status
+	case RoleAdmin:
 		if reader, ok := s.accounts.(AdminStatusReader); ok {
 			account, err := reader.FindAdminByID(ctx, session.IdentityID)
 			if err != nil {
@@ -473,7 +493,11 @@ func (s *Service) Identify(ctx context.Context, token string) (Identity, error) 
 			// keeps stale authorization merely because its session predates the change.
 			session.AdminRole = account.Role
 			session.DisplayName = account.Username
+			session.Status = account.Status
 		}
+	default:
+		_ = s.sessions.Delete(ctx, token)
+		return Identity{}, ErrUnauthorized
 	}
 
 	return Identity{

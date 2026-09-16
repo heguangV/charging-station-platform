@@ -864,6 +864,11 @@ paths:
       tags: [agent]
       operationId: agentChat
       summary: Ask the travel assistant about charging stations, nearby places and routes
+      description: >-
+        Read-only orchestration has a 14-second total budget, including authentication
+        and request reading. Model planning uses at most 4 seconds. On timeout,
+        completed structured results are retained with degraded=true and an explicit
+        notice; no further tool or model calls start after cancellation.
       security:
         - bearerAuth: []
       requestBody:

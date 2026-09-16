@@ -7,7 +7,7 @@
 
 | 路径 | 用途 |
 |---|---|
-| `systemd/ncs-migrate.service` | 迁移门禁（一次性）：应用 `0001..0007` 并核对版本后退出 |
+| `systemd/ncs-migrate.service` | 迁移门禁（一次性）：应用 `0001..0012` 并核对版本后退出 |
 | `systemd/ncs-{api,worker,outbox-publisher}.service` | 三个常驻进程；均 `Requires=ncs-migrate.service` |
 | `systemd/ncs-backend.env.example` | 运行环境变量模板（安装为 `/etc/ncs/backend.env`，`chmod 0600`） |
 | `Dockerfile` | 四个可执行文件共用的镜像（`--build-arg NCS_TARGET=cmd/api`） |

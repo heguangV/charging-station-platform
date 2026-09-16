@@ -710,7 +710,7 @@ func (s *AdminStore) ListAudit(ctx context.Context, filter admin.AuditFilter) (a
 	const pageQuery = `SELECT id, actor_type, actor_id, action, resource_type, resource_id, request_id, payload, created_at
 FROM operation_logs
 WHERE ` + filterSQL + `
-ORDER BY created_at DESC
+ORDER BY created_at DESC, id DESC
 LIMIT $5 OFFSET $6`
 	const countQuery = `SELECT count(*) FROM operation_logs WHERE ` + filterSQL
 

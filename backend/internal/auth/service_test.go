@@ -63,6 +63,12 @@ func (failingAccountReader) FindAdminByUsername(context.Context, string) (*Admin
 	return nil, errors.New("database down")
 }
 
+// FindAdminByID makes the outage visible to Identify's administrator
+// revalidation (AdminStatusReader), as the PostgreSQL reader would.
+func (failingAccountReader) FindAdminByID(context.Context, int64) (*AdminAccount, error) {
+	return nil, errors.New("database down")
+}
+
 // RegisterUser records what a registration asked for and reports the configured
 // conflict, so the service's ordering (validate, verify the code, then create)
 // can be asserted without a database.
@@ -80,6 +86,15 @@ func (failingAccountReader) RegisterUser(context.Context, string, string, string
 
 func (failingAccountReader) EnsureUserWithWallet(context.Context, string) (UserAccount, error) {
 	return UserAccount{}, errors.New("database down")
+}
+
+type failingProfileMutation struct {
+	AccountMutation
+	err error
+}
+
+func (f failingProfileMutation) GetProfile(context.Context, int64) (ProfileView, error) {
+	return ProfileView{}, f.err
 }
 
 func hashForTest(t *testing.T, password string) string {
@@ -243,6 +258,66 @@ func TestIdentifyUnknownToken(t *testing.T) {
 	}
 	if _, err := service.Identify(context.Background(), ""); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Identify(empty) error = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestIdentifyRejectsSessionAfterAccountIsFrozen(t *testing.T) {
+	reader := &fakeAccountReader{user: &UserAccount{
+		ID: 1, Phone: "13800000001", DisplayName: "开发用户", PasswordHash: hashForTest(t, testPassword), Status: StatusActive,
+	}}
+	service := newTestService(t, reader, NewFixedWindowLimiter(10, time.Minute, nil))
+	result, err := service.Login(context.Background(), reader.user.Phone, testPassword)
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	reader.user.Status = StatusDisable
+	if _, err := service.Identify(context.Background(), result.Token); !errors.Is(err, ErrUserFrozen) {
+		t.Fatalf("Identify() error = %v, want ErrUserFrozen", err)
+	}
+	if _, err := service.Identify(context.Background(), result.Token); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("second Identify() error = %v, want revoked session", err)
+	}
+}
+
+func TestIdentifyRejectsSessionAfterAccountIsDeleted(t *testing.T) {
+	reader := &fakeAccountReader{user: &UserAccount{
+		ID: 1, Phone: "13800000001", PasswordHash: hashForTest(t, testPassword), Status: StatusActive,
+	}}
+	service := newTestService(t, reader, NewFixedWindowLimiter(10, time.Minute, nil))
+	result, err := service.Login(context.Background(), reader.user.Phone, testPassword)
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	delete(service.mutations.(*InMemoryAccountMutation).accounts, reader.user.ID)
+	if _, err := service.Identify(context.Background(), result.Token); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Identify() error = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestIdentifyPreservesSessionWhenAccountStatusLookupFails(t *testing.T) {
+	reader := &fakeAccountReader{user: &UserAccount{
+		ID: 1, Phone: "13800000001", PasswordHash: hashForTest(t, testPassword), Status: StatusActive,
+	}}
+	service := newTestService(t, reader, NewFixedWindowLimiter(10, time.Minute, nil))
+	result, err := service.Login(context.Background(), reader.user.Phone, testPassword)
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	originalMutations := service.mutations
+	databaseErr := errors.New("database down")
+	service.mutations = failingProfileMutation{AccountMutation: originalMutations, err: databaseErr}
+	if _, err := service.Identify(context.Background(), result.Token); !errors.Is(err, databaseErr) {
+		t.Fatalf("Identify() error = %v, want database error", err)
+	}
+
+	// A transient database failure must fail the request closed without
+	// revoking an otherwise valid session.
+	service.mutations = originalMutations
+	if _, err := service.Identify(context.Background(), result.Token); err != nil {
+		t.Fatalf("Identify() after recovery error = %v", err)
 	}
 }
 
@@ -450,5 +525,53 @@ func TestAdminRolePropagatesThroughSession(t *testing.T) {
 	}
 	if !AdminCanWrite(operatorResult.Identity) {
 		t.Fatal("operator must be allowed to write")
+	}
+}
+
+func TestIdentifyRefreshesAdminStatusAndRole(t *testing.T) {
+	reader := &fakeAccountReader{admin: &AdminAccount{
+		ID: 2, Username: "operator", Role: AdminRoleOperator, PasswordHash: hashForTest(t, testPassword), Status: StatusActive,
+	}}
+	service := newTestService(t, reader, NewFixedWindowLimiter(100, time.Minute, nil))
+	result, err := service.LoginAdmin(context.Background(), reader.admin.Username, testPassword)
+	if err != nil {
+		t.Fatalf("LoginAdmin() error = %v", err)
+	}
+
+	reader.admin.Role = AdminRoleAuditor
+	identity, err := service.Identify(context.Background(), result.Token)
+	if err != nil {
+		t.Fatalf("Identify() after role change error = %v", err)
+	}
+	if identity.AdminRole != AdminRoleAuditor || AdminCanWrite(identity) {
+		t.Fatalf("identity after role change = %#v, want read-only auditor", identity)
+	}
+
+	reader.admin.Status = StatusDisable
+	if _, err := service.Identify(context.Background(), result.Token); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Identify() after administrator disable error = %v, want ErrUnauthorized", err)
+	}
+	if _, err := service.Identify(context.Background(), result.Token); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("second Identify() error = %v, want revoked session", err)
+	}
+}
+
+func TestIdentifyPreservesAdminSessionWhenAccountLookupFails(t *testing.T) {
+	reader := &fakeAccountReader{admin: &AdminAccount{
+		ID: 2, Username: "operator", Role: AdminRoleOperator, PasswordHash: hashForTest(t, testPassword), Status: StatusActive,
+	}}
+	service := newTestService(t, reader, NewFixedWindowLimiter(100, time.Minute, nil))
+	result, err := service.LoginAdmin(context.Background(), reader.admin.Username, testPassword)
+	if err != nil {
+		t.Fatalf("LoginAdmin() error = %v", err)
+	}
+
+	service.accounts = failingAccountReader{}
+	if _, err := service.Identify(context.Background(), result.Token); err == nil || errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Identify() error = %v, want availability error", err)
+	}
+	service.accounts = reader
+	if _, err := service.Identify(context.Background(), result.Token); err != nil {
+		t.Fatalf("Identify() after recovery error = %v", err)
 	}
 }

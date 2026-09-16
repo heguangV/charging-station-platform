@@ -178,7 +178,7 @@ func do(t *testing.T, handler http.Handler, method, path, body string, headers m
 	return recorder, payload
 }
 
-const idemKey = "idempotency-key-000001"
+const idemKey = "123e4567-e89b-12d3-a456-426614174001"
 const validCreate = `{"chargerId":1}`
 
 func TestCreateOrderSuccess(t *testing.T) {
@@ -212,9 +212,23 @@ func TestCreateOrderValidationAndBusinessErrors(t *testing.T) {
 	if recorder.Code != http.StatusBadRequest || payload["code"].(float64) != httpapi.CodeInvalidArgument {
 		t.Fatalf("bad body: status = %d code = %v", recorder.Code, payload["code"])
 	}
+	for _, body := range []string{
+		`{"chargerId":1,"stationId":2}`,
+		`{"chargerId":1} {"chargerId":2}`,
+	} {
+		recorder, payload = do(t, f.server.Handler(), http.MethodPost, "/api/v1/orders", body, map[string]string{"Idempotency-Key": idemKey})
+		if recorder.Code != http.StatusBadRequest || payload["code"].(float64) != httpapi.CodeInvalidArgument {
+			t.Errorf("non-strict body %q: status = %d code = %v", body, recorder.Code, payload["code"])
+		}
+	}
 	recorder, _ = do(t, f.server.Handler(), http.MethodPost, "/api/v1/orders", validCreate, nil)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("missing key status = %d", recorder.Code)
+	}
+	recorder, _ = do(t, f.server.Handler(), http.MethodPost, "/api/v1/orders", validCreate,
+		map[string]string{"Idempotency-Key": "too-short"})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("short key status = %d", recorder.Code)
 	}
 	recorder, _ = do(t, f.server.Handler(), http.MethodPost, "/api/v1/orders", `{"chargerId":0}`, map[string]string{"Idempotency-Key": idemKey})
 	if recorder.Code != http.StatusBadRequest {
@@ -257,6 +271,16 @@ func TestTransitionEndpointsAndReplayShape(t *testing.T) {
 	command := f.store.startCommands[0]
 	if command.OrderNo != "ORD20260914120000aaaa" || command.IdempotencyKey != idemKey {
 		t.Fatalf("start command = %#v", command)
+	}
+	for _, body := range []string{`{}`, `{"unexpected":true}`} {
+		recorder, payload = do(t, f.server.Handler(), http.MethodPost, "/api/v1/orders/ORD20260914120000aaaa/start", body,
+			map[string]string{"Idempotency-Key": idemKey})
+		if recorder.Code != http.StatusBadRequest || payload["code"].(float64) != httpapi.CodeInvalidArgument {
+			t.Errorf("non-empty transition body %q: status = %d code = %v", body, recorder.Code, payload["code"])
+		}
+	}
+	if len(f.store.startCommands) != 1 {
+		t.Fatalf("start commands = %d, want 1 after rejected bodies", len(f.store.startCommands))
 	}
 
 	f.store.stopResult = Order{OrderNo: "ORD20260914120000aaaa", Status: StatusStopping}

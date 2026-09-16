@@ -73,7 +73,11 @@ func (s *ReviewStore) CreateReview(ctx context.Context, userID int64, orderNo st
 	if _, _, _, _, _, err := s.checkOrderUsable(tx, ctx, userID, orderNo); err != nil {
 		return review.ReviewView{}, err
 	}
-	if blocked, err := s.blockedByAppeal(tx, ctx, orderNo); err != nil || blocked {
+	blocked, err := s.blockedByAppeal(tx, ctx, orderNo)
+	if err != nil {
+		return review.ReviewView{}, err
+	}
+	if blocked {
 		return review.ReviewView{}, review.ErrOrderNotReviewable
 	}
 
@@ -131,6 +135,14 @@ WHERE r.order_no = $1 AND o.user_id = $2`
 // ListWall returns one page of the station comment wall, newest first, with
 // authors masked: nickname, masked phone or 已注销用户.
 func (s *ReviewStore) ListWall(ctx context.Context, filter review.WallFilter) (review.WallPage, error) {
+	var stationExists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM stations WHERE id = $1)`, filter.StationID).Scan(&stationExists); err != nil {
+		return review.WallPage{}, err
+	}
+	if !stationExists {
+		return review.WallPage{}, review.ErrNotFound
+	}
+
 	const pageQuery = `SELECT r.stars, r.comment, r.created_at,
 CASE
   WHEN u.deleted_at IS NOT NULL THEN '已注销用户'
@@ -141,7 +153,7 @@ END AS author
 FROM order_reviews r
 JOIN user_accounts u ON u.id = r.user_id
 WHERE r.station_id = $1
-ORDER BY r.created_at DESC
+ORDER BY r.created_at DESC, r.id DESC
 LIMIT $2 OFFSET $3`
 	const countQuery = `SELECT count(*) FROM order_reviews WHERE station_id = $1`
 
@@ -252,7 +264,7 @@ COALESCE(o.amount_cents, 0), COALESCE(o.paid_cents, 0), a.decision_reason
 FROM order_appeals a
 LEFT JOIN charging_orders o ON o.order_no = a.order_no
 WHERE ` + filterSQL + `
-ORDER BY a.created_at DESC
+ORDER BY a.created_at ASC, a.order_no ASC
 LIMIT $2 OFFSET $3`
 	const countQuery = `SELECT count(*) FROM order_appeals a WHERE ` + filterSQL
 

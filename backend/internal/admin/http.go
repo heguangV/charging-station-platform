@@ -134,7 +134,7 @@ func (h *Handlers) updateTariff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request updateTariffRequest
-	if err := json.Unmarshal(body, &request); err != nil {
+	if err := httpapi.DecodeJSONBytesStrict(body, &request); err != nil {
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid request body", nil)
 		return
 	}
@@ -181,7 +181,7 @@ func (h *Handlers) forceRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request forceReleaseRequest
-	if err := json.Unmarshal(body, &request); err != nil {
+	if err := httpapi.DecodeJSONBytesStrict(body, &request); err != nil {
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid request body", nil)
 		return
 	}
@@ -355,19 +355,12 @@ func (h *Handlers) createStation(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, r, http.StatusForbidden, httpapi.CodeForbidden, "insufficient permission for administrative writes", nil)
 		return
 	}
-	// GET and POST share one route pattern, so the write check runs in the
-	// handler: read-only auditors must not create stations.
-	if !auth.AdminCanWrite(identity) {
-		httpapi.WriteError(w, r, http.StatusForbidden, httpapi.CodeForbidden, "insufficient permission for administrative writes", nil)
-		return
-	}
-
 	body, ok := readBody(w, r)
 	if !ok {
 		return
 	}
 	var request createStationRequest
-	if err := json.Unmarshal(body, &request); err != nil {
+	if err := httpapi.DecodeJSONBytesStrict(body, &request); err != nil {
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid request body", nil)
 		return
 	}
@@ -652,7 +645,7 @@ func (h *Handlers) restartCharger(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Reason string `json:"reason"`
 	}
-	if err := json.Unmarshal(body, &request); err != nil {
+	if err := httpapi.DecodeJSONBytesStrict(body, &request); err != nil {
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid request body", nil)
 		return
 	}

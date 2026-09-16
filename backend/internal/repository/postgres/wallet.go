@@ -297,7 +297,7 @@ COALESCE((SELECT order_no FROM charging_orders o WHERE o.id = t.order_id), '') A
 idempotency_key, created_at
 FROM wallet_transactions t
 WHERE ` + filterSQL + `
-ORDER BY created_at DESC
+ORDER BY created_at DESC, id DESC
 LIMIT $3 OFFSET $4`
 	const countQuery = `SELECT count(*) FROM wallet_transactions WHERE ` + filterSQL
 

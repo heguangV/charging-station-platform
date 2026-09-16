@@ -150,3 +150,36 @@ func TestLoadRejectsSMSMockOutsideDevelopment(t *testing.T) {
 		t.Fatal("mock SMS enabled with an explicit false")
 	}
 }
+
+func TestLoadRejectsMapBaseURLThatWouldLeakTheServerKey(t *testing.T) {
+	for _, value := range []string{
+		"http://apis.map.qq.com",
+		"http://localhost.attacker.example",
+		"ftp://apis.map.qq.com",
+		"apis.map.qq.com",
+	} {
+		t.Setenv(envMapBaseURL, value)
+		if _, err := Load(); err == nil {
+			t.Errorf("%s=%q accepted; the Server Key would be sent to it", envMapBaseURL, value)
+		}
+	}
+}
+
+func TestLoadAcceptsMapBaseURLOverHTTPSOrLoopback(t *testing.T) {
+	for _, value := range []string{
+		"",
+		"https://apis.map.qq.com",
+		"http://127.0.0.1:18090",
+		"http://localhost:18090/",
+		"http://[::1]:18090",
+	} {
+		t.Setenv(envMapBaseURL, value)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("%s=%q rejected: %v", envMapBaseURL, value, err)
+		}
+		if cfg.Assistant.MapBaseURL != value {
+			t.Fatalf("MapBaseURL = %q, want %q", cfg.Assistant.MapBaseURL, value)
+		}
+	}
+}

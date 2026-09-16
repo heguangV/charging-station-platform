@@ -130,15 +130,19 @@ func (c *Client) get(ctx context.Context, path string, parameters url.Values) (e
 	// reaches a log line, an error message or the browser.
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+query+"&key="+url.QueryEscape(c.serverKey), nil)
 	if err != nil {
-		return envelope{}, fmt.Errorf("%w: %v", errProviderUnavailable, err)
+		return envelope{}, fmt.Errorf("%w: %s", errProviderUnavailable, c.redacted(err))
 	}
 	request.Header.Set("Accept", "application/json")
 
 	response, err := c.http.Do(request)
 	if err != nil {
+		// http.Client wraps transport failures in *url.Error, whose text
+		// repeats the full URL - key included - so the error is reduced to its
+		// cause before it reaches a log line or a caller.
+		reason := c.redacted(err)
 		c.logger.Warn("geo: the map service could not be reached",
-			"path", path, "error", err.Error())
-		return envelope{}, fmt.Errorf("%w: %v", errProviderUnavailable, err)
+			"path", path, "error", reason)
+		return envelope{}, fmt.Errorf("%w: %s", errProviderUnavailable, reason)
 	}
 	defer func() { _ = response.Body.Close() }()
 
@@ -168,4 +172,20 @@ func (c *Client) get(ctx context.Context, path string, parameters url.Values) (e
 		return envelope{}, fmt.Errorf("%w: provider status %d", errProviderUnavailable, frame.Status)
 	}
 	return frame, nil
+}
+
+// redacted returns the error's text without the request URL a *url.Error
+// carries, and with any remaining occurrence of the key masked. The result is
+// safe for logs and for errors handed to the assistant.
+func (c *Client) redacted(err error) string {
+	var urlErr *url.Error
+	text := err.Error()
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		text = urlErr.Op + ": " + urlErr.Err.Error()
+	}
+	if c.serverKey != "" {
+		text = strings.ReplaceAll(text, c.serverKey, "[redacted]")
+		text = strings.ReplaceAll(text, url.QueryEscape(c.serverKey), "[redacted]")
+	}
+	return text
 }

@@ -39,6 +39,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/heguangV/charging-station-platform/backend/internal/httpapi"
 )
 
 // defaultAddr keeps the mock off the ports the platform itself uses.
@@ -270,7 +272,7 @@ func (g *mockGateway) handleCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var request commandRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&request); err != nil {
+	if err := httpapi.DecodeJSONStrict(http.MaxBytesReader(w, r.Body, 16*1024), &request); err != nil {
 		http.Error(w, `{"error":"invalid command body"}`, http.StatusBadRequest)
 		return
 	}

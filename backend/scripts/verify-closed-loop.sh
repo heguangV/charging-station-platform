@@ -123,8 +123,12 @@ step "build"
     && go build -o "${work_dir}/ncs-outbox-publisher" ./cmd/outbox-publisher \
     && go build -o "${work_dir}/ncs-mock-gateway" ./cmd/mock-gateway)
 
+run_marker="$(python3 -c 'import time; print(time.time_ns())')"
+gateway_token="e2e-gateway-token-${run_marker}"
 step "prepare the disposable database"
-psql "${psql_dsn}" -q -f "${backend_dir}/seeds/dev_seed.sql"
+NCS_POSTGRES_DSN="${psql_dsn}" NCS_CHARGER_GATEWAY_TOKEN="${gateway_token}" \
+    "${work_dir}/ncs-api" --migrate-only
+psql "${psql_dsn}" -v ON_ERROR_STOP=1 -q -f "${backend_dir}/seeds/dev_seed.sql"
 # Two chargers: one carries the order flow, the other one carries the device command. They must be
 # different, because a charger held by an active order refuses a restart command - that guard is
 # deliberate, so the verification uses a charger that is genuinely free for the command.
@@ -139,7 +143,6 @@ echo "order charger: ${charger_id}, command charger: ${command_charger_id}, fail
 # The loop is asserted from scratch: the database keeps rows from earlier runs, and the order
 # rules allow one active flow per user, so a leftover order would make this run fail for a
 # reason that has nothing to do with the loop.
-run_marker="$(date +%s%N)"
 psql "${psql_dsn}" -q -c "UPDATE charging_orders SET status = 'COMPLETED', payment_status = 'PAID' WHERE status IN ('CREATED','STARTING','CHARGING','STOPPING')"
 # Leftover pending bills are cleared as well: an unsettled order blocks its user from starting a new
 # flow, which would make this run fail for a reason that has nothing to do with the loop.
@@ -160,6 +163,7 @@ common_env=(
     "NCS_REDIS_ADDR=${redis_addr}"
     "NCS_REDIS_DB=${redis_db}"
     "NCS_REDIS_REQUIRED=true"
+    "NCS_METRICS_ADDR=127.0.0.1:0"
 )
 
 step "start the mock gateway, the API, the publisher and the worker"
@@ -170,7 +174,6 @@ env "${common_env[@]}" NCS_MOCK_GATEWAY_ADDR="127.0.0.1:${gateway_port}" \
     "${work_dir}/ncs-mock-gateway" >"${work_dir}/gateway.log" 2>&1 &
 pids+=("$!")
 
-gateway_token="e2e-gateway-token-${run_marker}"
 env "${common_env[@]}" NCS_HTTP_ADDR="127.0.0.1:${api_port}" NCS_SMS_MOCK=true \
     NCS_CHARGER_GATEWAY_TOKEN="${gateway_token}" \
     "${work_dir}/ncs-api" >"${work_dir}/api.log" 2>&1 &
@@ -192,6 +195,13 @@ for _ in $(seq 1 100); do
     sleep 0.1
 done
 curl -fsS "${api_url}/healthz" >/dev/null || fail "the API did not become healthy"
+
+# API readiness does not imply the separately launched worker is ready.
+for _ in $(seq 1 100); do
+    if grep -q "command dispatcher configured" "${work_dir}/worker.log"; then break; fi
+    kill -0 "${worker_pid}" 2>/dev/null || fail "the worker exited during startup"
+    sleep 0.1
+done
 
 # The worker must not have fallen back to a placeholder: the memory consumption store is gone.
 if grep -q "in-memory consumption store" "${work_dir}/worker.log"; then
@@ -261,8 +271,7 @@ second_status="$(curl -s -o /dev/null -w '%{http_code}' -X POST "${api_url}/api/
 # (CHARGING -> STOPPING -> COMPLETED) are applied by the device receipt, whose contract BE-I-02
 # owns, so this script does NOT claim to verify them.
 curl -fsS -X POST "${api_url}/api/v1/orders/${order_no}/cancel" \
-    -H "Authorization: Bearer ${token}" -H "Idempotency-Key: e2e-cancel-${run_marker}" \
-    -d '{"reason":"closed loop verification"}' >/dev/null
+    -H "Authorization: Bearer ${token}" -H "Idempotency-Key: e2e-cancel-${run_marker}" >/dev/null
 for _ in $(seq 1 100); do
     status="$(psql_q "SELECT status FROM charging_orders WHERE order_no = '${order_no}'")"
     [[ "${status}" == "CANCELLED" ]] && break
@@ -322,19 +331,22 @@ unauthenticated="$(curl -s -o /dev/null -w '%{http_code}' -X POST "${api_url}/ap
     -d '{"eventId":"evt_unauthorized_'"${run_marker}"'","eventType":"CHARGE_STARTED","orderNo":"'"${order_no_chain}"'","chargerId":'"${charger_id}"',"occurredAt":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}')"
 [[ "${unauthenticated}" == "401" ]] || fail "expected an unauthenticated receipt to be refused with 401, got ${unauthenticated}"
 
-# The fact times sit inside the seeded charger's off-peak window (23:00-07:00 UTC), so the bill
+# The fact times sit inside the seeded charger's off-peak window (23:00-07:00 in NCS_BILLING_TZ), so the bill
 # proves that the device's own timestamps - not the server clock - picked the tariff window. The
 # window is entered by an explicit past hour, and both ends stay inside one hour, so no segment is
 # split across the boundary.
 read -r fact_start fact_stop <<<"$(python3 - <<'PYFACT'
 from datetime import datetime, timedelta, timezone
-now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+import os
+from zoneinfo import ZoneInfo
+zone = ZoneInfo(os.environ.get("NCS_BILLING_TZ", "Asia/Shanghai"))
+now = datetime.now(zone).replace(minute=0, second=0, microsecond=0)
 window = {23, 0, 1, 2, 3, 4, 5, 6}
 moment = now - timedelta(hours=2)
 while moment.hour not in window:
     moment -= timedelta(hours=1)
 start = moment + timedelta(minutes=10)
-print(start.strftime('%Y-%m-%dT%H:%M:%SZ'), (start + timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%SZ'))
+print(start.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), (start + timedelta(minutes=30)).astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
 PYFACT
 )"
 [[ -n "${fact_start}" && -n "${fact_stop}" ]] || fail "could not derive the device fact times"
@@ -429,18 +441,18 @@ restart_body="$(curl -fsS -X POST "${api_url}/api/v1/admin/chargers/${command_ch
     -H 'Content-Type: application/json' -H "Authorization: Bearer ${admin_token}" \
     -H "Idempotency-Key: e2e-restart-${run_marker}" \
     -d '{"reason":"closed loop verification"}')"
-command_no="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["commandNo"])' <<<"${restart_body}")"
+command_no="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["commandId"])' <<<"${restart_body}")"
 echo "device command issued: ${command_no}"
 
 # The dispatcher reaches the mock gateway, the outcome is recorded with the completion event in one
 # transaction, and the completion is consumed and applied - which releases the charger.
 for _ in $(seq 1 150); do
-    completion="$(psql_q "SELECT count(*) FROM event_consumptions WHERE event_type = 'CHARGER_COMMAND_COMPLETED' AND outcome = 'SUCCEEDED' AND aggregate_id = '${command_charger_id}'")"
+    completion="$(psql_q "SELECT count(*) FROM event_consumptions e JOIN outbox_events o ON o.event_id = e.event_id WHERE e.event_type = 'CHARGER_COMMAND_COMPLETED' AND e.outcome = 'SUCCEEDED' AND o.payload->>'command_id' = '${command_no}'")"
     status="$(psql_q "SELECT status FROM chargers WHERE id = ${command_charger_id}")"
     if [[ "${completion}" -ge 1 && "${status}" == "IDLE" ]]; then break; fi
     sleep 0.1
 done
-completion="$(psql_q "SELECT count(*) FROM event_consumptions WHERE event_type = 'CHARGER_COMMAND_COMPLETED' AND outcome = 'SUCCEEDED' AND aggregate_id = '${command_charger_id}'")"
+completion="$(psql_q "SELECT count(*) FROM event_consumptions e JOIN outbox_events o ON o.event_id = e.event_id WHERE e.event_type = 'CHARGER_COMMAND_COMPLETED' AND e.outcome = 'SUCCEEDED' AND o.payload->>'command_id' = '${command_no}'")"
 [[ "${completion}" -ge 1 ]] || fail "the command completion was never consumed"
 status="$(psql_q "SELECT status FROM chargers WHERE id = ${command_charger_id}")"
 [[ "${status}" == "IDLE" ]] || fail "expected the charger to be released after the command completed, got ${status}"
@@ -455,20 +467,21 @@ failed_body="$(curl -fsS -X POST "${api_url}/api/v1/admin/chargers/${failing_cha
     -H 'Content-Type: application/json' -H "Authorization: Bearer ${admin_token}" \
     -H "Idempotency-Key: e2e-restart-failed-${run_marker}" \
     -d '{"reason":"failure path verification"}')"
-failed_command_no="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["commandNo"])' <<<"${failed_body}")"
+failed_command_no="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["commandId"])' <<<"${failed_body}")"
 echo "device command issued for the failing charger: ${failed_command_no}"
 
 for _ in $(seq 1 150); do
-    failed_completion="$(psql_q "SELECT payload->>'result' FROM outbox_events WHERE event_type = 'CHARGER_COMMAND_COMPLETED' AND aggregate_id = '${failing_charger_id}' ORDER BY id DESC LIMIT 1")"
+    failed_completion="$(psql_q "SELECT payload->>'result' FROM outbox_events WHERE event_type = 'CHARGER_COMMAND_COMPLETED' AND payload->>'command_id' = '${failed_command_no}' ORDER BY id DESC LIMIT 1")"
     failed_status="$(psql_q "SELECT status FROM chargers WHERE id = ${failing_charger_id}")"
-    if [[ "${failed_completion}" == "FAILED" && "${failed_status}" == "FAULT" ]]; then break; fi
+    consumed_failed="$(psql_q "SELECT count(*) FROM event_consumptions e JOIN outbox_events o ON o.event_id = e.event_id WHERE e.event_type = 'CHARGER_COMMAND_COMPLETED' AND e.outcome = 'SUCCEEDED' AND o.payload->>'command_id' = '${failed_command_no}'")"
+    if [[ "${failed_completion}" == "FAILED" && "${failed_status}" == "FAULT" && "${consumed_failed}" -ge 1 ]]; then break; fi
     sleep 0.1
 done
-failed_completion="$(psql_q "SELECT payload->>'result' FROM outbox_events WHERE event_type = 'CHARGER_COMMAND_COMPLETED' AND aggregate_id = '${failing_charger_id}' ORDER BY id DESC LIMIT 1")"
+failed_completion="$(psql_q "SELECT payload->>'result' FROM outbox_events WHERE event_type = 'CHARGER_COMMAND_COMPLETED' AND payload->>'command_id' = '${failed_command_no}' ORDER BY id DESC LIMIT 1")"
 failed_status="$(psql_q "SELECT status FROM chargers WHERE id = ${failing_charger_id}")"
 [[ "${failed_completion}" == "FAILED" ]] || fail "expected a FAILED completion event for charger ${failing_charger_id}, got '${failed_completion}'"
 [[ "${failed_status}" == "FAULT" ]] || fail "a restart the device reported as FAILED must park the charger in FAULT, got ${failed_status}"
-consumed_failed="$(psql_q "SELECT count(*) FROM event_consumptions WHERE event_type = 'CHARGER_COMMAND_COMPLETED' AND aggregate_id = '${failing_charger_id}' AND outcome = 'SUCCEEDED'")"
+consumed_failed="$(psql_q "SELECT count(*) FROM event_consumptions e JOIN outbox_events o ON o.event_id = e.event_id WHERE e.event_type = 'CHARGER_COMMAND_COMPLETED' AND e.outcome = 'SUCCEEDED' AND o.payload->>'command_id' = '${failed_command_no}'")"
 [[ "${consumed_failed}" -ge 1 ]] || fail "the failure completion was never consumed"
 echo "charger ${failing_charger_id}: event result=FAILED, status=${failed_status} (not IDLE), completion consumed"
 

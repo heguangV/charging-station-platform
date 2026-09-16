@@ -23,7 +23,7 @@ RestartSec=2
 TimeoutStopSec=20
 KillSignal=SIGTERM
 
-# API 启动时执行顺序迁移（0001..0007）后开始监听：迁移门禁由进程内 runner 完成，
+# API 启动时执行顺序迁移（0001..0012）后开始监听：迁移门禁由进程内 runner 完成，
 # 因此 Worker/Publisher 依赖本单元先就绪。
 NoNewPrivileges=true
 PrivateTmp=true

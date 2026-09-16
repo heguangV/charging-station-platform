@@ -403,6 +403,24 @@ func TestGatewayRejectsBadRequests(t *testing.T) {
 	if status, _ := postCommand(t, server, "", "cmd_nocharger", "RESTART"); status == http.StatusOK {
 		t.Fatal("expected a missing charger id to be rejected")
 	}
+	for _, body := range []string{
+		`{"command_id":"cmd_unknown","charger_id":"28","action":"RESTART","force":true}`,
+		`{"command_id":"cmd_trailing","charger_id":"28","action":"RESTART"} {}`,
+	} {
+		request, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+			server.URL+"/chargers/28/commands", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatalf("post invalid command: %v", err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest {
+			t.Errorf("body %q: status = %d, want 400", body, response.StatusCode)
+		}
+	}
 }
 
 // A rejected request must not leave its placeholder behind. The first version validated the action

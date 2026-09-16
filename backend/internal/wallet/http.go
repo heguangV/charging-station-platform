@@ -3,7 +3,6 @@ package wallet
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -18,9 +17,9 @@ const (
 	maxJSONBodyBytes  = 16 << 10
 )
 
-// identityProvider supplies RequireIdentity; auth.Handlers implements it.
+// identityProvider supplies role-aware authentication; auth.Handlers implements it.
 type identityProvider interface {
-	RequireIdentity(next http.HandlerFunc) http.HandlerFunc
+	RequireRole(role string, next http.HandlerFunc) http.HandlerFunc
 	RequireAdminWrite(next http.HandlerFunc) http.HandlerFunc
 }
 
@@ -46,9 +45,9 @@ func NewHandlers(service *Service, auth identityProvider) (*Handlers, error) {
 func (h *Handlers) Register(server interface {
 	Register(pattern string, handler http.HandlerFunc)
 }) {
-	server.Register("/api/v1/wallet", h.auth.RequireIdentity(h.view))
-	server.Register("/api/v1/wallet/top-up", h.auth.RequireIdentity(h.topUp))
-	server.Register("/api/v1/wallet/transactions", h.auth.RequireIdentity(h.transactions))
+	server.Register("/api/v1/wallet", h.auth.RequireRole(auth.RoleUser, h.view))
+	server.Register("/api/v1/wallet/top-up", h.auth.RequireRole(auth.RoleUser, h.topUp))
+	server.Register("/api/v1/wallet/transactions", h.auth.RequireRole(auth.RoleUser, h.transactions))
 	server.Register("/api/v1/admin/orders/{orderNo}/refund", h.auth.RequireAdminWrite(h.refundOrder))
 }
 
@@ -95,7 +94,7 @@ func (h *Handlers) topUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request topUpRequest
-	if err := json.Unmarshal(raw, &request); err != nil {
+	if err := httpapi.DecodeJSONBytesStrict(raw, &request); err != nil {
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid request body", nil)
 		return
 	}
@@ -178,7 +177,7 @@ func (h *Handlers) refundOrder(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Reason string `json:"reason"`
 	}
-	if err := json.Unmarshal(raw, &request); err != nil {
+	if err := httpapi.DecodeJSONBytesStrict(raw, &request); err != nil {
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid request body", nil)
 		return
 	}

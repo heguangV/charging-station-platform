@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -143,6 +144,8 @@ func TestLoginValidationErrors(t *testing.T) {
 		body string
 	}{
 		{"malformed json", `{"account":`},
+		{"unknown field", `{"account":"13800000001","password":"` + testPassword + `","rememberMe":true}`},
+		{"second json value", `{"account":"13800000001","password":"` + testPassword + `"} {}`},
 		{"short account", `{"account":"a","password":"` + testPassword + `"}`},
 		{"short password", `{"account":"13800000001","password":"short"}`},
 	}
@@ -221,6 +224,13 @@ func TestMeAndLogoutRequireBearerToken(t *testing.T) {
 		t.Fatalf("me identity = %#v", payload.Data)
 	}
 
+	// HTTP authentication scheme names are case-insensitive.
+	recorder, _ = doJSON(t, server.Handler(), http.MethodGet, "/api/v1/me", "",
+		map[string]string{"Authorization": "bearer " + token})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("lowercase bearer status = %d, want 200", recorder.Code)
+	}
+
 	recorder, _ = doJSON(t, server.Handler(), http.MethodPost, "/api/v1/auth/logout", "", authHeader)
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("logout status = %d, want 204", recorder.Code)
@@ -234,6 +244,46 @@ func TestMeAndLogoutRequireBearerToken(t *testing.T) {
 	recorder, _ = doJSON(t, server.Handler(), http.MethodPost, "/api/v1/auth/logout", "", authHeader)
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("idempotent logout status = %d, want 204", recorder.Code)
+	}
+}
+
+func TestAuthenticatedRequestRejectsAccountFrozenAfterLogin(t *testing.T) {
+	fixture := newHandlerFixture(t)
+	server := fixture.server()
+	_, login := doJSON(t, server.Handler(), http.MethodPost, "/api/v1/auth/user/login",
+		`{"account":"13800000001","password":"`+testPassword+`"}`, nil)
+	token := login.Data["accessToken"].(string)
+	fixture.reader.user.Status = StatusDisable
+
+	recorder, payload := doJSON(t, server.Handler(), http.MethodGet, "/api/v1/me", "",
+		map[string]string{"Authorization": "Bearer " + token})
+	if recorder.Code != http.StatusForbidden || payload.Code != httpapi.CodeUserFrozen {
+		t.Fatalf("status = %d code = %d, want 403/%d", recorder.Code, payload.Code, httpapi.CodeUserFrozen)
+	}
+}
+
+func TestAuthenticatedRequestReturnsServiceUnavailableWhenAccountLookupFails(t *testing.T) {
+	fixture := newHandlerFixture(t)
+	server := fixture.server()
+	_, login := doJSON(t, server.Handler(), http.MethodPost, "/api/v1/auth/user/login",
+		`{"account":"13800000001","password":"`+testPassword+`"}`, nil)
+	token := login.Data["accessToken"].(string)
+	headers := map[string]string{"Authorization": "Bearer " + token}
+
+	originalMutations := fixture.handlers.service.mutations
+	fixture.handlers.service.mutations = failingProfileMutation{
+		AccountMutation: originalMutations,
+		err:             errors.New("database down"),
+	}
+	recorder, payload := doJSON(t, server.Handler(), http.MethodGet, "/api/v1/me", "", headers)
+	if recorder.Code != http.StatusServiceUnavailable || payload.Code != httpapi.CodeDatabaseError {
+		t.Fatalf("status = %d code = %d, want 503/%d", recorder.Code, payload.Code, httpapi.CodeDatabaseError)
+	}
+
+	fixture.handlers.service.mutations = originalMutations
+	recorder, _ = doJSON(t, server.Handler(), http.MethodGet, "/api/v1/me", "", headers)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("request after recovery status = %d, want 200", recorder.Code)
 	}
 }
 
@@ -363,6 +413,22 @@ func TestAdminRoleExposedByIdentity(t *testing.T) {
 	}
 	if payload.Data["adminRole"] != AdminRoleSuper {
 		t.Fatalf("me adminRole = %v", payload.Data["adminRole"])
+	}
+
+	adminHeaders := map[string]string{"Authorization": "Bearer " + token}
+	for _, request := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPut, "/api/v1/me", `{"displayName":"cross-domain"}`},
+		{http.MethodDelete, "/api/v1/me", ""},
+		{http.MethodGet, "/api/v1/me/profile", ""},
+	} {
+		recorder, payload = doJSON(t, server.Handler(), request.method, request.path, request.body, adminHeaders)
+		if recorder.Code != http.StatusForbidden || payload.Code != httpapi.CodeForbidden {
+			t.Errorf("admin %s %s: status = %d code = %d, want 403/%d", request.method, request.path, recorder.Code, payload.Code, httpapi.CodeForbidden)
+		}
 	}
 }
 

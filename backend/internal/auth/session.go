@@ -74,9 +74,12 @@ func (s *InMemorySessionStore) Save(_ context.Context, token string, session Ses
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, exists := s.sessions[token]; exists {
+		s.deleteLocked(token)
+	}
 	session.lastAccessed = s.clock()
 	s.sessions[token] = session
-	if session.IdentityID > 0 {
+	if session.IdentityID > 0 && session.Role == RoleUser {
 		if s.byUser[session.IdentityID] == nil {
 			s.byUser[session.IdentityID] = make(map[string]struct{})
 		}
@@ -97,8 +100,8 @@ func (s *InMemorySessionStore) Load(_ context.Context, token string) (Session, e
 		return Session{}, ErrSessionNotFound
 	}
 	now := s.clock()
-	if !now.Before(session.ExpiresAt) || now.Sub(session.lastAccessed) > s.idleTTL {
-		delete(s.sessions, token)
+	if !now.Before(session.ExpiresAt) || now.Sub(session.lastAccessed) >= s.idleTTL {
+		s.deleteLocked(token)
 		return Session{}, ErrSessionNotFound
 	}
 	session.lastAccessed = now
@@ -111,7 +114,14 @@ func (s *InMemorySessionStore) Load(_ context.Context, token string) (Session, e
 func (s *InMemorySessionStore) Delete(_ context.Context, token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if session, ok := s.sessions[token]; ok && session.IdentityID > 0 {
+	s.deleteLocked(token)
+	return nil
+}
+
+// deleteLocked removes a session and its reverse-index entry. The caller must
+// hold s.mu for writing.
+func (s *InMemorySessionStore) deleteLocked(token string) {
+	if session, ok := s.sessions[token]; ok && session.IdentityID > 0 && session.Role == RoleUser {
 		if tokens := s.byUser[session.IdentityID]; tokens != nil {
 			delete(tokens, token)
 			if len(tokens) == 0 {
@@ -120,7 +130,6 @@ func (s *InMemorySessionStore) Delete(_ context.Context, token string) error {
 		}
 	}
 	delete(s.sessions, token)
-	return nil
 }
 
 // RevokeAllForUser revokes every live session of the identity.

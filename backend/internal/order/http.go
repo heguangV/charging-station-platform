@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -88,7 +87,7 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request createOrderRequest
-	if err := json.Unmarshal(body, &request); err != nil {
+	if err := httpapi.DecodeJSONBytesStrict(body, &request); err != nil {
 		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "invalid request body", nil)
 		return
 	}
@@ -234,12 +233,20 @@ func (h *Handlers) respondWithStatus(w http.ResponseWriter, r *http.Request, suc
 	if !ok {
 		return
 	}
+	body, ok := readBody(w, r)
+	if !ok {
+		return
+	}
+	if len(body) != 0 {
+		httpapi.WriteError(w, r, http.StatusBadRequest, httpapi.CodeInvalidArgument, "request body must be empty", nil)
+		return
+	}
 
 	command := TransitionCommand{
 		UserID:         identity.ID,
 		OrderNo:        r.PathValue("orderNo"),
 		IdempotencyKey: key,
-		RequestHash:    requestHash(r, nil),
+		RequestHash:    requestHash(r, body),
 		TraceID:        httpapi.RequestID(r.Context()),
 	}
 

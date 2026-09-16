@@ -68,7 +68,7 @@ var (
 // TrimComment applies the trimming rule and validates the code-point count.
 func TrimComment(comment string) (string, error) {
 	trimmed := strings.TrimSpace(comment)
-	if utf8.RuneCountInString(trimmed) < 1 || utf8.RuneCountInString(trimmed) > MaxCommentLength {
+	if strings.ContainsRune(trimmed, '\x00') || utf8.RuneCountInString(trimmed) < 1 || utf8.RuneCountInString(trimmed) > MaxCommentLength {
 		return "", ErrInvalidComment
 	}
 	return trimmed, nil
@@ -77,7 +77,7 @@ func TrimComment(comment string) (string, error) {
 // TrimReason applies the appeal trimming rule.
 func TrimReason(reason string) (string, error) {
 	trimmed := strings.TrimSpace(reason)
-	if utf8.RuneCountInString(trimmed) < MinReasonLength || utf8.RuneCountInString(trimmed) > MaxCommentLength {
+	if strings.ContainsRune(trimmed, '\x00') || utf8.RuneCountInString(trimmed) < MinReasonLength || utf8.RuneCountInString(trimmed) > MaxCommentLength {
 		return "", ErrInvalidReason
 	}
 	return trimmed, nil

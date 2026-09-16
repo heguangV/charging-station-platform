@@ -59,7 +59,7 @@ func NewHandlers(service *Service, authMiddleware identityProvider) (*Handlers, 
 func (h *Handlers) Register(server interface {
 	Register(pattern string, handler http.HandlerFunc)
 }) {
-	server.Register(ChatPath, h.auth.RequireRole(auth.RoleUser, h.chat))
+	server.Register(ChatPath, h.withBudget(h.auth.RequireRole(auth.RoleUser, h.chat)))
 }
 
 // chatRequest is the request body.

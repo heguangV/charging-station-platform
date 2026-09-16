@@ -222,6 +222,8 @@ func TestChargerEventEndpointRejectsMalformedReceipts(t *testing.T) {
 		{"charger is not numeric", `{"eventId":"evt_receipt_0001","eventType":"CHARGE_STARTED","orderNo":"ORD20260914120000aaaa","chargerId":"C01","occurredAt":"` + now.Format(time.RFC3339) + `"}`, http.StatusBadRequest},
 		{"stop without energy", `{"eventId":"evt_receipt_0002","eventType":"CHARGE_STOPPED","orderNo":"ORD20260914120000aaaa","chargerId":42,"occurredAt":"` + now.Format(time.RFC3339) + `"}`, http.StatusBadRequest},
 		{"negative energy", `{"eventId":"evt_receipt_0002","eventType":"CHARGE_STOPPED","orderNo":"ORD20260914120000aaaa","chargerId":42,"energyWh":-1,"occurredAt":"` + now.Format(time.RFC3339) + `"}`, http.StatusBadRequest},
+		{"unknown field", `{"eventId":"evt_receipt_0001","eventType":"CHARGE_STARTED","orderNo":"ORD20260914120000aaaa","chargerId":42,"occurredAt":"` + now.Format(time.RFC3339) + `","force":true}`, http.StatusBadRequest},
+		{"second json value", `{"eventId":"evt_receipt_0001","eventType":"CHARGE_STARTED","orderNo":"ORD20260914120000aaaa","chargerId":42,"occurredAt":"` + now.Format(time.RFC3339) + `"} {}`, http.StatusBadRequest},
 		{"not json", `not-json`, http.StatusBadRequest},
 	}
 	for _, test := range tests {

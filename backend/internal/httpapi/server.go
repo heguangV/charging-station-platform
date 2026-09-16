@@ -285,6 +285,9 @@ type statusRecorder struct {
 	status int
 }
 
+// Unwrap lets ResponseController apply route-specific connection deadlines.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
 func (r *statusRecorder) WriteHeader(status int) {
 	if r.status != 0 {
 		return

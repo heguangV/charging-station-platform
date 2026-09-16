@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -86,9 +87,10 @@ func intArgument(args Arguments, key string, minimum, maximum int64) (int64, boo
 	case json.Number:
 		parsed, err := typed.Int64()
 		if err != nil {
-			// A number written as 1.0 is still an integer.
+			// A number written as 1.0 is still an integer; 1.5 is not, and
+			// must not be silently truncated into a station id or a coordinate.
 			asFloat, floatErr := typed.Float64()
-			if floatErr != nil {
+			if floatErr != nil || !isWholeNumber(asFloat) {
 				return 0, false
 			}
 			number = int64(asFloat)
@@ -96,6 +98,9 @@ func intArgument(args Arguments, key string, minimum, maximum int64) (int64, boo
 			number = parsed
 		}
 	case float64:
+		if !isWholeNumber(typed) {
+			return 0, false
+		}
 		number = int64(typed)
 	case int64:
 		number = typed
@@ -114,6 +119,15 @@ func intArgument(args Arguments, key string, minimum, maximum int64) (int64, boo
 		return 0, false
 	}
 	return number, true
+}
+
+// isWholeNumber reports whether value is finite, has no fractional part and
+// converts to int64 without overflow, so int64(value) is exact.
+func isWholeNumber(value float64) bool {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value != math.Trunc(value) {
+		return false
+	}
+	return value >= math.MinInt64 && value < math.MaxInt64
 }
 
 // stringArgument reads a trimmed string of at most maximumLength bytes. Empty

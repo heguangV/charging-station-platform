@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	testingfs "testing/fstest"
 	"time"
@@ -90,9 +92,13 @@ func integrationDB(t *testing.T) (*sql.DB, context.Context) {
 	return db, ctx
 }
 
+var fixtureSequence atomic.Uint64
+
 func uniqueSuffix(t *testing.T) string {
 	t.Helper()
-	return time.Now().Format("150405.000000000")
+	// Callers truncate this suffix for phone fixtures: put the counter first,
+	// so fixtures created in the same centisecond cannot collide.
+	return fmt.Sprintf("%08d%d", fixtureSequence.Add(1), time.Now().UnixNano())
 }
 
 func TestAccountStoreRoundTrip(t *testing.T) {
@@ -228,7 +234,7 @@ func TestEndToEndLoginAgainstPostgreSQL(t *testing.T) {
 	service, err := auth.NewService(
 		mustAccountStore(t, db),
 		mustAccountStore(t, db),
-		auth.NewInMemoryAccountMutation(map[int64]*auth.UserAccount{}),
+		mustAccountMutation(t, db),
 		auth.NewInMemorySessionStore(time.Minute, nil),
 		auth.NewFixedWindowLimiter(100, time.Minute, nil),
 		auth.NewInMemorySMSCodeStore(nil),
@@ -259,6 +265,15 @@ func mustAccountStore(t *testing.T, db *sql.DB) *AccountStore {
 	store, err := NewAccountStore(db)
 	if err != nil {
 		t.Fatalf("account store: %v", err)
+	}
+	return store
+}
+
+func mustAccountMutation(t *testing.T, db *sql.DB) *AccountMutationAdapter {
+	t.Helper()
+	store, err := NewAccountMutationAdapter(db)
+	if err != nil {
+		t.Fatalf("account mutation adapter: %v", err)
 	}
 	return store
 }
@@ -639,7 +654,7 @@ func TestSMSPasswordlessRegistration(t *testing.T) {
 
 	service, err := auth.NewService(
 		accountStore, accountStore,
-		auth.NewInMemoryAccountMutation(map[int64]*auth.UserAccount{}),
+		mustAccountMutation(t, db),
 		auth.NewInMemorySessionStore(time.Minute, nil),
 		auth.NewFixedWindowLimiter(100, time.Minute, nil),
 		auth.NewInMemorySMSCodeStore(nil),

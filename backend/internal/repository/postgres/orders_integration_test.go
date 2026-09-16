@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,11 +24,15 @@ func orderFlowFixture(t *testing.T, db *sql.DB, ctx context.Context, suffix stri
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	seedUser := func(phone string, balance int64) int64 {
+	seedUser := func(prefix string, balance int64) int64 {
 		var id int64
+		if err := db.QueryRowContext(ctx, `SELECT nextval(pg_get_serial_sequence('user_accounts', 'id'))`).Scan(&id); err != nil {
+			t.Fatalf("allocate fixture user: %v", err)
+		}
+		phone := fmt.Sprintf("%s%08d", prefix, id)
 		if err := db.QueryRowContext(ctx,
-			`INSERT INTO user_accounts (phone, password_hash) VALUES ($1, $2) RETURNING id`,
-			phone, hash).Scan(&id); err != nil {
+			`INSERT INTO user_accounts (id, phone, password_hash) VALUES ($1, $2, $3) RETURNING id`,
+			id, phone, hash).Scan(&id); err != nil {
 			t.Fatalf("seed user: %v", err)
 		}
 		if _, err := db.ExecContext(ctx,
@@ -36,8 +41,8 @@ func orderFlowFixture(t *testing.T, db *sql.DB, ctx context.Context, suffix stri
 		}
 		return id
 	}
-	userA = seedUser("135"+suffix[:9], 10000)
-	userB = seedUser("134"+suffix[:9], 10000)
+	userA = seedUser("135", 10000)
+	userB = seedUser("134", 10000)
 
 	if err := db.QueryRowContext(ctx,
 		`INSERT INTO stations (code, name, status) VALUES ($1, '站A', 'OPEN') RETURNING id`,

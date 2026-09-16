@@ -60,16 +60,18 @@ type Config struct {
 // Service answers one conversation at a time. It holds no per-conversation
 // state, so a single instance serves every request.
 type Service struct {
-	stations  StationDirectory
-	pois      PoiProvider
-	routes    RoutePlanner
-	llm       LLMClient
-	converter CoordinateConverter
-	limits    Limits
-	clock     func() time.Time
-	logger    *slog.Logger
-	tools     []Tool
-	toolIndex map[string]Tool
+	stations       StationDirectory
+	pois           PoiProvider
+	routes         RoutePlanner
+	llm            LLMClient
+	converter      CoordinateConverter
+	limits         Limits
+	clock          func() time.Time
+	logger         *slog.Logger
+	tools          []Tool
+	toolIndex      map[string]Tool
+	budget         time.Duration
+	planningBudget time.Duration
 }
 
 // NewService validates its inputs and registers the tools.
@@ -107,15 +109,17 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	service := &Service{
-		stations:  cfg.Stations,
-		pois:      cfg.Pois,
-		routes:    cfg.Routes,
-		llm:       cfg.LLM,
-		converter: cfg.Converter,
-		limits:    limits,
-		clock:     clock,
-		logger:    logger,
-		toolIndex: map[string]Tool{},
+		stations:       cfg.Stations,
+		pois:           cfg.Pois,
+		routes:         cfg.Routes,
+		llm:            cfg.LLM,
+		converter:      cfg.Converter,
+		limits:         limits,
+		clock:          clock,
+		logger:         logger,
+		toolIndex:      map[string]Tool{},
+		budget:         defaultChatBudget,
+		planningBudget: 4 * time.Second,
 	}
 	for _, tool := range []Tool{
 		NewStationSearchTool(cfg.Stations),
@@ -158,105 +162,6 @@ func (s *Service) PlanTools(message string) []string {
 		planned = append(planned, toolStationDetail)
 	}
 	return planned
-}
-
-// Chat answers one question.
-//
-// It does not return an error. Every internal failure - no model, a model that
-// times out, a map provider that is down - is turned into a degraded answer,
-// because a user who asked a question is better served by a partial, labelled
-// result than by a failure they cannot act on.
-func (s *Service) Chat(ctx context.Context, message string, conv Context) Result {
-	if conv.Now.IsZero() {
-		conv.Now = s.clock()
-	}
-	message = strings.TrimSpace(message)
-
-	var (
-		result       Result
-		degraded     bool
-		planned      []Invocation
-		llmReachable bool
-	)
-
-	// The browser's position arrives in WGS-84 and everything downstream speaks
-	// GCJ-02. Converting once, here, is what stops the difference from being
-	// applied inconsistently - or not at all - by each caller.
-	//
-	// When the conversion is unavailable the position is kept and the answer is
-	// marked degraded rather than answered without one. The offset is a few
-	// hundred metres: enough to reorder two stations that are close together,
-	// and far less harmful than dropping the position, which would turn "the
-	// nearest three stations" into three arbitrary ones. The flag is what tells
-	// the user the answer is approximate.
-	if conv.Location != nil && conv.WGS84 {
-		if converted, ok := s.normalizePosition(*conv.Location); ok {
-			conv.Location = &converted
-		} else {
-			degraded = true
-		}
-	}
-	conv.WGS84 = false
-
-	llmEnabled := s.llm != nil && s.llm.Available()
-	if llmEnabled {
-		planned = s.planFromModel(ctx, message, conv, &llmReachable)
-		if !llmReachable {
-			degraded = true
-		}
-	}
-	if len(planned) == 0 {
-		// Either no model, or a model that chose no tool: fall back to the
-		// deterministic plan so the client always receives structured data.
-		category := poiCategoryFor(message)
-		for _, name := range s.PlanTools(message) {
-			invocation := Invocation{Name: name}
-			if name == toolPoiSearch && category != "" {
-				invocation.Arguments = Arguments{"category": category}
-			}
-			planned = append(planned, invocation)
-		}
-	}
-	if !llmEnabled {
-		degraded = true
-	}
-
-	planned = s.withAnchor(planned, conv)
-
-	failed, observations := s.execute(ctx, planned, conv, &result, &degraded)
-	s.buildActions(&result)
-
-	if llmEnabled && llmReachable && len(observations) > 0 {
-		if reply, ok := s.compose(ctx, message, conv, observations); ok {
-			result.Reply = reply
-			result.LLMUsed = true
-		} else {
-			// The model was reachable for planning but not for wording, which is
-			// a degradation like any other.
-			degraded = true
-		}
-	}
-
-	if !result.LLMUsed {
-		result.Reply = s.fallbackReply(message, planned, result, failed, llmEnabled && llmReachable)
-	}
-
-	// A route computed from a straight line is a degraded answer even when the
-	// model wrote the wording around it: the user is about to be told a driving
-	// distance that is not a driving distance, and only this flag, the
-	// route's own fallback marker and the closing notice say so.
-	if result.Route != nil && result.Route.Fallback {
-		degraded = true
-		if !strings.Contains(result.Reply, mapUnavailableNotice) {
-			result.Reply = strings.TrimSpace(result.Reply + " " + mapUnavailableNotice)
-		}
-	}
-	if !conv.HasLocation() && len(result.Stations) == 0 && !result.LLMUsed {
-		result.Reply = strings.TrimSpace(result.Reply + " " + noLocationNotice)
-	}
-
-	result.Degraded = degraded
-	return result
 }
 
 // normalizePosition converts a browser position into the platform's datum.
@@ -405,6 +310,11 @@ func (s *Service) execute(ctx context.Context, planned []Invocation, conv Contex
 	}
 	for index := 0; index < executed; index++ {
 		invocation := ordered[index]
+		if ctx.Err() != nil {
+			failed[invocation.Name] = true
+			*degraded = true
+			continue
+		}
 		tool, registered := s.toolIndex[invocation.Name]
 		if !registered {
 			continue

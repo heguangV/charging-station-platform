@@ -18,9 +18,9 @@ import (
 // an unverifiable session is an error, never an anonymous request.
 //
 // A per-user token index (ncs:user-sessions:{identityID}, a Redis SET)
-// supports revoking every session of one identity — required by account
-// deletion and account freezing. The index is FailClosed like the sessions
-// themselves.
+// supports revoking every user session of one identity — required by account
+// deletion and account freezing. Admin IDs are in a separate domain and are
+// deliberately not indexed here. The index is FailClosed like the sessions.
 type RedisSessionStore struct {
 	sessions *bredis.Sessions
 	commands bredis.Commands
@@ -64,8 +64,20 @@ const revokeAllScript = `
 local tokens = redis.call('SMEMBERS', KEYS[1])
 local revoked = 0
 for _, token in ipairs(tokens) do
-  if redis.call('DEL', 'ncs:session:' .. token) == 1 then
-    revoked = revoked + 1
+  local session_key = 'ncs:session:' .. token
+  local raw = redis.call('GET', session_key)
+  local preserve_admin = false
+  if raw then
+    local envelope_ok, envelope = pcall(cjson.decode, raw)
+    if envelope_ok and type(envelope) == 'table' and type(envelope.payload) == 'string' then
+      local session_ok, session = pcall(cjson.decode, envelope.payload)
+      preserve_admin = session_ok and type(session) == 'table' and session.Role == 'ADMIN'
+    end
+  end
+  if not preserve_admin then
+    if redis.call('DEL', session_key) == 1 then
+      revoked = revoked + 1
+    end
   end
 end
 redis.call('DEL', KEYS[1])
@@ -91,7 +103,7 @@ func (s *RedisSessionStore) Save(ctx context.Context, token string, session Sess
 	}
 	// Index the token per identity so RevokeAllForUser can find it. The
 	// index lives at least as long as the session's absolute deadline.
-	if session.IdentityID > 0 {
+	if session.IdentityID > 0 && session.Role == RoleUser {
 		indexTTL := time.Until(session.ExpiresAt)
 		if indexTTL <= 0 {
 			indexTTL = time.Millisecond
@@ -100,6 +112,11 @@ func (s *RedisSessionStore) Save(ctx context.Context, token string, session Sess
 			[]string{userSessionsKey(session.IdentityID)},
 			[]string{token, strconv.FormatInt(indexTTL.Milliseconds(), 10)},
 		); err != nil {
+			// A session that is not present in the per-user index cannot be
+			// revoked on account deletion or freezing. Compensate with a context
+			// that survives request cancellation; Redis still enforces its own
+			// command timeout.
+			_ = s.sessions.Delete(context.WithoutCancel(ctx), token)
 			return err
 		}
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/heguangV/charging-station-platform/backend/internal/repository/postgres"
 	redisrepo "github.com/heguangV/charging-station-platform/backend/internal/repository/redis"
 	"github.com/heguangV/charging-station-platform/backend/internal/worker"
+	"github.com/heguangV/charging-station-platform/backend/migrations"
 )
 
 // This is the duplicate-delivery check the review asked for, at the level where duplication
@@ -79,6 +80,26 @@ func TestDuplicateDeliveryAppliesTheEventOnce(t *testing.T) {
 		t.Fatalf("open postgres: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	// Coordinate with schema-rebuilding repository tests sharing this disposable DB.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, int64(0x4E43535F54455354)); err != nil {
+		_ = conn.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, int64(0x4E43535F54455354))
+		_ = conn.Close()
+	})
+	runnerDB, err := postgres.NewSQLDB(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := postgres.Run(ctx, runnerDB, migrations.FS); err != nil {
+		t.Fatal(err)
+	}
 	store, err := postgres.NewConsumptionStore(db)
 	if err != nil {
 		t.Fatalf("new consumption store: %v", err)

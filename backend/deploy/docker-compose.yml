@@ -9,7 +9,7 @@
 #   docker compose up -d
 #   docker compose --profile mock up -d mock-gateway     # 开发用模拟设备网关
 #
-# 迁移：api 容器启动时由进程内的迁移 runner 执行（0001..0011），无需手工 psql。
+# 迁移：api 容器启动时由进程内的迁移 runner 执行（0001..0012），无需手工 psql。
 
 name: ncs-backend
 

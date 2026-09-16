@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Profile scope errors. They map onto the shared error-code registry in the
@@ -29,7 +30,8 @@ var nicknamePattern = regexp.MustCompile(`^\S(.*\S)?$`)
 
 // IsValidNickname applies UC-U-05: 1..20 characters, not pure whitespace.
 func IsValidNickname(nickname string) bool {
-	if len(nickname) < 1 || len(nickname) > 20 {
+	length := utf8.RuneCountInString(nickname)
+	if length < 1 || length > 20 {
 		return false
 	}
 	return nicknamePattern.MatchString(nickname)
@@ -161,6 +163,19 @@ func (s *Service) FreezeUser(ctx context.Context, adminID, userID int64) error {
 func (s *Service) UnfreezeUser(ctx context.Context, adminID, userID int64) error {
 	if adminID < 1 {
 		return ErrInvalidAdminActor
+	}
+	profile, err := s.mutations.GetProfile(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("auth: inspect account before unfreeze: %w", err)
+	}
+	if profile.Status == StatusActive {
+		return nil
+	}
+	// Revoke before enabling login. If Redis is unavailable, leaving the
+	// account disabled prevents sessions missed by an earlier freeze attempt
+	// from becoming valid again.
+	if err := s.sessions.RevokeAllForUser(ctx, userID); err != nil {
+		return fmt.Errorf("auth: revoke sessions before unfreeze: %w", err)
 	}
 	found, err := s.mutations.SetFrozen(ctx, userID, false)
 	if err != nil {

@@ -128,6 +128,13 @@ func TestReviewLifecycleAndWall(t *testing.T) {
 	if wall.Items[0].Author != "用户0606" || wall.Items[0].Comment != "充电很快" {
 		t.Fatalf("newest wall entry = %#v", wall.Items[0])
 	}
+	var missingStationID int64
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) + 1 FROM stations`).Scan(&missingStationID); err != nil {
+		t.Fatalf("find missing station id: %v", err)
+	}
+	if _, err := reviewStore.ListWall(ctx, review.WallFilter{StationID: missingStationID, Page: 1, PageSize: 20}); !errorsIsReview(err, review.ErrNotFound) {
+		t.Fatalf("missing station wall error = %v, want ErrNotFound", err)
+	}
 
 	// The first appeal succeeds (review and appeal are independent); a
 	// same-content retry replays the first result and a different content
@@ -144,6 +151,57 @@ func TestReviewLifecycleAndWall(t *testing.T) {
 	if _, err := reviewStore.CreateAppeal(ctx, userA, created.OrderNo, "不同原因"); !errorsIsReview(err, review.ErrAppealConflict) {
 		t.Fatalf("second appeal error = %v, want ErrAppealConflict", err)
 	}
+}
+
+func TestAppealQueueOrdersOldestFirstWithOrderNumberTieBreak(t *testing.T) {
+	db, ctx := integrationDB(t)
+	reviewStore, err := NewReviewStore(db)
+	if err != nil {
+		t.Fatalf("NewReviewStore() error = %v", err)
+	}
+	orderStore, err := NewOrderStore(db)
+	if err != nil {
+		t.Fatalf("NewOrderStore() error = %v", err)
+	}
+	suffix := uniqueSuffix(t)
+	userID, _, _, _, chargerID := orderFlowFixture(t, db, ctx, suffix)
+
+	firstOrder := completeOrderForReview(t, db, ctx, orderStore, suffix+"-sort-a", userID, chargerID)
+	first, err := reviewStore.CreateAppeal(ctx, userID, firstOrder.OrderNo, "排序测试一")
+	if err != nil {
+		t.Fatalf("first CreateAppeal() error = %v", err)
+	}
+	secondOrder := completeOrderForReview(t, db, ctx, orderStore, suffix+"-sort-b", userID, chargerID)
+	second, err := reviewStore.CreateAppeal(ctx, userID, secondOrder.OrderNo, "排序测试二")
+	if err != nil {
+		t.Fatalf("second CreateAppeal() error = %v", err)
+	}
+
+	sharedTime := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := db.ExecContext(ctx, `UPDATE order_appeals SET created_at = $1 WHERE id IN ($2, $3)`, sharedTime, first.ID, second.ID); err != nil {
+		t.Fatalf("set shared appeal time: %v", err)
+	}
+
+	firstPage, err := reviewStore.ListAppeals(ctx, review.AppealFilter{Status: review.AppealPending, Page: 1, PageSize: 100})
+	if err != nil {
+		t.Fatalf("ListAppeals() first page error = %v", err)
+	}
+	lastPageNumber := (firstPage.Meta.Total + 99) / 100
+	lastPage, err := reviewStore.ListAppeals(ctx, review.AppealFilter{Status: review.AppealPending, Page: lastPageNumber, PageSize: 100})
+	if err != nil {
+		t.Fatalf("ListAppeals() last page error = %v", err)
+	}
+
+	wantFirst, wantSecond := firstOrder.OrderNo, secondOrder.OrderNo
+	if wantFirst > wantSecond {
+		wantFirst, wantSecond = wantSecond, wantFirst
+	}
+	for index := 0; index+1 < len(lastPage.Items); index++ {
+		if lastPage.Items[index].OrderNo == wantFirst && lastPage.Items[index+1].OrderNo == wantSecond {
+			return
+		}
+	}
+	t.Fatalf("same-time appeals are not ordered by order number: want %s before %s in %#v", wantFirst, wantSecond, lastPage.Items)
 }
 
 func TestAppealApprovalRefundsWallet(t *testing.T) {
