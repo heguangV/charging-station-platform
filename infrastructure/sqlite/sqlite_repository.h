@@ -243,7 +243,7 @@ class SqliteRepository final : public core::application::UserAccountRepository,
   private:
     void initialize();
     core::application::ReadinessStatus probeDatabase();
-    void pruneBackups();
+    void pruneBackups(std::int64_t now);
 
     std::string databasePath_;
     std::mutex readinessMutex_;

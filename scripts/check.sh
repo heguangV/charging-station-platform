@@ -4,7 +4,8 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
 
-source_roots=(apps/user apps/admin core infrastructure server tests)
+# Web 前端（apps/user、apps/admin、apps/dashboard）已无 C/C++ 源码，改由各自 npm 检查负责。
+source_roots=(agent core infrastructure server tests)
 base_ref="${NCS_CHECK_BASE_REF:-}"
 
 if [[ "${base_ref}" =~ ^0+$ ]]; then
@@ -28,8 +29,9 @@ changed_sources=()
 add_source() {
     local source_file="$1"
     case "${source_file}" in
-        apps/user/*.cpp | apps/user/*.h | apps/admin/*.cpp | apps/admin/*.h | core/*.cpp | core/*.h | \
-            infrastructure/*.cpp | infrastructure/*.h | server/*.cpp | server/*.h | tests/*.cpp | tests/*.h)
+        agent/*.cpp | agent/*.h | core/*.cpp | core/*.h | \
+            infrastructure/*.cpp | infrastructure/*.h | server/*.cpp | server/*.h | \
+            tests/*.cpp | tests/*.h)
             ;;
         *) return 0 ;;
     esac

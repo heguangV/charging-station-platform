@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+# 已停用：本脚本驱动旧的 Qt 用户端二进制（ncs_user）与服务端做真实 TLS 联调。用户端已按
+# UC-U-13 改造为 apps/user 下的 Vue 3 Web 客户端，ncs_user 目标不再存在，CTest 中的
+# ncs_server_http_smoke 用例随之移除。服务端侧 HTTP/TLS 冒烟仍由 ncs_server_smoke 与
+# ncs_admin_api_smoke 覆盖；Web 用户端的替代冒烟应改为在 Node/浏览器侧导入 apps/user 的
+# API 模块，待后续任务实现后再重新注册用例。
+
 import http.client
 import json
 import os

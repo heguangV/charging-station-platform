@@ -115,8 +115,17 @@ int main(int argc, char* argv[])
     tests.check(defaults.config.logLevel == LogLevel::Info, "default log level is info");
     tests.check(defaults.config.logDirectory.find("logs") != std::string::npos,
                 "default log directory is logs");
-    tests.check(defaults.config.databasePath.find("charge_platform.db") != std::string::npos,
-                "default database path is configured");
+    tests.check(defaults.config.database.driver == "postgresql" &&
+                    defaults.config.database.postgres.host == "127.0.0.1" &&
+                    defaults.config.database.postgres.port == 5432 &&
+                    defaults.config.database.postgres.database == "ncs" &&
+                    defaults.config.database.postgres.user == "ncs",
+                "PostgreSQL is the default database backend");
+    tests.check(defaults.config.database.postgres.migrationsDirectory.find(
+                    "infrastructure/postgres/migrations") != std::string::npos &&
+                    defaults.config.database.postgres.backupDirectory.find("backups/postgresql") !=
+                        std::string::npos,
+                "PostgreSQL migration and backup directories are configured");
     tests.check(defaults.config.dashboardSnapshotPath.find("dashboard.json") != std::string::npos &&
                     defaults.config.mlWorkerScript.find("worker.py") != std::string::npos &&
                     defaults.config.mlModelPath.find("load_rf.pkl") != std::string::npos,
@@ -128,9 +137,10 @@ int main(int argc, char* argv[])
                 "an unrelated launch directory is available");
     const auto relocatedDefaults = parseStartupOptions({}, lookupFor(emptyEnvironment));
     QDir::setCurrent(originalWorkingDirectory);
-    tests.check(relocatedDefaults.config.databasePath == defaults.config.databasePath &&
+    tests.check(relocatedDefaults.config.database.postgres.migrationsDirectory ==
+                        defaults.config.database.postgres.migrationsDirectory &&
                     relocatedDefaults.config.mlWorkerScript == defaults.config.mlWorkerScript,
-                "default data and asset paths do not depend on the shell cwd");
+                "default database and asset paths do not depend on the shell cwd");
 
     const std::unordered_map<std::string, std::string> environment{{
         {"NCS_ENVIRONMENT", "test"},
@@ -145,7 +155,15 @@ int main(int argc, char* argv[])
         {"NCS_WEBSOCKET_QUEUE_CAPACITY", "512"},
         {"NCS_LOG_LEVEL", "warning"},
         {"NCS_LOG_DIRECTORY", "env-logs"},
-        {"NCS_DATABASE_PATH", "env-data.db"},
+        {"NCS_DATABASE_DRIVER", "postgresql"},
+        {"NCS_DATABASE_HOST", "db.test.internal"},
+        {"NCS_DATABASE_PORT", "5544"},
+        {"NCS_DATABASE_NAME", "ncs_test"},
+        {"NCS_DATABASE_USER", "ncs_test_user"},
+        {"NCS_DATABASE_PASSWORD", "not-a-real-secret"},
+        {"NCS_DATABASE_SSLMODE", "require"},
+        {"NCS_DATABASE_CONNECT_TIMEOUT", "7"},
+        {"NCS_DATABASE_POOL_SIZE", "6"},
         {"NCS_TLS_CERTIFICATE", "env-cert.pem"},
         {"NCS_TLS_PRIVATE_KEY", "env-key.pem"},
         {"NCS_ALLOW_INSECURE_HTTP", "false"},
@@ -176,8 +194,15 @@ int main(int argc, char* argv[])
     tests.check(fromEnvironment.config.logLevel == LogLevel::Warning, "environment log level");
     tests.check(fromEnvironment.config.logDirectory.find("env-logs") != std::string::npos,
                 "environment log directory");
-    tests.check(fromEnvironment.config.databasePath.find("env-data.db") != std::string::npos,
-                "environment database path");
+    tests.check(fromEnvironment.config.database.postgres.host == "db.test.internal" &&
+                    fromEnvironment.config.database.postgres.port == 5544 &&
+                    fromEnvironment.config.database.postgres.database == "ncs_test" &&
+                    fromEnvironment.config.database.postgres.user == "ncs_test_user" &&
+                    fromEnvironment.config.database.postgres.password == "not-a-real-secret" &&
+                    fromEnvironment.config.database.postgres.sslMode == "require" &&
+                    fromEnvironment.config.database.postgres.connectTimeoutSeconds == 7 &&
+                    fromEnvironment.config.database.postgres.poolSize == 6,
+                "environment PostgreSQL settings");
     tests.check(fromEnvironment.config.tlsCertificatePath.find("env-cert.pem") != std::string::npos,
                 "environment certificate path");
     tests.check(fromEnvironment.config.tlsPrivateKeyPath.find("env-key.pem") != std::string::npos,
@@ -209,7 +234,7 @@ int main(int argc, char* argv[])
                   "NOT_A_VALID KEY=ignored\n"
                   "TENCENT_MAP_JS_KEY=frontend-key-is-ignored-by-the-server\n"
                   "NCS_PORT=8300\n"
-                  "NCS_DATABASE_PATH=\n");
+                  "NCS_DATABASE_PASSWORD=\n");
     envFile.close();
     const auto withEnvFile =
         parseStartupOptions({}, lookupFor({{"NCS_ENV_FILE", utf8Path(envFilePath)}}));
@@ -226,8 +251,8 @@ int main(int argc, char* argv[])
                 "environment-file can explicitly enable loopback development HTTP");
     tests.check(withEnvFile.config.tencentMapKey == "file-map-key",
                 "TENCENT_MAP_SERVER_KEY maps to the Tencent geocoding key");
-    tests.check(withEnvFile.config.databasePath.find("charge_platform.db") != std::string::npos,
-                "empty environment-file values keep the built-in default");
+    tests.check(withEnvFile.config.database.postgres.password.empty(),
+                "empty environment-file values keep the built-in database default");
     tests.check(withEnvFile.config.port == 8200, "the first duplicate environment-file entry wins");
 
     const std::unordered_map<std::string, std::string> fileThenEnvironment{{
@@ -264,7 +289,8 @@ int main(int argc, char* argv[])
     oversizedFile.write(QByteArray(64 * 1024 + 1, '#'));
     oversizedFile.close();
     tests.expectConfigError(
-        [&] {
+        [&]
+        {
             parseStartupOptions({},
                                 lookupFor({{"NCS_ENV_FILE", utf8Path(oversizedFile.fileName())}}));
         },
@@ -290,8 +316,17 @@ int main(int argc, char* argv[])
         "--log-level=debug",
         "--log-directory",
         "cli-logs",
-        "--database-path",
-        "cli-data.db",
+        "--database-host",
+        "db.acceptance.internal",
+        "--database-port=5545",
+        "--database-name",
+        "ncs_acceptance",
+        "--database-user",
+        "ncs_acceptance_user",
+        "--database-sslmode=require",
+        "--database-connect-timeout",
+        "9",
+        "--database-pool-size=8",
         "--tls-certificate",
         "cli-cert.pem",
         "--tls-private-key=cli-key.pem",
@@ -327,8 +362,14 @@ int main(int argc, char* argv[])
     tests.check(overridden.config.logLevel == LogLevel::Debug, "command line overrides log level");
     tests.check(overridden.config.logDirectory.find("cli-logs") != std::string::npos,
                 "command line overrides log directory");
-    tests.check(overridden.config.databasePath.find("cli-data.db") != std::string::npos,
-                "command line overrides database path");
+    tests.check(overridden.config.database.postgres.host == "db.acceptance.internal" &&
+                    overridden.config.database.postgres.port == 5545 &&
+                    overridden.config.database.postgres.database == "ncs_acceptance" &&
+                    overridden.config.database.postgres.user == "ncs_acceptance_user" &&
+                    overridden.config.database.postgres.sslMode == "require" &&
+                    overridden.config.database.postgres.connectTimeoutSeconds == 9 &&
+                    overridden.config.database.postgres.poolSize == 8,
+                "command line overrides PostgreSQL settings");
     tests.check(overridden.config.tlsCertificatePath.find("cli-cert.pem") != std::string::npos,
                 "command line overrides certificate path");
     tests.check(overridden.config.tlsPrivateKeyPath.find("cli-key.pem") != std::string::npos,
@@ -339,60 +380,48 @@ int main(int argc, char* argv[])
                 "command line overrides ML process settings");
 
     const auto help =
-        parseStartupOptions({"--help"},
-                            [](std::string_view) -> std::optional<std::string>
+        parseStartupOptions({"--help"}, [](std::string_view) -> std::optional<std::string>
                             { throw ConfigError("environment must not be read for help"); });
     tests.check(help.action == StartupAction::ShowHelp, "help bypasses environment loading");
     const auto version = parseStartupOptions({"--version"}, lookupFor(emptyEnvironment));
     tests.check(version.action == StartupAction::ShowVersion, "version action is supported");
 
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--unknown", "value"}, lookupFor(emptyEnvironment));
-        },
+        [&] { parseStartupOptions({"--unknown", "value"}, lookupFor(emptyEnvironment)); },
         "unknown options are rejected");
     tests.expectConfigError([&] { parseStartupOptions({"--port"}, lookupFor(emptyEnvironment)); },
                             "missing values are rejected");
+    tests.expectConfigError([&]
+                            { parseStartupOptions({"--port", "0"}, lookupFor(emptyEnvironment)); },
+                            "port zero is rejected");
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--port", "0"}, lookupFor(emptyEnvironment));
-        },
-        "port zero is rejected");
-    tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--worker-threads", "1"}, lookupFor(emptyEnvironment));
-        },
+        [&] { parseStartupOptions({"--worker-threads", "1"}, lookupFor(emptyEnvironment)); },
         "Crow worker counts below two are rejected");
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--worker-threads", "257"}, lookupFor(emptyEnvironment));
-        },
+        [&] { parseStartupOptions({"--worker-threads", "257"}, lookupFor(emptyEnvironment)); },
         "excessive worker count is rejected");
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--websocket-max-connections", "0"}, lookupFor(emptyEnvironment));
-        },
+        [&]
+        { parseStartupOptions({"--websocket-max-connections", "0"}, lookupFor(emptyEnvironment)); },
         "a zero WebSocket peer capacity is rejected");
     tests.expectConfigError(
-        [&] {
+        [&]
+        {
             parseStartupOptions({"--websocket-max-connections", "4097"},
                                 lookupFor(emptyEnvironment));
         },
         "an excessive WebSocket peer capacity is rejected");
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--websocket-max-payload", "1023"}, lookupFor(emptyEnvironment));
-        },
+        [&]
+        { parseStartupOptions({"--websocket-max-payload", "1023"}, lookupFor(emptyEnvironment)); },
         "a WebSocket payload limit below 1 KiB is rejected");
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--websocket-queue-capacity", "15"}, lookupFor(emptyEnvironment));
-        },
+        [&]
+        { parseStartupOptions({"--websocket-queue-capacity", "15"}, lookupFor(emptyEnvironment)); },
         "a WebSocket frame window below 16 is rejected");
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--blocking-queue-capacity", "0"}, lookupFor(emptyEnvironment));
-        },
+        [&]
+        { parseStartupOptions({"--blocking-queue-capacity", "0"}, lookupFor(emptyEnvironment)); },
         "empty blocking queue is rejected");
     tests.expectConfigError(
         [&]
@@ -410,34 +439,24 @@ int main(int argc, char* argv[])
         },
         "duplicate CORS origins are rejected");
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--listen-address", "0.0.0.0"}, lookupFor(emptyEnvironment));
-        },
+        [&] { parseStartupOptions({"--listen-address", "0.0.0.0"}, lookupFor(emptyEnvironment)); },
         "wildcard addresses are rejected");
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--listen-address", "not-an-ip"}, lookupFor(emptyEnvironment));
-        },
+        [&]
+        { parseStartupOptions({"--listen-address", "not-an-ip"}, lookupFor(emptyEnvironment)); },
         "non-numeric addresses are rejected");
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--listen-address", "192.168.1.8"}, lookupFor(emptyEnvironment));
-        },
+        [&]
+        { parseStartupOptions({"--listen-address", "192.168.1.8"}, lookupFor(emptyEnvironment)); },
         "development demo credentials cannot bind to a non-loopback address");
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--log-level", "trace"}, lookupFor(emptyEnvironment));
-        },
+        [&] { parseStartupOptions({"--log-level", "trace"}, lookupFor(emptyEnvironment)); },
         "unknown log levels are rejected");
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--environment", "staging"}, lookupFor(emptyEnvironment));
-        },
+        [&] { parseStartupOptions({"--environment", "staging"}, lookupFor(emptyEnvironment)); },
         "unknown environment modes are rejected");
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--allow-insecure-http", "yes"}, lookupFor(emptyEnvironment));
-        },
+        [&] { parseStartupOptions({"--allow-insecure-http", "yes"}, lookupFor(emptyEnvironment)); },
         "ambiguous insecure HTTP boolean values are rejected");
     tests.expectConfigError(
         [&]
@@ -447,12 +466,27 @@ int main(int argc, char* argv[])
         },
         "test environments cannot enable insecure HTTP");
     tests.expectConfigError(
-        [&] {
-            parseStartupOptions({"--port=9000", "--port", "9001"}, lookupFor(emptyEnvironment));
-        },
+        [&]
+        { parseStartupOptions({"--port=9000", "--port", "9001"}, lookupFor(emptyEnvironment)); },
         "duplicate options are rejected");
 
     QTemporaryDir tlsDirectory;
+    auto databaseConfig = defaults.config;
+    databaseConfig.environment = DeploymentEnvironment::Production;
+    for (const auto* mode : {"disable", "allow", "prefer", "require", "verify-ca"})
+    {
+        databaseConfig.database.postgres.sslMode = mode;
+        tests.expectConfigError([&] { checkDatabaseSecurity(databaseConfig); },
+                                "OWNER bootstrap rejects production database TLS downgrade");
+    }
+    databaseConfig.database.postgres.sslMode = "verify-full";
+    databaseConfig.database.postgres.sslRootCertificate.clear();
+    tests.expectConfigError([&] { checkDatabaseSecurity(databaseConfig); },
+                            "OWNER bootstrap requires database CA without starting HTTP");
+    databaseConfig.environment = DeploymentEnvironment::Development;
+    databaseConfig.database.postgres.sslMode = "disable";
+    checkDatabaseSecurity(databaseConfig);
+
     tests.check(tlsDirectory.isValid(), "temporary TLS directory is available");
     const QString certificatePath = QDir(tlsDirectory.path()).filePath("certificate.pem");
     const QString privateKeyPath = QDir(tlsDirectory.path()).filePath("private-key.pem");

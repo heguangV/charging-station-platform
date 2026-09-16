@@ -1,0 +1,57 @@
+.app-topbar { background: rgba(246,250,255,.84); }
+.app-topbar::after { opacity: .12; }
+.app-topbar h1 { letter-spacing: -.035em; }
+.app-content .panel { padding: 22px; }
+.app-content .station-card,
+.app-content .order-list__item {
+  background: var(--ncs-glass);
+  border-color: #fff;
+  border-radius: 20px;
+  box-shadow: var(--ncs-shadow-1);
+}
+.app-content .station-card.is-selected { border-color: var(--ncs-brand); }
+.app-content .profile-card {
+  background: linear-gradient(115deg, #e3efff, #fafdff);
+  padding-block: 30px;
+}
+.app-content .profile-card__avatar { border: 4px solid #fff; box-shadow: var(--ncs-shadow-2); }
+.profile-view > [data-testid='login-panel'] { width: min(100%, 560px); margin-inline: auto; }
+.charging-view .wallet-bar { background: linear-gradient(115deg, #e3efff, #fafdff); }
+
+/* 电量环是静态视觉容器，不表示虚构的百分比进度。 */
+.charge-energy {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  width: 210px;
+  height: 210px;
+  margin: 28px auto;
+  border: 12px solid #d5e7fc;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 25%, #fff, #eaf3ff);
+  box-shadow: 0 0 0 7px #f1f7ff, inset 0 0 24px #d7e7fc;
+  text-align: center;
+}
+.charge-energy strong { color: var(--ncs-brand-strong); font-size: 27px; }
+.charge-energy span { color: var(--ncs-muted); font-size: 13px; }
+
+@media (min-width: 901px) {
+  .app-shell { padding: 18px; gap: 12px; }
+  .app-sidebar {
+    top: 18px;
+    height: calc(100dvh - 36px);
+    border: 1px solid #fff;
+    border-radius: 24px;
+    box-shadow: var(--ncs-shadow-2);
+    padding-top: 28px;
+  }
+  .app-sidebar__link { min-height: 46px; }
+  .app-sidebar__link.is-active { background: linear-gradient(100deg, #d9e9fd, #eef5fe); }
+  .app-topbar { border-radius: 18px; min-height: 76px; }
+}
+@media (max-width: 900px) {
+  .app-content .panel { padding: 18px; border-radius: 20px; }
+  .bottom-nav { background: rgba(252,254,255,.95); border-top-color: #fff; box-shadow: 0 -6px 24px #335c8f0a; }
+  .bottom-nav__item.is-active { color: var(--ncs-brand-strong); }
+}

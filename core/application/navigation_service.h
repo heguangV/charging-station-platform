@@ -99,4 +99,14 @@ class NavigationService final
 
 std::string_view travelModeName(TravelMode mode);
 
+// 退化路线判定：距离 ≤1 米、时长 ≤0、折线不足两个点、坐标越界或折线全部重合时视为无效，
+// 调用方必须回退本地 Haversine 直线而不是把第三方 status=0 当作成功路线。
+// 用户端导航服务与地图路线服务共用同一判定，避免两处各写一套退化检查。
+bool usablePlannedRoute(const PlannedRoute& route);
+
+// 腾讯地图浏览器路线规划链接（apis.map.qq.com/uri/v1/routeplan），作为最终用户操作入口。
+// 用户端导航接口与 Agent 路线推荐共用同一构造，避免两处各写一份 URL 拼装。
+std::string browserRouteUrl(RoutePoint origin, RoutePoint destination,
+                            const std::string& destinationName, TravelMode mode);
+
 } // namespace ncs::core::application

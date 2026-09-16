@@ -5,12 +5,12 @@
 | 文档版本 | V1.0 |
 | 接口版本 | `/api/v1` |
 | 通信 | 默认及正式环境使用 HTTPS REST + JSON；实时事件使用鉴权 WebSocket；仅 NFR-D-01 允许的本机开发模式可使用 HTTP/WS |
-| 数据实现 | Crow Service → SQLite，客户端不得直接访问数据库 |
-| 适用模块 | Qt 用户端、Qt 管理端、Web 大屏、ML 子进程 |
-| 关联需求 | `UC-U`、`UC-A`、`UC-D`、`UC-W`、`UC-M`、`BR-01`～`BR-12` |
+| 数据实现 | Crow Service → PostgreSQL，客户端不得直接访问数据库 |
+| 适用模块 | Web 车主端（Vue 3 响应式）、Web 管理端（Vue 3 控制台）、Web 大屏、ML 子进程、Qt Android 实验端 |
+| 关联需求 | `UC-U`、`UC-A`、`UC-D`、`UC-W`、`UC-M`、`BR-01`～`BR-13` |
 | 兼容策略 | V1 保持向后兼容；破坏性变更使用新版本路径 |
 
-本文是其他模块连接 NCS 数据服务的唯一接口契约。数据库表、SQL、文件路径和 SQLite 错误均属于服务端内部实现，不得出现在客户端代码或公开响应中。
+本文是其他模块连接 NCS 数据服务的唯一接口契约。数据库表、SQL、连接参数和 PostgreSQL 错误均属于服务端内部实现，不得出现在客户端代码或公开响应中。
 
 ## 1. 通用约定
 
@@ -26,8 +26,8 @@ https://127.0.0.1:8443/api/v1
 
 | 路由前缀 | 调用方 | 权限 |
 | --- | --- | --- |
-| `/api/v1/user/*` | Qt 用户端 | 当前车主本人数据 |
-| `/api/v1/admin/*` | Qt 管理端 | 运营管理、审计、统计和运维 |
+| `/api/v1/user/*` | Web 用户端（`apps/user`，PC 与手机浏览器）、Qt Android 实验端 | 当前车主本人数据 |
+| `/api/v1/admin/*` | Web 管理端（`apps/admin`） | 运营管理、审计、统计和运维 |
 | `/api/v1/dashboard/*` | Web 大屏 | 运营管理员或决策查看者只读 |
 | `/api/v1/internal/ml/*` | 本机 ML 子进程 | 一次性任务令牌限定的特征读取和预测回写 |
 | `/api/v1/system/*` | 运维检查 | 本机访问；详细信息需要管理员权限 |
@@ -137,6 +137,7 @@ Idempotency-Key: <uuid>
 | 头像 | 最大 5 MiB，解码后最大 4096×4096 |
 | 普通请求超时 | 10 秒 |
 | 统计请求超时 | 30 秒 |
+| Agent 对话超时 | 60 秒（`/api/v1/user/agent/`，含工具检索与大模型往返） |
 
 业务限流、吞吐和 ML 超时引用 SRS 对应条款。超过限流返回 HTTP 429、`RATE_LIMITED`，并在 `data.retryAfterSec` 返回建议等待秒数。
 
@@ -736,13 +737,122 @@ Idempotency-Key: <uuid>
 
 成功 `data` 直接为 `{orderNo,rating,content,createdAt}`，不含 `userId` 等内部信息。使用统一信封、请求 ID 和错误映射。非法字段 `422 / code=2`；状态不允许 `409 / code=15`；已评价且内容不同 `409 / code=5`；相同幂等键的请求体不同 `409 / code=14`。同单相同星级和标准化文字，无论是否换键均返回原记录和原时间。
 
-幂等作用域为 `u{userId}:review:{orderNo}`，永久保存成功响应。写入在 `BEGIN IMMEDIATE` 内核查订单、读取已有评价并插入，数据库主键保证每单唯一；读取和写入均交给阻塞线程池，不占用 Crow 事件循环。评价文本按纯文本显示，不解释为 HTML。
+幂等作用域为 `u{userId}:review:{orderNo}`，永久保存成功响应。写事务以 `SELECT … FOR UPDATE` 锁定订单后核查归属、读取已有评价并插入，数据库主键保证每单唯一；读取和写入均交给阻塞线程池，不占用 Crow 事件循环。评价文本按纯文本显示，不解释为 HTML。
 
 ### 5.10 场站评论墙（UC-U-12）
 
 `GET /api/v1/user/stations/{id}/reviews`：Bearer 用户令牌必填。成功 `data` 为 `{"items":[{"author":"张**","rating":5,"content":"充电方便","createdAt":1788825600}]}`，按 `createdAt` 倒序，只读展示所属场站已完成订单的评价，服务端最多返回最新 200 条。`author` 为作者昵称；昵称为空或账号已注销时返回掩码手机号或“已注销用户”。响应不含 `userId`、`orderNo`、完整手机号等个人信息。
 
 场站不存在返回 `404 / code=4`；未登录返回 `401`。查询在阻塞线程池执行，不占用 Crow 事件循环；评价文本按纯文本显示，不解释为 HTML。评论墙为只读视图，不提供编辑、删除或独立写入入口。
+
+## 5A. AI 出行助手接口（`/api/v1/user/agent`，UC-U-14）
+
+Agent 模块负责“理解自然语言 → 选择工具 → 调用一或多个工具 → 汇总结果 → 调用大模型 → 返回自然语言与结构化数据”。服务端只通过本节接口对外暴露能力：客户端不得直接调用大模型、不得直接调用腾讯地图 WebService，也不得在前端持有任何模型 Key 或地图 Server Key。
+
+### 5A.1 POST `/agent/chat` — 一次对话
+
+Bearer 用户令牌必填。本接口为只读查询，不产生业务写入，因此**不要求** `Idempotency-Key`。
+
+请求（JSON 白名单仅 `message`、`location`、`coordinateType`、`chargerType`）：
+
+```json
+{
+  "message": "帮我找一个附近有快充并且旁边能吃饭的充电站",
+  "location": { "latitudeE6": 39977680, "longitudeE6": 116316417 },
+  "coordinateType": "gcj02",
+  "chargerType": 1
+}
+```
+
+| 字段 | 必填 | 约束 |
+| --- | --- | --- |
+| `message` | 是 | 字符串，去掉首尾空白后 1～600 个 Unicode 码点，不允许 NUL |
+| `location` | 否 | 对象，仅允许 `latitudeE6`、`longitudeE6`；两者必须同时给出，纬度 ±90 000 000、经度 ±180 000 000，且不得同时为 0 |
+| `coordinateType` | 否 | `gcj02`（默认）或 `wgs84`；无 `location` 时忽略 |
+| `chargerType` | 否 | `0` 慢充或 `1` 快充 |
+
+`location` 缺失或地理编码失败时，站点检索沿用 §4.1 的降级规则：使用演示默认位置并在站点结果中体现 `locationFallback`，请求不失败。`coordinateType=wgs84` 表示坐标来自浏览器 Geolocation API，服务端参与腾讯地图规划前必须先归一化为 GCJ-02；归一化失败时路线结果为 `null`，不得使用默认坐标掩盖。
+
+成功 `data`（自然语言 + 结构化数据，前端据此渲染卡片、地图 Marker 与导航按钮）：
+
+```json
+{
+  "reply": "为你推荐 NCS 中关村充电站：快充空闲 3 个，步行 200 米有咖啡店。",
+  "stations": [
+    {
+      "id": 1,
+      "code": "ZGC",
+      "name": "NCS 中关村充电站",
+      "address": "北京市海淀区中关村大街 27 号",
+      "adcode": "110108",
+      "latitudeE6": 39977680,
+      "longitudeE6": 116316417,
+      "electricityPriceCentPerKwh": 85,
+      "servicePriceCentPerKwh": 50,
+      "totalPriceCentPerKwh": 135,
+      "idleCount": 3,
+      "operationalCount": 9,
+      "totalCount": 10,
+      "distanceMeter": 2300
+    }
+  ],
+  "pois": [
+    {
+      "id": "POI-1",
+      "name": "星巴克(中关村店)",
+      "category": "咖啡厅",
+      "address": "北京市海淀区中关村大街 1 号",
+      "tel": "",
+      "latitudeE6": 39978100,
+      "longitudeE6": 116316000,
+      "distanceMeter": 210
+    }
+  ],
+  "route": {
+    "destinationName": "NCS 中关村充电站",
+    "originLatitudeE6": 39977680,
+    "originLongitudeE6": 116316417,
+    "destinationLatitudeE6": 39983700,
+    "destinationLongitudeE6": 116315200,
+    "distanceMeter": 2300,
+    "durationSecond": 480,
+    "provider": "TENCENT_MAP",
+    "fallback": false,
+    "browserUrl": "https://apis.map.qq.com/uri/v1/routeplan?...",
+    "steps": [{ "instruction": "向东行驶", "distanceMeter": 300, "durationSecond": 60 }],
+    "polyline": [
+      { "latitudeE6": 39977680, "longitudeE6": 116316417 },
+      { "latitudeE6": 39983700, "longitudeE6": 116315200 }
+    ]
+  },
+  "actions": [
+    { "type": "open_station", "label": "查看 NCS 中关村充电站", "targetId": "1", "url": "" },
+    { "type": "navigate", "label": "导航前往 NCS 中关村充电站", "targetId": "", "url": "https://apis.map.qq.com/uri/v1/routeplan?..." }
+  ],
+  "tools": ["station_search", "poi_search"],
+  "llmUsed": true,
+  "degraded": false
+}
+```
+
+字段语义：
+
+- `stations`：与 §4.1 站点列表完全相同的字段集，最多 3 条，按距离升序；空数组表示检索成功但没有匹配结果。
+- `pois`：POI 结果，最多 5 条；`category` 与 `address` 可能为空字符串；空数组表示没有检索到或地图服务不可用（此时 `degraded=true`）。
+- `route`：本次未规划路线时为 `null`。`provider` 为 `TENCENT_MAP` 或 `LOCAL_FALLBACK`；`fallback=true` 表示腾讯路线不可用，`distanceMeter` 为 Haversine 直线距离且 `durationSecond=0`。
+- `actions`：前端可执行动作，`type` 仅允许 `open_station`（跳转站点详情，使用 `targetId`）与 `navigate`（打开 `url`）。
+- `tools`：本次实际执行的工具名，取值 `station_search`、`station_detail`、`poi_search`、`route`。
+- `llmUsed`：`false` 表示自然语言回复由确定性兜底文案生成（未配置、调用失败或返回空内容）。
+- `degraded`：`true` 表示大模型或外部地图服务不可用，已按降级路径返回结果。
+
+错误映射：未登录 `401`；字段缺失、类型错误、未知字段、越界坐标、非法 `coordinateType` 或 `chargerType`、超长 `message` 一律 `422 / code=2`；阻塞工作队列满 `429`；处理超时 `503`。
+
+约束：
+
+- 用户身份只取自 Bearer 会话，请求体中的任何用户标识都会被拒绝（未知字段 `422`）。
+- 大模型、POI 与路线调用全部在有界阻塞工作队列执行，`/api/v1/user/agent/` 路径的处理截止时间为 60 秒（其余用户路由为 10 秒）；同一路径不得阻塞 Crow 事件循环。
+- Agent 只调用应用服务端口取数，不直接访问 PostgreSQL，不重新实现订单、充电或钱包逻辑，也不修改任何业务状态。
+- 大模型 API Key 与腾讯地图 Server Key 仅存在于服务端进程；响应、错误消息与日志均不得包含密钥、SQL、内部路径或完整手机号。厂商错误正文不进入响应。
 
 ## 6. 管理员认证、账号与用户管理（`/api/v1/admin`）
 
@@ -1185,6 +1295,8 @@ Idempotency-Key: <uuid>
 ### 12.2 GET `/health/ready` — 服务就绪
 
 仅回环地址或管理员可访问。检查 schema 版本、数据库可读写、WAL 和迁移状态；只返回布尔检查结果，不返回数据库路径和 SQL 错误。
+
+`walEnabled` 保留历史字段名以兼容客户端。PostgreSQL 下要求 `fsync=on`、`full_page_writes=on`，且 `synchronous_commit` 为 `on`、`local`、`remote_write` 或 `remote_apply`；任一不满足则未就绪。该字段仅检查当前连接的本地崩溃持久化配置，不证明生产 WAL 归档、主备同步或恢复演练已完成。
 
 ## 13. WebSocket 实时事件
 

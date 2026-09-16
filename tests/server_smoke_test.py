@@ -361,7 +361,6 @@ def main() -> int:
         certificate = root / "certificate.pem"
         private_key = root / "private-key.pem"
         logs = root / "logs"
-        database = root / "charge-platform.db"
         dashboard_snapshot = root / "dashboard.json"
         model_path = root / "models" / "load_rf.pkl"
         worker_script = Path(__file__).resolve().parent.parent / "ml" / "worker.py"
@@ -382,6 +381,18 @@ def main() -> int:
         )
         os.chmod(private_key, 0o600)
 
+        database_arguments = [
+            "--database-driver", "postgresql",
+            "--database-host", os.environ["NCS_TEST_DATABASE_HOST"],
+            "--database-port", os.environ["NCS_TEST_DATABASE_PORT"],
+            "--database-name", os.environ["NCS_TEST_DATABASE_NAME"],
+            "--database-user", os.environ["NCS_TEST_DATABASE_USER"],
+            "--database-sslmode", "verify-full",
+            "--database-ssl-root-cert", os.environ["NCS_TEST_DATABASE_CA"],
+            "--database-migrations", os.environ["NCS_TEST_DATABASE_MIGRATIONS"],
+            "--database-backup-directory", str(root / "backups"),
+        ]
+
         # UC-A-09 first-OWNER bootstrap: the one-shot command seeds the
         # production OWNER on the fresh database, never echoes the key, and
         # refuses to run twice.
@@ -392,8 +403,8 @@ def main() -> int:
 
         def run_bootstrap(environment):
             return subprocess.run(
-                [str(server), "--environment", "production", "--database-path",
-                 str(database), "--bootstrap-owner", "root_owner"],
+                [str(server), "--environment", "production", *database_arguments,
+                 "--bootstrap-owner", "root_owner"],
                 env=environment, capture_output=True, text=True)
 
         missing_key = run_bootstrap(without_key)
@@ -420,7 +431,7 @@ def main() -> int:
                 "--blocking-worker-threads", "2",
                 "--blocking-queue-capacity", "32",
                 "--log-directory", str(logs),
-                "--database-path", str(database),
+                *database_arguments,
                 "--tls-certificate", str(certificate),
                 "--tls-private-key", str(private_key),
                 "--cors-allowed-origins", "https://dashboard.local",

@@ -18,5 +18,5 @@ target_link_libraries(ncs_infrastructure_sqlite
     PUBLIC
         ncs::core_application
         OpenSSL::Crypto
-        SQLite::SQLite3
+        SQLite3::SQLite3
 )

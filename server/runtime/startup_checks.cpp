@@ -7,6 +7,7 @@
 #include <QByteArray>
 #include <QFile>
 #include <QFileDevice>
+#include <QFileInfo>
 #include <QString>
 
 #include <openssl/evp.h>
@@ -169,7 +170,25 @@ void runStartupChecks(const ServerConfig& config)
     {
         checkTlsMaterial(config);
     }
+    checkDatabaseSecurity(config);
     checkListenEndpoint(config);
+}
+
+// Also required by administrative commands that do not start an HTTP listener.
+void checkDatabaseSecurity(const ServerConfig& config)
+{
+    const auto& postgres = config.database.postgres;
+    if (config.environment == DeploymentEnvironment::Production &&
+        postgres.sslMode != "verify-full")
+    {
+        throw ConfigError("production PostgreSQL requires sslmode=verify-full");
+    }
+    if ((postgres.sslMode == "verify-ca" || postgres.sslMode == "verify-full") &&
+        (postgres.sslRootCertificate.empty() ||
+         !QFileInfo::exists(pathFromUtf8(postgres.sslRootCertificate))))
+    {
+        throw ConfigError("PostgreSQL SSL root certificate is missing");
+    }
 }
 
 // 构建 TLS 服务端上下文：禁用 SSLv2/v3 与 TLS1.0/1.1（最低 TLS1.2），密码套件限定

@@ -1,6 +1,12 @@
 add_library(ncs_infrastructure_map STATIC
+    poi_service.cpp
+    poi_service.h
+    route_service.cpp
+    route_service.h
     tencent_geocoder.cpp
     tencent_geocoder.h
+    tencent_map_client.cpp
+    tencent_map_client.h
     tencent_route_planner.cpp
     tencent_route_planner.h
 )

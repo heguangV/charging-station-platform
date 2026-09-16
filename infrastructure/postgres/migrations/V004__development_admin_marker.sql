@@ -1,0 +1,2 @@
+ALTER TABLE admin_account
+  ADD COLUMN is_demo SMALLINT NOT NULL DEFAULT 0 CHECK(is_demo IN (0, 1));

@@ -16,9 +16,11 @@ set_target_properties(ncs_server PROPERTIES
 )
 
 target_link_libraries(ncs_server PRIVATE
+    ncs::agent
     ncs::crow
+    ncs::infrastructure_ai
     ncs::infrastructure_map
-    ncs::infrastructure_sqlite
+    ncs::infrastructure_database
     ncs::server_controller
     ncs::server_middleware
     ncs::server_runtime

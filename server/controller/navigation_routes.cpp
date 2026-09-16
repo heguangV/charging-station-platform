@@ -8,8 +8,6 @@
 
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QUrl>
-#include <QUrlQuery>
 
 namespace ncs::server::controller
 {
@@ -29,35 +27,8 @@ std::optional<core::application::TravelMode> travelMode(const std::string& value
 
 QString browserRouteUrl(const core::application::NavigationResult& route)
 {
-    QString type;
-    switch (route.mode)
-    {
-    case core::application::TravelMode::Driving:
-        type = QStringLiteral("drive");
-        break;
-    case core::application::TravelMode::Walking:
-        type = QStringLiteral("walk");
-        break;
-    case core::application::TravelMode::Transit:
-        type = QStringLiteral("bus");
-        break;
-    }
-    const auto coordinate = [](const core::application::RoutePoint point)
-    {
-        return QStringLiteral("%1,%2")
-            .arg(point.latitudeE6 / 1e6, 0, 'f', 6)
-            .arg(point.longitudeE6 / 1e6, 0, 'f', 6);
-    };
-    QUrl url(QStringLiteral("https://apis.map.qq.com/uri/v1/routeplan"));
-    QUrlQuery query;
-    query.addQueryItem(QStringLiteral("type"), type);
-    query.addQueryItem(QStringLiteral("from"), QStringLiteral("导航起点"));
-    query.addQueryItem(QStringLiteral("fromcoord"), coordinate(route.origin));
-    query.addQueryItem(QStringLiteral("to"), QString::fromStdString(route.stationName));
-    query.addQueryItem(QStringLiteral("tocoord"), coordinate(route.destination));
-    query.addQueryItem(QStringLiteral("referer"), QStringLiteral("NCS"));
-    url.setQuery(query);
-    return url.toString(QUrl::FullyEncoded);
+    return QString::fromStdString(core::application::browserRouteUrl(
+        route.origin, route.destination, route.stationName, route.mode));
 }
 
 crow::response responseFor(const core::application::NavigationResult& route)
