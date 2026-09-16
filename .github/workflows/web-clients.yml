@@ -1,0 +1,40 @@
+name: Web clients
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - 'apps/user/**'
+      - 'apps/admin/**'
+      - 'apps/shared/**'
+      - '.github/workflows/web-clients.yml'
+  push:
+    branches: [develop, main]
+    paths:
+      - 'apps/user/**'
+      - 'apps/admin/**'
+      - 'apps/shared/**'
+      - '.github/workflows/web-clients.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        app: [user, admin]
+    defaults:
+      run:
+        working-directory: apps/${{ matrix.app }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/${{ matrix.app }}/package-lock.json
+      - run: npm ci
+      - run: npm run test
+      - run: npm run build

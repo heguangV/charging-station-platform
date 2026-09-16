@@ -62,3 +62,7 @@ ml/models/
 /data/
 /Testing/
 /.claude/
+
+# Web client bundles
+/apps/user/dist/
+/apps/admin/dist/
